@@ -40,7 +40,7 @@
  */
 import { game, get } from '../../foundation/adapt/host.js';
 import { getModeStrategy } from '../strategy/modeStrategy.js';
-import { isLikelyEnemy, isLikelyAlly, confidenceOf as idConfidenceOf } from '../../perception/observer/identity.js';
+import { isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, identityOfFor, beliefOfFor, hardIdentityOf } from '../../perception/observer/identity.js';
 
 /* ================= 暴露系统（exposureOf） =================
  * 返回对 target 的“认知状态”，只记录，不下敌友结论。
@@ -54,22 +54,28 @@ import { isLikelyEnemy, isLikelyAlly, confidenceOf as idConfidenceOf } from '../
 function exposureOf(me, t) {
 	try {
 		if (!t) return { shown: false, known: 0, source: 'none', inferConfidence: 0 };
-		let shown = !!t.identityShown || (!!t.group && t.identityShown !== false);
+		let shown = !!t.identityShown || t === game.zhu || t.identity === 'mingzhong' || (!!t.group && t.identityShown === true);
 		let source = 'none';
 		let known = 0;
 
 		/* 主公必然明置（身份局） */
 		try {
-			if (t === game.zhu || t.identity === 'zhu') { shown = true; source = 'shown_lord'; known = 1; }
+			if (t === game.zhu) { shown = true; source = 'shown_lord'; known = 1; }
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 		if (t.identityShown) { shown = true; source = 'shown_id'; known = 1; }
-		else if ((t.hp !== undefined && t.hp <= 0) && t.identity) { shown = true; source = 'dead_id'; known = 1; }
+		else if ((t.hp !== undefined && t.hp <= 0) && t.identityShown) { shown = true; source = 'dead_id'; known = 1; }
 
 		/* 行为推断置信度（identity 局才有非零值） */
 		let conf = 0;
-		try { conf = idConfidenceOf(t); } catch (e) { conf = 0; }
-		if (known < 1 && conf > 0) { known = Math.max(known, conf); source = source === 'none' ? 'infer' : source; }
+		try { conf = idConfidenceOfFor(me, t); } catch (e) { conf = 0; }
+		if (known < 1 && conf > 0) {
+			known = Math.max(known, conf);
+			if (source === 'none') {
+				const hard = hardIdentityOf(me, t);
+				source = hard && hard.source === 'unique_remaining_slot' ? 'constraint' : 'infer';
+			}
+		}
 
 		return { shown: shown, known: Math.round(known * 100) / 100, source: source, inferConfidence: Math.round(conf * 100) / 100 };
 	} catch (e) { return { shown: false, known: 0, source: 'none', inferConfidence: 0 }; }
@@ -84,34 +90,47 @@ function exposureOf(me, t) {
 function campRelationOf(me, t) {
 	try {
 		if (!me || !t || me === t) return 'same';
-		/* 独立角色：内奸 / 野心家 */
-		if (isIndependent(t)) return 'independent';
-		if (isIndependent(me)) return 'independent';
-		/* 显式已知阵营 → 直接比较 */
-		const ca = getCampOf(me);
-		const cb = getCampOf(t);
+		/* 独立身份按 observer 视角识别；target 未公开时不得直接读取真实 identity。 */
+		if (isIndependent(me, t)) return 'independent';
+		if (isIndependent(me, me)) return 'independent';
+
+		const ca = getCampOf(me, me);
+		const cb = getCampOf(t, me);
 		if (ca === 'unknown' || cb === 'unknown') return 'unknown';
 		if (ca === cb) return 'same';
 		return 'opposite';
 	} catch (e) { return 'unknown'; }
 }
 
-/* 独立角色识别（内奸/野心家/地主独狼等） */
-function isIndependent(p) {
+function isIndependent(observer, p) {
 	try {
 		if (!p) return false;
-		if (p.identity === 'nei') return true;
-		if (p.isYezin || p.identity === 'yezin') return true;
-		return false;
+		if (p.isYezin || (p.identityShown && p.identity === 'yezin')) return true;
+		const role = (observer && p === observer)
+			? (p === game.zhu ? 'zhu' : p.identity)
+			: identityOfFor(observer || null, p);
+		return role === 'nei';
 	} catch (e) { return false; }
 }
 
-/* 取可比较的阵营标识，未知返回 'unknown' */
-function getCampOf(p) {
+/* 取可比较的阵营标识。身份局中 target 未公开时只允许合法 posterior 补足。 */
+function getCampOf(p, observer) {
 	try {
 		const s = getModeStrategy();
-		if (s && typeof s.getCamp === 'function') return String(s.getCamp(p) || 'unknown');
-		return String((p && (p.identity || p.group)) || 'unknown');
+		let base = 'unknown';
+		if (s && typeof s.getCamp === 'function') base = String(s.getCamp(p) || 'unknown');
+		if (base !== 'unknown') return base;
+
+		if (s && (s.name === 'identity' || s.name === 'connect')) {
+			const role = (observer && p === observer)
+				? (p === game.zhu ? 'zhu' : p.identity)
+				: identityOfFor(observer || null, p);
+			if (role === 'zhu' || role === 'zhong' || role === 'mingzhong') return 'loyal';
+			if (role === 'fan') return 'rebel';
+			if (role === 'nei') return 'nei';
+			return 'unknown';
+		}
+		return String((p && p.group) || 'unknown');
 	} catch (e) { return 'unknown'; }
 }
 
@@ -129,15 +148,29 @@ function isSameCamp(a, b) { return campRelationOf(a, b) === 'same'; }
 function dispositionOf(me, t) {
 	if (!me || !t || t === me) return 0;
 	try { if (t.isFriend && t.isFriend(me)) return 1; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+	/* 身份场先应用“规则约束后的 Identity Belief”：
+	 * 已经逻辑排除的敌方身份不能被宿主旧 attitude 再翻回敌人。
+	 * 内奸本人例外：Identity 固定，但 stance 必须允许随局势动态变化，因此落回 attitude。 */
+	try {
+		const myRole = me === game.zhu ? 'zhu' : me.identity;
+		if (myRole !== 'nei') {
+			const conf = idConfidenceOfFor(me, t);
+			if (isLikelyEnemy(me, t) && conf >= 0.45) return -1;
+			if (isLikelyAlly(me, t) && conf >= 0.45) return 1;
+
+			const b = beliefOfFor(me, t);
+			if (b) {
+				if ((myRole === 'zhu' || myRole === 'zhong' || myRole === 'mingzhong') && (b.fan || 0) === 0) return 0;
+				if (myRole === 'fan' && t !== game.zhu && (b.zhong || 0) === 0) return 0;
+			}
+		}
+	} catch (eI) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eI); }
+
 	let att = 0;
 	try { att = (get && typeof get.attitude === 'function') ? get.attitude(me, t) : 0; } catch (eA) { att = 0; }
 	if (att < 0) return -1;
 	if (att > 0) return 1;
-	/* attitude=0：行为推断软翻转 */
-	try {
-		if (isLikelyEnemy(me, t) && idConfidenceOf(t) >= 0.45) return -1;
-		if (isLikelyAlly(me, t) && idConfidenceOf(t) >= 0.45) return 1;
-	} catch (eI) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eI); }
 	return 0;
 }
 function isAllyOf(me, t) { return dispositionOf(me, t) === 1; }
