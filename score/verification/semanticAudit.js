@@ -6,17 +6,17 @@
 export const AUDIT = {
 	"generated": "2026-10-02",
 	"files": 212,
-	"cleanFiles": 88,
-	"legacyFiles": 124,
-	"hits": 3386,
-	"cleanRate": 42,
+	"cleanFiles": 87,
+	"legacyFiles": 125,
+	"hits": 3396,
+	"cleanRate": 41,
 	"byDomain": {
 		"cognition": 120,
 		"decision": 1849,
-		"foundation": 50,
+		"foundation": 55,
 		"knowledge": 218,
 		"model": 285,
-		"perception": 739,
+		"perception": 744,
 		"verification": 6,
 		"view": 119
 	},
@@ -27,7 +27,7 @@ export const AUDIT = {
 		},
 		{
 			"file": "score/perception/observer/identity.js",
-			"count": 307
+			"count": 312
 		},
 		{
 			"file": "score/perception/memory/deckMemory.js",
