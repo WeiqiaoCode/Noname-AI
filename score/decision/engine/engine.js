@@ -424,9 +424,54 @@ try {
 } catch (e) { console.error('挂载新模块失败:', e); }
 
 /* ★ 单独挂载核心接口（不在 try 块里，确保一定能挂载）
- * ★ 统一经 reg.mount：已存在则不覆盖，消除与 index.js 的重复挂载互冲。 */
+ * ★ 统一经 reg.mount：已存在则不覆盖，消除与 index.js 的重复挂载互冲。
+ *
+ * P0：生产决策层禁止直接消费裸 predict()。
+ * predict() 仍保留为模型/诊断底层接口；confidence 是带 readiness 门禁的生产入口。
+ * 只要权重未 ready，任何模型消费者都必须拿到 skip，而不是随机初始化权重的概率。 */
+export function safeModelPredict(features) {
+	try {
+		if (!weightsReady()) {
+			return {
+				action: 'skip',
+				label: null,
+				probs: null,
+				confidence: 0,
+				maxProb: 0,
+				value: 0,
+				ready: false,
+			};
+		}
+		const r = predict(features);
+		if (!r || typeof r !== 'object') {
+			return {
+				action: 'skip',
+				label: null,
+				probs: null,
+				confidence: 0,
+				maxProb: 0,
+				value: 0,
+				ready: false,
+			};
+		}
+		return Object.assign({}, r, { ready: true });
+	} catch (e) {
+		try { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); } catch (_) {}
+		return {
+			action: 'skip',
+			label: null,
+			probs: null,
+			confidence: 0,
+			maxProb: 0,
+			value: 0,
+			ready: false,
+		};
+	}
+}
+
 weightsReady._real = true;
 predict._real = true;
+safeModelPredict._real = true;
 cfg._real = true;
 bufferSize._real = true;
 bufferClear._real = true;
@@ -434,7 +479,7 @@ trainLocalAsync._real = true;
 reg.mount('weightsReady', weightsReady);
 reg.mount('predict', predict);
 reg.mount('cfg', cfg);
-reg.mount('confidence', predict);
+reg.mount('confidence', safeModelPredict);
 reg.bind('deepThink', { critic: deepThinkCritic, stats: deepThinkStats });  /* ★ 模型思考层：深度思考对外接口 */
 reg.mount('trainBufferSize', bufferSize);
 reg.mount('trainBufferClear', bufferClear);
