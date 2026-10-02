@@ -146,6 +146,26 @@ function isEnemyOfR(me, t) { return dispositionOf(me, t) === -1; }
 /* ★ 规范名：isEnemyOf（与 isAllyOf/isNeutralOf 对齐三元；isEnemyOfR 仅作历史别名保留） */
 const isEnemyOf = isEnemyOfR;
 
+/**
+ * 关系世界状态指纹：只编码“决策上会改变敌我判断/置信度”的结果，不绑定任何具体身份事件。
+ * 用途：同一回合内关系翻转时，让 bestAction / enemiesOf / situationFactor 等缓存即时失效。
+ */
+function relationStateKey(me) {
+	try {
+		if (!me) return 'no_me';
+		const out = [];
+		for (const p of (game.players || [])) {
+			if (!p || p === me || p.alive === false) continue;
+			const k = String(p.playerid || p.name1 || p.name || p.name2 || '?');
+			const ex = exposureOf(me, p);
+			const d = dispositionOf(me, p);
+			out.push(k + ':' + d + ':' + (ex.source || 'none') + ':' + Number(ex.known || 0).toFixed(2));
+		}
+		out.sort();
+		return out.join('|');
+	} catch (e) { return 'relation_error'; }
+}
+
 /* 判定区是否含「负面」延时牌（乐/兵/闪电）——拆除类动作的状态转换效用判据。
  * ★ 指令 05 Stage D：过河拆/顺手 队友的乐、兵、闪电是帮队友（正面状态转换），
  * 与拆队友好牌（负面）区分。卡名按本工程内既有口径匹配（同 threat.js / wuxieEvaluator）。 */
@@ -322,6 +342,6 @@ function resetRelations() {
 /* ================= 导出 ================= */
 export {
 	exposureOf, campRelationOf, isSameCamp, isIndependent,
-	dispositionOf, isAllyOf, isNeutralOf, isEnemyOf, isEnemyOfR,
+	dispositionOf, isAllyOf, isNeutralOf, isEnemyOf, isEnemyOfR, relationStateKey,
 	actionValue, directionScore, inferPurpose, resetRelations,
 };
