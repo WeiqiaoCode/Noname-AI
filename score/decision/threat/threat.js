@@ -16,7 +16,7 @@ import { cardIdOf, cardTypeOf } from '../../model/net/mini-model.js';
 // Автор: Фэйшэн Оригинал | Лицензия: GPL-3.0
 import { styleShanFactor, styleOf, attackBy } from '../../perception/observer/observer.js';
 import { identityBiasOf } from '../../perception/observer/identity.js';  /* ★ 深度连接：身份信念 → 目标评分（仅 identity 局非零，其它模式返回 0，零回归） */
-import { dispositionOf as _dispositionOf, isAllyOf as _isAllyOf, isNeutralOf as _isNeutralOf } from '../relations/relations.js';  /* ★ 统一敌我系统：与 relations 单一权威源收敛 */
+import { dispositionOf as _dispositionOf, isAllyOf as _isAllyOf, isNeutralOf as _isNeutralOf, relationStateKey } from '../relations/relations.js';  /* ★ 统一敌我系统：与 relations 单一权威源收敛 */
 import { isPlayerLinked } from '../state/playerState.js';  /* ★ 指令 02：唯一横置状态读取入口 */
 
 /* ================= 回合内缓存工具 =================
@@ -85,8 +85,9 @@ function enemiesOf(char) {
 	try {
 		if (!char) return [];
 		_syncRound();
+		const relKey = relationStateKey(char);
 		const hit = _enemiesCache.get(char);
-		if (hit && hit.round === _cacheRound) return hit.value;
+		if (hit && hit.round === _cacheRound && hit.relationKey === relKey) return hit.value;
 
 		const out = [];
 		(game.players || []).forEach(function (p) {
@@ -98,7 +99,7 @@ function enemiesOf(char) {
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		});
 
-		_enemiesCache.set(char, { round: _cacheRound, value: out });
+		_enemiesCache.set(char, { round: _cacheRound, relationKey: relKey, value: out });
 		return out;
 	} catch (e) { return []; }
 }
@@ -303,7 +304,8 @@ function situationFactor(me) {
 	try {
 		const sKey = (me.name1 || me.name) + '|' + ((_status && _status.roundNumber) || 0) +
 			'|' + (game.players || []).filter(function (p) { return p && !p.isDead && !(p.hp <= 0); }).length +
-			'|' + _aliveFingerprint();
+			'|' + _aliveFingerprint() +
+			'|' + relationStateKey(me);
 		const sHit = _sitCache.get(me);
 		if (sHit && sHit.key === sKey) return sHit.value;
 		let my = 0, en = 0;
@@ -611,7 +613,7 @@ function nextTurnImpact(my, enemy) {
 function incomingPressure(me) {
 	try {
 		if (!me) return { total: 0, byEnemy: [], selfRisk: 0, killRisk: 0, hp: 0 };
-		const iKey = (me.name1 || me.name) + '|' + ((_status && _status.roundNumber) || 0) + '|' + (me.hp || 0) + '|' + _aliveFingerprint();
+		const iKey = (me.name1 || me.name) + '|' + ((_status && _status.roundNumber) || 0) + '|' + (me.hp || 0) + '|' + _aliveFingerprint() + '|' + relationStateKey(me);
 		const iHit = _incCache.get(me);
 		if (iHit && iHit.key === iKey) return iHit.value;
 		let total = 0;
