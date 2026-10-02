@@ -2460,6 +2460,128 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.36 engine 不写“身份明置后禁止攻击”专用补丁');
 }
 
+/* ================= 10.37 Identity Inventory：身份配额约束 + hard fact / dynamic stance 分层 =================
+ * 规则：
+ *   1) 身份配额来自宿主规则，不靠行为猜；
+ *   2) 已公开/唯一剩余槽位 = hard identity，不被后续行为改写；
+ *   3) 未公开真实 identity 字段不得进入 posterior；
+ *   4) 内奸 identity 固定，但 disposition/stance 仍可随局势变化。
+ */
+{
+    const host37 = await import(pathToFileURL(_hostPath).href);
+    const obs37 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'observer.js')).href);
+    const id37 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+    const rel37 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'relations', 'relations.js')).href);
+    const fs37 = await import('node:fs');
+
+    function P37(name, identity, shown) {
+        return {
+            name: name, name1: name, playerid: name, alive: true, hp: 4, maxHp: 4,
+            identity: identity || '', identityShown: !!shown,
+            _h: [], _e: [], _j: [], rel: 0,
+            countCards: function (z) { return 0; },
+            getCards: function (z) { return []; },
+        };
+    }
+
+    const zhu37 = P37('zhu37', 'zhu', true);
+    const me37 = P37('me37', 'zhong', false);       // 自己知道自己是忠，但对外未明置
+    const f1 = P37('f1', 'fan', true);
+    const f2 = P37('f2', 'fan', true);
+    const f3 = P37('f3', 'fan', true);
+    const f4 = P37('f4', 'fan', true);
+    const x37 = P37('x37', 'fan', false);           // 故意塞“真实 fan”验证不会透视
+    const y37 = P37('y37', 'zhong', false);         // 同样未明置
+
+    host37.game.me = me37;
+    host37.game.zhu = zhu37;
+    host37.game.players = [zhu37, me37, f1, f2, f3, f4, x37, y37];
+    host37.game.dead = [];
+    host37.game.alivePlayers = host37.game.players.slice();
+    host37._status.currentPhase = me37;
+    host37._status.roundNumber = 3;
+    host37._status.mode = 'normal';
+    host37.get.mode = function () { return 'identity'; };
+    const oldIdentityList37 = host37.get.identityList;
+    const oldAtt37 = host37.get.attitude;
+    host37.get.identityList = function (n) {
+        if (n === 8) return ['zhu', 'zhong', 'zhong', 'nei', 'fan', 'fan', 'fan', 'fan'];
+        return [];
+    };
+    host37.get.attitude = function (me, t) { return t && typeof t.rel === 'number' ? t.rel : 0; };
+
+    try {
+        obs37.resetObs();
+        id37.resetBelief();
+
+        const inv37 = id37.roleInventory();
+        eq(inv37.constrainable, true, '10.37 8人身份配额可约束');
+        eq(inv37.source, 'host_identityList', '10.37 优先读取宿主 identityList 规则');
+        eq(inv37.counts.fan, 4, '10.37 8人标准场反贼配额=4');
+        eq(inv37.counts.zhong, 2, '10.37 8人标准场忠臣配额=2');
+        eq(inv37.counts.nei, 1, '10.37 8人标准场内奸配额=1');
+
+        /* 四反已经全部公开：剩余未明玩家从逻辑上不再可能是反。 */
+        const rem37 = id37.remainingRoleSlots(me37);
+        eq(rem37.counts.fan, 0, '10.37 四反已确认 → observer 视角剩余 fan 槽位=0');
+        eq(rem37.counts.zhong, 1, '10.37 observer 自己占一个忠槽 → 剩余忠槽=1');
+        eq(rem37.counts.nei, 1, '10.37 剩余内奸槽=1');
+
+        const bx1 = id37.beliefOfFor(me37, x37);
+        eq(bx1.fan, 0, '10.37 反贼槽位耗尽 → 未明玩家 P(fan)=0');
+
+        /* 隐藏真实 identity 改值不能影响合法 posterior。 */
+        const beforeLeak37 = JSON.stringify(id37.beliefOfFor(me37, x37));
+        x37.identity = 'zhong';
+        const afterLeak37 = JSON.stringify(id37.beliefOfFor(me37, x37));
+        eq(afterLeak37, beforeLeak37, '10.37 未明置 identity 字段变化不影响 posterior');
+
+        /* 即便宿主旧 attitude 仍为敌，规则已排除 fan 时忠臣也不应继续把该人当敌。 */
+        x37.rel = -1;
+        eq(rel37.dispositionOf(me37, x37) === -1, false,
+            '10.37 忠臣视角：fan 已无剩余槽位 → 未明忠/内不沿用旧敌对 attitude');
+
+        /* 再公开 y=内奸，则 x 成为唯一剩余忠臣：hard lock。 */
+        y37.identity = 'nei';
+        y37.identityShown = true;
+        id37.resetBelief();
+        const hardX37 = id37.hardIdentityOf(me37, x37);
+        eq(hardX37.role, 'zhong', '10.37 剩余身份槽位唯一 → x hard-lock 为忠臣');
+        eq(hardX37.source, 'unique_remaining_slot', '10.37 hard-lock 来源=规则唯一解');
+        eq(id37.confidenceOfFor(me37, x37), 1, '10.37 规则唯一解置信度=1');
+
+        /* hard identity 不因后续敌对行为漂移。 */
+        obs37.observeAttack(x37, zhu37, 10);
+        eq(id37.identityOfFor(me37, x37), 'zhong',
+            '10.37 hard identity 后即使出现反常行为也不改身份，只影响后续策略评估');
+
+        /* 内奸：自己身份固定，但当前 stance 仍允许动态变化。 */
+        const spy37 = y37;
+        spy37.identityShown = false;
+        eq(id37.identityOfFor(spy37, spy37), 'nei', '10.37 内奸知道自己的固定身份');
+        x37.rel = -1;
+        const stanceEnemy37 = rel37.dispositionOf(spy37, x37);
+        x37.rel = 1;
+        const stanceAlly37 = rel37.dispositionOf(spy37, x37);
+        eq(stanceEnemy37, -1, '10.37 内奸 stance 可按当前局势对目标敌对');
+        eq(stanceAlly37, 1, '10.37 内奸 identity 不变但 stance 可转为合作');
+
+        /* 源码守卫：不允许回退到“读取未公开真实身份统计人数”的实现。 */
+        const idSrc37 = fs37.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
+        const modeSrc37 = fs37.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'modeStrategy.js'), 'utf8');
+        ok(idSrc37.indexOf('get.identityList') >= 0, '10.37 Role Inventory 使用宿主规则入口');
+        ok(idSrc37.indexOf('remainingRoleSlots') >= 0 && idSrc37.indexOf('hardIdentityOf') >= 0,
+            '10.37 身份推理包含剩余槽位 + hard fact 层');
+        eq(/\(game\.players \|\| \[\]\).*x\.identity === "fan"/s.test(idSrc37), false,
+            '10.37 不再遍历隐藏 identity 作为人数先验');
+        ok(modeSrc37.indexOf('beliefOfFor(me, p)') >= 0,
+            '10.37 内奸强弱判断使用合法 posterior，不统计隐藏身份');
+    } finally {
+        host37.get.identityList = oldIdentityList37;
+        host37.get.attitude = oldAtt37;
+    }
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
