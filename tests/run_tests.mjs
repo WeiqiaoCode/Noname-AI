@@ -101,6 +101,7 @@ const wm = await import(pathToFileURL(join(_pkg, 'score', 'model', 'weights', 'w
 const te = await import(pathToFileURL(join(_pkg, 'score', 'model', 'train', 'trainExport.js')).href);
 const hs = await import(pathToFileURL(join(_pkg, 'score', 'model', 'net', 'modelHotSwap.js')).href);
 const ms = await import(pathToFileURL(join(_pkg, 'score', 'model', 'net', 'modelState.js')).href);  /* §8：统一 A/B 状态机本体（modelHotSwap 为其兼容外壳） */
+const dt = await import(pathToFileURL(join(_pkg, 'score', 'cognition', 'deepThink.js')).href);  /* P0：模型未就绪时 deepThink 必须 fail-closed */
 const hostStub = await import(pathToFileURL(_hostPath).href);
 window.__DJSC.__weightsModule = wm;
 window.__DJSC.__trainExportModule = te;
@@ -2232,6 +2233,57 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+/* ================= 10.34 模型 readiness 决策门禁（P0） =================
+ * 修复：默认权重契约不匹配/模型未 ready 时，裸 predict() 仍可产生随机初始化概率；
+ * 若该概率经 __DJSC.confidence → deepThink 进入最终复核，会把随机模型泄漏到真实决策。
+ * 门禁要求：
+ *   1) engine 的生产 confidence 必须走 safeModelPredict + weightsReady；
+ *   2) deepThink 自身再做一层 weightsReady fail-closed；
+ *   3) 未 ready 时不调用 confidence，不增加 deepChecks，不得替换 best。
+ */
+{
+    const fs34 = await import('node:fs');
+    const eng34 = fs34.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const dt34 = fs34.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+
+    ok(/export\s+function\s+safeModelPredict\s*\(/.test(eng34), '10.34 engine 导出 safeModelPredict 生产门禁');
+    ok(/if\s*\(!weightsReady\(\)\)[\s\S]{0,500}?action:\s*'skip'/.test(eng34), '10.34 safeModelPredict 未 ready 返回 skip');
+    ok(/reg\.mount\('confidence',\s*safeModelPredict\)/.test(eng34), '10.34 __DJSC.confidence 挂载 safeModelPredict 而非裸 predict');
+    ok(/if\s*\(!weightsReady\(\)\)[\s\S]{0,300}?skippedNotReady\+\+/.test(dt34), '10.34 deepThink 自身具备 readiness 双保险');
+
+    const prevReady = wm.isReady();
+    const prevConfidence = window.__DJSC.confidence;
+    let confidenceCalls = 0;
+    try {
+        wm.markReady(false);
+        window.__DJSC.confidence = function (feat) {
+            confidenceCalls++;
+            const high = !!(feat && feat[0] === 1);
+            const p = high ? 0.99 : 0.01;
+            return { action: 'A', label: 'A', probs: [p, 0, 0, 0, 0, 1 - p], confidence: p, maxProb: p, value: 0 };
+        };
+
+        const fBest = new Array(130).fill(0);
+        const fAlt = new Array(130).fill(0);
+        fAlt[0] = 1;
+        const best = { type: 'card', id: 'sha', score: 20, reason: '', _feat: fBest };
+        const alt = { type: 'card', id: 'shunshou', score: 19, reason: '', _feat: fAlt };
+        const before = dt.thinkingStats();
+        const out = dt.criticBest({ hp: 4, maxHp: 4 }, [best, alt], best, { modelP: 0.01 });
+        const after = dt.thinkingStats();
+
+        eq(out.replaced, false, '10.34 未 ready 时 deepThink 不得替换 best');
+        eq(out.best === best, true, '10.34 未 ready 时保持原始 best 引用');
+        eq(confidenceCalls, 0, '10.34 未 ready 时不得调用任何模型 confidence');
+        eq(after.deepChecks, before.deepChecks, '10.34 未 ready 时不进入 deepChecks');
+        eq(after.skippedNotReady, before.skippedNotReady + 1, '10.34 skippedNotReady 诊断计数 +1');
+        ok(out.thinking.some(function (x) { return /模型未就绪/.test(String(x)); }), '10.34 thinking 明确记录模型未就绪原因');
+    } finally {
+        window.__DJSC.confidence = prevConfidence;
+        wm.markReady(prevReady);
+    }
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
@@ -2239,7 +2291,7 @@ if (_fails.length) {
     for (const f of _fails) console.error('  FAIL ' + f);
     process.exitCode = 1;
 } else {
-    console.log('\n✅ 发布门禁全部通过：' + _pass + ' 项断言（§10.1/10.2/10.3/10.4/10.5/10.6/10.7/10.8/10.9/10.11/10.12/10.13/10.14/10.15/10.16/10.17/10.18/10.19/10.20/10.21/10.22/10.23/10.24/10.25/10.26/10.27/10.28/10.29/10.30/10.31/10.32/10.33）');
+    console.log('\n✅ 发布门禁全部通过：' + _pass + ' 项断言（§10.1/10.2/10.3/10.4/10.5/10.6/10.7/10.8/10.9/10.11/10.12/10.13/10.14/10.15/10.16/10.17/10.18/10.19/10.20/10.21/10.22/10.23/10.24/10.25/10.26/10.27/10.28/10.29/10.30/10.31/10.32/10.33/10.34）');
 }
 /* trainExport 的防抖落盘定时器无需等待；宿主桩在 process exit 时自动清理 */
 setTimeout(() => { process.exit(process.exitCode || 0); }, 50);
