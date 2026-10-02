@@ -41,6 +41,8 @@ export const EMPTY_PROFILE = {
 		ctrl: [SEMANTIC.CONTROL],
 		delay: [SEMANTIC.DELAY],
 	},
+	/* 具体卡牌 → 通用战略状态转移。核心决策层禁止再写牌名分支。 */
+	strategicEffects: {},
 	/* 阵营语义 → 该游戏身份名 */
 	camps: { self: '', ally: '', enemy: '', third: '' },
 	/* 通用事件 → 该游戏事件名 */
@@ -76,6 +78,19 @@ export const NONAME_PROFILE = {
 		ctrl: [SEMANTIC.CONTROL],
 		delay: [SEMANTIC.DELAY],
 	},
+	/* 牌名只在适配档案出现；决策层只处理 create-state / remove-target-card。 */
+	strategicEffects: {
+		lebu: {
+			operation: 'create-state',
+			state: { family: 'delayed-control', dimension: 'action-denial', zone: 'j' },
+		},
+		bingliang: {
+			operation: 'create-state',
+			state: { family: 'delayed-control', dimension: 'resource-denial', zone: 'j' },
+		},
+		guohe: { operation: 'remove-target-card' },
+		shunshou: { operation: 'remove-target-card' },
+	},
 	camps: { self: '自己', ally: '同阵营', enemy: '敌对阵营', third: '第三方' },
 	events: {
 		turnStart: 'phaseBegin', phaseStart: 'phaseBegin', cardUsed: 'useCard',
@@ -92,7 +107,7 @@ function _merge(base, p) {
 	p = p || {};
 	const out = {};
 	Object.keys(base).forEach(function (k) {
-		if (k === 'semanticIds' || k === 'phases' || k === 'camps' || k === 'events' || k === 'featureBuckets') {
+		if (k === 'semanticIds' || k === 'phases' || k === 'camps' || k === 'events' || k === 'featureBuckets' || k === 'strategicEffects') {
 			out[k] = Object.assign({}, base[k], p[k] || {});
 		} else {
 			out[k] = (p[k] === undefined) ? base[k] : p[k];
