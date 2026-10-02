@@ -1310,9 +1310,15 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     {
         const A = mkP20('A', 1, true), E = mkP20('E', -1, true);
         const d = dFn(me20, [me20, A, E], { relationOf: relOf20 });
-        eq(d.use, true, '10.20 [A linked, E linked] → use');
-        eq(d.targets.length, 1, '10.20 [A linked, E linked] → 单目标解除 A');
-        eq(d.targets[0], A, '10.20 解除队友 A');
+        eq(d.use, false, '10.20 [普通A linked, E linked] → 单解收益不足门槛 → recast');
+        eq(d.targets.length, 0, '10.20 普通单解队友不强行 use');
+    }
+    {
+        const A = mkP20('A_low', 1, true, 1), E = mkP20('E', -1, true);
+        const d = dFn(me20, [me20, A, E], { relationOf: relOf20, enemyAttrThreat: true });
+        eq(d.use, true, '10.20 [危险残血A linked, E linked] → 单解达到门槛 → use');
+        eq(d.targets.length, 1, '10.20 危险残血队友允许单目标解除');
+        eq(d.targets[0], A, '10.20 解除危险残血队友 A');
     }
     {
         const A = mkP20('A', 1, false), E = mkP20('E', -1, true);
