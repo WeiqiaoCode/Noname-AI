@@ -711,17 +711,24 @@ export function isLikelyEnemy(me, other) {
 	try {
 		if (!me || !other || me === other || currentMode() !== 'identity') return false;
 		const myId = _roleOfSelf(me);
-		if (!myId) return false;
-		/* 内奸身份不直接映射固定敌人；其处置态度交给动态 stance/get.attitude。 */
-		if (myId === 'nei') return false;
+		if (!myId || myId === 'nei') return false;
+
+		const hard = hardIdentityOf(me, other);
+		if (myId === 'zhu' || myId === 'zhong') {
+			if (hard.role === 'fan') return true;
+		} else if (myId === 'fan') {
+			if (hard.role === 'zhu' || hard.role === 'zhong') return true;
+		}
 
 		const b = beliefOfFor(me, other);
 		if (!b) return false;
-		if (myId === 'zhu' || myId === 'zhong') return (b.fan || 0) >= 0.45;
+		if (myId === 'zhu' || myId === 'zhong') {
+			const p = b.fan || 0;
+			return p >= SOFT_IDENTITY_MIN && p - Math.max(b.zhong || 0, b.nei || 0) >= SOFT_IDENTITY_MARGIN;
+		}
 		if (myId === 'fan') {
-			const hard = hardIdentityOf(me, other);
-			if (hard.role === 'zhu') return true;
-			return (b.zhong || 0) >= 0.45;
+			const p = b.zhong || 0;
+			return p >= SOFT_IDENTITY_MIN && p - Math.max(b.fan || 0, b.nei || 0) >= SOFT_IDENTITY_MARGIN;
 		}
 		return false;
 	} catch (e) { return false; }
