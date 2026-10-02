@@ -24,6 +24,7 @@
 
 import { bufferSize, bufferClear, getSamples, resetAll, recycleChampionSamples } from '../train/trainExport.js';
 import { trainLocalAsync, isTraining } from '../train/localTrainer.js';
+import { scoreToLabel, normalizeLabelIndex } from '../train/labelPolicy.js';
 // Автор: Фэйшэн Оригинал | Лицензия: GPL-3.0
 import {  /* ★ P0-05：候选隔离用快照接口（替代 saveLocalWeights/reloadWeights 链） */
     __snapshotModel, __restoreModel, __applySnapshot, __getMoments, __setMoments,
@@ -180,16 +181,6 @@ function _snapshotComplete(s) {
         s.w3.length === NET.H2 * NET.O && s.b3.length === NET.O &&
         s.w4.length === NET.H2 && s.b4.length === 1 &&
         s.pr1.length === NET.I * NET.H1 && s.pr2.length === NET.H1 * NET.H2);
-}
-function _labelIdx(label) {
-    if (typeof label === 'number') {
-        if (label >= 2) return 0;
-        if (label >= 1) return 1;
-        if (label >= 0) return 2;
-        if (label >= -1) return 3;
-        return 4;
-    }
-    return Math.max(0, Math.min(5, label | 0));
 }
 function _avg(arr) {
     if (!arr || !arr.length) return 0;
@@ -573,9 +564,17 @@ async function _trainOnSnapshot(snapshot, te, wm) {
         for (let ep = 0; ep < EPOCHS; ep++) {
             for (const s of samples) {
                 const feats = s.f || s.features;
-                const label = (s.r !== undefined) ? s.r : s.label;
-                if (!feats || feats.length !== NET.I || label === undefined) continue;
-                try { wm.trainOne(feats, _labelIdx(label)); } catch (e) { _swallow(e); }
+                if (!feats || feats.length !== NET.I) continue;
+
+                /* reward score 与已编码 label 明确分流：
+                 * - s.r 是 reward，必须走统一 scoreToLabel；
+                 * - s.label 仅在明确为 0..5 / A..F 时作为兼容输入。
+                 * 禁止再用同一个函数猜测“这个数字到底是 reward 还是 label”。 */
+                const labelIdx = (typeof s.r === 'number')
+                    ? scoreToLabel(s.r)
+                    : normalizeLabelIndex(s.label);
+                if (labelIdx === null) continue;
+                try { wm.trainOne(feats, labelIdx); } catch (e) { _swallow(e); }
             }
         }
         const trained = _snapshotWeights(wm);
