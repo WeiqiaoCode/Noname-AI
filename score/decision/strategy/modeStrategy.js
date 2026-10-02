@@ -191,6 +191,9 @@ const IDENTITY_STRATEGY = Object.assign({}, DEFAULT_STRATEGY, {
             const isHeal = isHealAct(act);
             const tgtId = tgt ? identityOfFor(me, tgt) : 'unknown';
             const tgtConf = tgt ? confidenceOfFor(me, tgt) : 0;
+            const tgtBelief = tgt ? beliefOfFor(me, tgt) : null;
+            const strongSupport = !!(tgtBelief && (tgtBelief.zhong || 0) >= 0.65 &&
+                (tgtBelief.zhong || 0) - (tgtBelief.nei || 0) >= 0.20);
 
             /* ===== 主公策略 ===== */
             if (myId === 'zhu') {
@@ -200,7 +203,7 @@ const IDENTITY_STRATEGY = Object.assign({}, DEFAULT_STRATEGY, {
                     else if (hp <= 2) bonus -= 0.8;
                     else bonus -= 0.3;
                 }
-                if (isHeal && tgt && tgtId === 'zhong' && tgtConf >= 0.45) bonus += 0.8;
+                if (isHeal && tgt && tgtId === 'zhong' && (tgtConf >= 0.99 || strongSupport)) bonus += 0.8;
                 if (isDmg && tgt && tgtId === 'fan' && tgtConf >= 0.45) bonus += 0.6;
             }
 
