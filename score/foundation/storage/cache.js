@@ -113,6 +113,17 @@ function makeStateKey() {
                 } catch (eInner) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eInner); }
                 parts.push('J' + jn);
                 parts.push('E' + en);
+
+                /* 公开关系信息也属于 world-state：
+                 * 身份明置/阵营公开若不进指纹，100ms bestAction 缓存可能继续沿用旧目标。
+                 * 未明身份只写 '?'，禁止把隐藏 identity 泄露进缓存键。 */
+                try {
+                    const shown = !!p.identityShown || p === game.zhu || p.identity === 'zhu' || p.identity === 'mingzhong';
+                    const pubId = shown ? String(p.identity || (p === game.zhu ? 'zhu' : '')) : '?';
+                    const pubGroup = (shown && p.group) ? String(p.group) : '';
+                    const pk = String(p.playerid || p.name1 || p.name || p.name2 || '?');
+                    parts.push('R' + pk + ':' + (shown ? '1' : '0') + ':' + pubId + ':' + pubGroup);
+                } catch (eRel) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRel); }
             }
         } catch (eJudgeEquip) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eJudgeEquip); }
         /* ★ 优化点 1：加入"牌堆剩余数（分桶）"。出牌/摸牌会消耗牌堆，
