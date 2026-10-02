@@ -59,7 +59,7 @@ function _publicIdentityFingerprint() {
 			if (!p) continue;
 			const k = keyOf(p);
 			if (!k) continue;
-			const shown = !!p.identityShown || p === game.zhu || p.identity === 'zhu' || p.identity === 'mingzhong';
+			const shown = !!p.identityShown || p === game.zhu || p.identity === 'mingzhong';
 			const pubId = shown ? String(p.identity || (p === game.zhu ? 'zhu' : '')) : '?';
 			const group = (shown && p.group) ? String(p.group) : '';
 			out.push(k + ':' + (p.alive === false ? '0' : '1') + ':' + (shown ? '1' : '0') + ':' + pubId + ':' + group);
@@ -570,103 +570,161 @@ function _syncBelief() {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
-/* ---------- 查询 ---------- */
-export function identityOf(p) {
+/* ---------- 查询：基础行为 belief + observer-specific 槽位约束 ---------- */
+
+function _roundBelief(b) {
+	if (!b) return null;
+	return {
+		fan: Math.round((b.fan || 0) * 100) / 100,
+		zhong: Math.round((b.zhong || 0) * 100) / 100,
+		nei: Math.round((b.nei || 0) * 100) / 100,
+	};
+}
+
+/**
+ * observer 视角的合法后验：
+ *  - public / self / 唯一剩余槽位直接 one-hot；
+ *  - 其它玩家 = 行为 likelihood × 剩余身份槽位 prior；
+ *  - 槽位为 0 的身份概率严格归零。
+ */
+export function beliefOfFor(observer, p) {
 	try {
-		if (!p) return "unknown";
-		if (currentMode() !== "identity") return "unknown";
-		if (p.identity === "zhu" || p === game.zhu) return "zhu";
-		if (p.identityShown) return p.identity;
-		_syncBelief();
-		const b = _getB(p);
-		if (!b) return "unknown";
-		/* 取最大 */
-		let best = "unknown", bestV = 0;
-		for (const k of ["fan", "zhong", "nei"]) {
-			if (b[k] > bestV) { bestV = b[k]; best = k; }
+		if (!p || currentMode() !== 'identity') return null;
+		const hard = hardIdentityOf(observer, p);
+		if (hard.role) {
+			return {
+				fan: hard.role === 'fan' ? 1 : 0,
+				zhong: hard.role === 'zhong' ? 1 : 0,
+				nei: hard.role === 'nei' ? 1 : 0,
+			};
 		}
-		/* 置信度不足时返回 unknown */
-		if (bestV < 0.45) return "unknown";
-		return best;
-	} catch (e) { return "unknown"; }
-}
 
-export function confidenceOf(p) {
-	try {
-		if (!p) return 0;
-		if (currentMode() !== "identity") return 0;
-		if (p.identity === "zhu" || p === game.zhu) return 1;
-		if (p.identityShown) return 1;
 		_syncBelief();
-		const b = _getB(p);
-		if (!b) return 0;
-		let best = 0;
-		for (const k of ["fan", "zhong", "nei"]) if (b[k] > best) best = b[k];
-		return Math.round(best * 100) / 100;
-	} catch (e) { return 0; }
-}
+		const base = _getB(p);
+		if (!base) return null;
 
-export function beliefOf(p) {
-	try {
-		_syncBelief();
-		const b = _getB(p);
-		if (!b) return null;
-		return { fan: Math.round(b.fan * 100) / 100, zhong: Math.round(b.zhong * 100) / 100, nei: Math.round(b.nei * 100) / 100 };
+		const rs = remainingRoleSlots(observer);
+		if (!rs.constrainable) return _roundBelief(base);
+
+		const roles = ['fan', 'zhong', 'nei'];
+		let slotTotal = 0;
+		for (const role of roles) slotTotal += Math.max(0, rs.counts[role] || 0);
+		if (slotTotal <= 0) return _roundBelief(base);
+
+		const score = { fan: 0, zhong: 0, nei: 0 };
+		let total = 0;
+		for (const role of roles) {
+			const slots = Math.max(0, rs.counts[role] || 0);
+			if (slots <= 0) { score[role] = 0; continue; }
+			const prior = slots / slotTotal;
+			/* 0.05 smoothing：行为没有证据 ≠ 逻辑上不可能；只有规则槽位能置 0。 */
+			score[role] = (Math.max(0, Number(base[role]) || 0) + 0.05) * prior;
+			total += score[role];
+		}
+		if (total <= 0) return _roundBelief(base);
+		for (const role of roles) score[role] /= total;
+		return _roundBelief(score);
 	} catch (e) { return null; }
 }
 
-/* ---------- 推理级敌友（identity 模式下的专用覆盖） ---------- */
+export function identityOfFor(observer, p) {
+	try {
+		if (!p || currentMode() !== 'identity') return 'unknown';
+		const hard = hardIdentityOf(observer, p);
+		if (hard.role) return hard.role;
+		const b = beliefOfFor(observer, p);
+		if (!b) return 'unknown';
+		let best = 'unknown', bestV = 0;
+		for (const k of ['fan', 'zhong', 'nei']) {
+			if (b[k] > bestV) { bestV = b[k]; best = k; }
+		}
+		return bestV >= 0.45 ? best : 'unknown';
+	} catch (e) { return 'unknown'; }
+}
+
+export function confidenceOfFor(observer, p) {
+	try {
+		if (!p || currentMode() !== 'identity') return 0;
+		if (hardIdentityOf(observer, p).role) return 1;
+		const b = beliefOfFor(observer, p);
+		if (!b) return 0;
+		return Math.round(Math.max(b.fan || 0, b.zhong || 0, b.nei || 0) * 100) / 100;
+	} catch (e) { return 0; }
+}
+
+/* 兼容旧 API：不使用任何其它玩家的私有身份，只按公开观察者视角计算。 */
+export function identityOf(p) { return identityOfFor(null, p); }
+export function confidenceOf(p) { return confidenceOfFor(null, p); }
+export function beliefOf(p) { return beliefOfFor(null, p); }
+
+/* ---------- 推理级敌友：Identity 固定，Stance 可动态 ---------- */
+
+function _roleOfSelf(me) {
+	try {
+		if (!me) return null;
+		if (me === game.zhu) return 'zhu';
+		return _normalizeRole(me.identity);
+	} catch (e) { return null; }
+}
+
 export function isLikelyEnemy(me, other) {
 	try {
-		if (!me || !other || me === other) return false;
-		if (currentMode() !== "identity") return false;
-		const myId = me.identity || (me === game.zhu ? "zhu" : "");
-		const oId = identityOf(other);
-		if (oId === "unknown") return false;
+		if (!me || !other || me === other || currentMode() !== 'identity') return false;
+		const myId = _roleOfSelf(me);
+		if (!myId) return false;
+		/* 内奸身份不直接映射固定敌人；其处置态度交给动态 stance/get.attitude。 */
+		if (myId === 'nei') return false;
 
-		const camp = { zhu: "loyal", zhong: "loyal", fan: "rebel", nei: "nei" };
-		const myCamp = camp[myId];
-		const oCamp = camp[oId];
-		if (!myCamp || !oCamp) return false;
-		if (myCamp === oCamp) return false;
-		if (myCamp === "nei" || oCamp === "nei") return false; /* 内奸非直接敌 */
-		return true;
+		const b = beliefOfFor(me, other);
+		if (!b) return false;
+		if (myId === 'zhu' || myId === 'zhong') return (b.fan || 0) >= 0.45;
+		if (myId === 'fan') {
+			const hard = hardIdentityOf(me, other);
+			if (hard.role === 'zhu') return true;
+			return (b.zhong || 0) >= 0.45;
+		}
+		return false;
 	} catch (e) { return false; }
 }
 
 export function isLikelyAlly(me, other) {
 	try {
-		if (!me || !other || me === other) return false;
-		if (currentMode() !== "identity") return false;
-		const myId = me.identity || (me === game.zhu ? "zhu" : "");
-		const oId = identityOf(other);
-		if (oId === "unknown") return false;
-		const camp = { zhu: "loyal", zhong: "loyal", fan: "rebel", nei: "nei" };
-		const myCamp = camp[myId];
-		const oCamp = camp[oId];
-		if (!myCamp || !oCamp) return false;
-		return myCamp === oCamp;
+		if (!me || !other || me === other || currentMode() !== 'identity') return false;
+		const myId = _roleOfSelf(me);
+		if (!myId || myId === 'nei') return false;
+
+		const b = beliefOfFor(me, other);
+		if (!b) return false;
+		if (myId === 'zhu' || myId === 'zhong') return (b.zhong || 0) >= 0.45 && (b.fan || 0) < 0.25;
+		if (myId === 'fan') return (b.fan || 0) >= 0.45;
+		return false;
 	} catch (e) { return false; }
 }
 
-/* ---------- 共享信念加权（决策模块统一入口） ----------
- * 供 threat / skillPlayBrain / cardPlayBrain 等目标评分复用：
- *   - 高置信疑似敌人 → +weight * w（优先集火）
- *   - 高置信疑似队友 → -weight * w（避免误伤）
- *   - 置信不足 / 非 identity 局 → 0（零回归）
- * w = (置信度-0.4)/0.6，0.4~1.0 线性映射到 0~1。
- * 纯数值计算，不读任何游戏全局之外的副作用；失败一律 0。
+/* ---------- 共享信念加权 ----------
+ * 使用 observer-specific posterior；角色身份和动态 stance 分离。
  */
 export function identityBiasOf(me, tgt, weight) {
 	try {
-		if (!me || !tgt || tgt === me) return 0;
-		if (currentMode() !== "identity") return 0;
-		const c = confidenceOf(tgt);
-		if (c < 0.4) return 0;
-		const w = (c - 0.4) / 0.6;
-		if (isLikelyEnemy(me, tgt)) return weight * w;
-		if (isLikelyAlly(me, tgt)) return -weight * w;
-		return 0;
+		if (!me || !tgt || tgt === me || currentMode() !== 'identity') return 0;
+		const myId = _roleOfSelf(me);
+		if (!myId || myId === 'nei') return 0;
+		const b = beliefOfFor(me, tgt);
+		if (!b) return 0;
+
+		let enemyP = 0, allyP = 0;
+		if (myId === 'zhu' || myId === 'zhong') {
+			enemyP = b.fan || 0;
+			allyP = b.zhong || 0;
+		} else if (myId === 'fan') {
+			const hard = hardIdentityOf(me, tgt);
+			enemyP = (hard.role === 'zhu' ? 1 : 0) + (b.zhong || 0);
+			enemyP = Math.min(1, enemyP);
+			allyP = b.fan || 0;
+		}
+		const delta = enemyP - allyP;
+		if (Math.abs(delta) < 0.15) return 0;
+		return weight * delta;
 	} catch (e) { return 0; }
 }
 
@@ -679,15 +737,20 @@ export function resetBelief() {
 	_beliefUpdating = false;
 }
 
-export function explainIdentity(p) {
+export function explainIdentity(p, observer) {
 	try {
-		const b = beliefOf(p);
+		const b = beliefOfFor(observer || null, p);
+		const hard = hardIdentityOf(observer || null, p);
 		return {
 			key: keyOf(p),
-			realIdentity: p ? p.identity : null,
-			inferred: identityOf(p),
-			confidence: confidenceOf(p),
+			publicIdentity: _publicRoleOf(p),
+			hardIdentity: hard.role,
+			hardSource: hard.source,
+			inferred: identityOfFor(observer || null, p),
+			confidence: confidenceOfFor(observer || null, p),
 			belief: b,
+			roleInventory: roleInventory(),
+			remainingSlots: remainingRoleSlots(observer || null),
 			observedHostility: p ? Math.round(hostilityOf(p) * 100) / 100 : 0,
 			observedFriendliness: p ? Math.round(friendlinessOf(p) * 100) / 100 : 0,
 		};
