@@ -261,6 +261,24 @@ export function hardIdentityOf(observer, target) {
 	} catch (e) { return { role: null, source: 'none' }; }
 }
 
+/**
+ * 规则层“是否可能”：与概率大小严格分离。
+ * true 只表示该身份仍有合法槽位；false 才表示逻辑上不可能。
+ */
+export function isRolePossibleFor(observer, target, role) {
+	try {
+		const r = _normalizeRole(role);
+		if (!target || !r) return false;
+		const hard = hardIdentityOf(observer, target);
+		if (hard.role) return hard.role === r;
+
+		const rs = remainingRoleSlots(observer);
+		if (!rs.constrainable) return true; // 无法确认规则配额时 fail-open，不做错误排除
+		return (rs.counts[r] || 0) > 0;
+	} catch (e) { return true; }
+}
+
+
 /* ---------- 单个玩家的信念计算 ---------- */
 function _computeBelief(p) {
 	const b = { zhu: 0, zhong: 0, fan: 0, nei: 0, updated: (_status && _status.roundNumber) || 0 };
@@ -368,12 +386,9 @@ function _computeBelief(p) {
 		b.nei = neiScore;
 	}
 
-	/* 态度修正：若本体 get.attitude 已有倾向，作为弱先验（权重再减半） */
-	try {
-		const att = typeof get === "object" && get.attitude ? get.attitude(zhu, p) : 0;
-		if (att > 0) b.zhong += 0.15;
-		else if (att < 0) b.fan += 0.15;
-	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	/* 身份推理禁止消费宿主 get.attitude/rawAttitude：
+	 * 宿主身份模式内部可读取未公开 identity，因此不能作为“公平信息”证据。
+	 * 此层只使用公开事实、合法观测和规则身份槽位。 */
 
 	/* ★ 扩写：更多身份推理信号（权重全部再减半） */
 	try {
@@ -463,8 +478,9 @@ function _computeBelief(p) {
 						if (!obs[keyOf(other)]) continue;
 						const oAttacks = obs[keyOf(other)].attacks || {};
 						if (oAttacks[myKey] >= 1) {
-							/* other 打过 p，如果 other 大概率反贼，则 p 大概率忠臣 */
-							const otherId = identityOf(other);
+							/* 基础行为 belief 必须 observer-agnostic：
+							 * 二阶证据只使用 other 的公开身份，不调用匿名 identityOf(other)。 */
+							const otherId = _publicRoleOf(other);
 							if (otherId === 'fan') attackedByFan++;
 							else if (otherId === 'zhong') attackedByZhong++;
 						}
@@ -586,6 +602,16 @@ function _roundBelief(b) {
 	};
 }
 
+function _copyBelief(b) {
+	if (!b) return null;
+	return {
+		fan: Number(b.fan) || 0,
+		zhong: Number(b.zhong) || 0,
+		nei: Number(b.nei) || 0,
+	};
+}
+
+
 /**
  * observer 视角的合法后验：
  *  - public / self / 唯一剩余槽位直接 one-hot；
@@ -609,12 +635,12 @@ export function beliefOfFor(observer, p) {
 		if (!base) return null;
 
 		const rs = remainingRoleSlots(observer);
-		if (!rs.constrainable) return _roundBelief(base);
+		if (!rs.constrainable) return _copyBelief(base);
 
 		const roles = ['fan', 'zhong', 'nei'];
 		let slotTotal = 0;
 		for (const role of roles) slotTotal += Math.max(0, rs.counts[role] || 0);
-		if (slotTotal <= 0) return _roundBelief(base);
+		if (slotTotal <= 0) return _copyBelief(base);
 
 		const score = { fan: 0, zhong: 0, nei: 0 };
 		let total = 0;
@@ -626,24 +652,33 @@ export function beliefOfFor(observer, p) {
 			score[role] = (Math.max(0, Number(base[role]) || 0) + 0.05) * prior;
 			total += score[role];
 		}
-		if (total <= 0) return _roundBelief(base);
+		if (total <= 0) return _copyBelief(base);
 		for (const role of roles) score[role] /= total;
-		return _roundBelief(score);
+		return _copyBelief(score);
 	} catch (e) { return null; }
 }
+
+const SOFT_IDENTITY_MIN = 0.65;
+const SOFT_IDENTITY_MARGIN = 0.20;
 
 export function identityOfFor(observer, p) {
 	try {
 		if (!p || currentMode() !== 'identity') return 'unknown';
 		const hard = hardIdentityOf(observer, p);
 		if (hard.role) return hard.role;
+
 		const b = beliefOfFor(observer, p);
 		if (!b) return 'unknown';
-		let best = 'unknown', bestV = 0;
-		for (const k of ['fan', 'zhong', 'nei']) {
-			if (b[k] > bestV) { bestV = b[k]; best = k; }
-		}
-		return bestV >= 0.45 ? best : 'unknown';
+		const ranked = ['fan', 'zhong', 'nei']
+			.map(function (role) { return { role: role, p: Number(b[role]) || 0 }; })
+			.sort(function (a, z) { return z.p - a.p; });
+		const best = ranked[0], second = ranked[1] || { p: 0 };
+
+		/* “最可能”不等于“可命名身份”：
+		 * 50/50、接近打平或置信不足都保持 unknown。 */
+		if (!best || best.p < SOFT_IDENTITY_MIN) return 'unknown';
+		if (best.p - second.p < SOFT_IDENTITY_MARGIN) return 'unknown';
+		return best.role;
 	} catch (e) { return 'unknown'; }
 }
 
@@ -762,7 +797,7 @@ export function explainIdentity(p, observer) {
 			hardSource: hard.source,
 			inferred: identityOfFor(observer || null, p),
 			confidence: confidenceOfFor(observer || null, p),
-			belief: b,
+			belief: _roundBelief(b),
 			roleInventory: roleInventory(),
 			remainingSlots: remainingRoleSlots(observer || null),
 			observedHostility: p ? Math.round(hostilityOf(p) * 100) / 100 : 0,
