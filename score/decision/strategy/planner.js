@@ -20,6 +20,7 @@ import { cfg } from '../../foundation/config/util.js';
 import { log } from '../../foundation/diag/logger.js';
 import { isEnemyOf, probHasShan, seatPressure, threatOf } from '../threat/threat.js';
 import { isAllyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
+import { baseEquipValue } from '../basic/equipBrain.js';
 
 const PLAN_TIMEOUT = 350;
 const LOOKAHEAD_DISCOUNT = 0.7;
@@ -59,6 +60,114 @@ function _hasNatureSha(me) {
 	} catch (e) { return false; }
 }
 
+/* ================= 武器射程前瞻 =================
+ * Noname 的 attack distance 已包含当前装备修正；武器 distance.attackFrom 通常为
+ * 0 / -1 / -2 ...。替换武器时必须先移除旧武器修正，再加入新武器修正：
+ *   projected = currentAttackDistance - oldAttackFrom + newAttackFrom
+ */
+export function projectAttackDistanceWithWeapon(currentAttackDistance, oldAttackFrom, newAttackFrom) {
+	const d = Number(currentAttackDistance);
+	const oldV = Number(oldAttackFrom);
+	const newV = Number(newAttackFrom);
+	if (!isFinite(d) || !isFinite(oldV) || !isFinite(newV)) return Infinity;
+	return d - oldV + newV;
+}
+
+/**
+ * 在已标准化的武器候选里选择能让目标进入【杀】攻击距离（<=1）的武器。
+ * weapons: [{ id, attackFrom, value, card? }]
+ * 优先级：装备价值 > 未来攻击距离（同价值时更长射程优先）。
+ */
+export function chooseRangeEnablingWeapon(currentAttackDistance, oldAttackFrom, weapons) {
+	if (!Array.isArray(weapons) || !weapons.length) return null;
+	let best = null;
+	for (let i = 0; i < weapons.length; i++) {
+		const w = weapons[i];
+		if (!w || !w.id || typeof w.attackFrom !== 'number' || !isFinite(w.attackFrom)) continue;
+		const projected = projectAttackDistanceWithWeapon(currentAttackDistance, oldAttackFrom, w.attackFrom);
+		if (!(projected <= 1)) continue;
+		const value = (typeof w.value === 'number' && isFinite(w.value)) ? w.value : 0;
+		const cand = Object.assign({}, w, { projectedDistance: projected, value: value });
+		if (!best
+			|| cand.value > best.value
+			|| (cand.value === best.value && cand.projectedDistance < best.projectedDistance)) {
+			best = cand;
+		}
+	}
+	return best;
+}
+
+function _cardId(card, me) {
+	try {
+		return (get.name && get.name(card, me)) || (card && card.name) || '';
+	} catch (e) { return (card && card.name) || ''; }
+}
+
+function _subtype(card, me) {
+	try {
+		const s = get.subtype ? get.subtype(card, me) : null;
+		if (s) return s;
+		const id = _cardId(card, me);
+		return (id && lib.card && lib.card[id] && lib.card[id].subtype) || null;
+	} catch (e) { return null; }
+}
+
+function _attackFrom(card, me) {
+	try {
+		const id = _cardId(card, me);
+		if (!id || !lib.card || !lib.card[id]) return 0;
+		const d = lib.card[id].distance;
+		return (d && typeof d.attackFrom === 'number' && isFinite(d.attackFrom)) ? d.attackFrom : 0;
+	} catch (e) { return 0; }
+}
+
+function _attackDistance(me, target) {
+	try {
+		const d = get.distance(me, target, 'attack');
+		if (typeof d === 'number' && isFinite(d)) return d;
+	} catch (e) { /* fallback below */ }
+	try {
+		if (me && typeof me.inRange === 'function') return me.inRange(target) ? 1 : Infinity;
+	} catch (e) { /* noop */ }
+	return Infinity;
+}
+
+function _findRangeEnablingWeapon(me, target) {
+	try {
+		const currentAttackDistance = _attackDistance(me, target);
+		if (!(currentAttackDistance > 1) || !isFinite(currentAttackDistance)) return null;
+
+		let oldAttackFrom = 0;
+		const equipped = me && me.getCards ? (me.getCards('e') || []) : [];
+		for (let i = 0; i < equipped.length; i++) {
+			if (_subtype(equipped[i], me) === 'equip1') {
+				oldAttackFrom = _attackFrom(equipped[i], me);
+				break;
+			}
+		}
+
+		const hand = me && me.getCards ? (me.getCards('h') || []) : [];
+		const weapons = [];
+		for (let i = 0; i < hand.length; i++) {
+			const card = hand[i];
+			if (_subtype(card, me) !== 'equip1') continue;
+			const id = _cardId(card, me);
+			if (!id) continue;
+			weapons.push({
+				id: id,
+				card: card,
+				attackFrom: _attackFrom(card, me),
+				value: baseEquipValue(id),
+			});
+		}
+		const best = chooseRangeEnablingWeapon(currentAttackDistance, oldAttackFrom, weapons);
+		if (!best) return null;
+		best.currentAttackDistance = currentAttackDistance;
+		best.oldAttackFrom = oldAttackFrom;
+		return best;
+	} catch (e) { return null; }
+}
+
 function _findKillSequence(me, target) {
 	try {
 		if (!target || !target.isIn()) return null;
@@ -82,6 +191,27 @@ function _findKillSequence(me, target) {
 		let totalDmg = 0;      /* 乐观累计（用于估算能否压线） */
 		let certainDmg = 0;    /* 保守累计（仅必中伤害） */
 
+		/* ★ 攻击范围必须是残局解的一部分：
+		 * 当前在范围外时，不允许直接把【杀】算进序列；若手牌武器能补足射程，
+		 * 则把“装备武器”作为第一步，再继续酒/杀。 */
+		const currentAttackDistance = _attackDistance(me, target);
+		const rangeWeapon = currentAttackDistance > 1 ? _findRangeEnablingWeapon(me, target) : null;
+		const shaReachable = currentAttackDistance <= 1 || !!rangeWeapon;
+		let rangePrepared = false;
+		function prepareShaRange() {
+			if (!shaReachable) return false;
+			if (!rangePrepared && rangeWeapon && currentAttackDistance > 1) {
+				steps.push({
+					id: rangeWeapon.id,
+					type: 'equip',
+					enables: 'sha',
+					projectedDistance: rangeWeapon.projectedDistance,
+				});
+				rangePrepared = true;
+			}
+			return true;
+		}
+
 		/* 击杀判断：期望伤害覆盖剩余血；
 		 *  且有保底命中(或期望足以超额覆盖)才判可杀，避免纯"期望伤害"造假必杀解。 */
 		function killable(expect, certain) {
@@ -90,7 +220,8 @@ function _findKillSequence(me, target) {
 			return expect >= hp + 1;                   /* 仅期望 → 需超额覆盖留余量 */
 		}
 
-		if (hand.has('jiu') && take('sha')) {
+		if (hand.has('jiu') && shaReachable && take('sha')) {
+			prepareShaRange();
 			steps.push({ id: 'jiu', dmg: 0, type: 'buff' });
 			/* ★ 杀命中按 probHasShan 折算：期望伤害 = 命中率 × 伤害 */
 			const pS = probHasShan(me, target);
@@ -98,7 +229,8 @@ function _findKillSequence(me, target) {
 			steps.push({ id: 'sha', expect: shaExpect, dmg: 2, type: 'damage' });
 			totalDmg += shaExpect;
 			certainDmg += (pS <= 0.5 ? 1 : 0);
-		} else if (hand.has('sha') && take('sha')) {
+		} else if (hand.has('sha') && shaReachable && take('sha')) {
+			prepareShaRange();
 			const pS = probHasShan(me, target);
 			const shaExpect = 1 * (1 - pS);
 			steps.push({ id: 'sha', expect: shaExpect, dmg: 1, type: 'damage' });
@@ -435,13 +567,14 @@ export function refineBestWithPlan(me, best, bestT) {
 
 		if (plan.isKill && planBest.action) {
 			return {
-				type: 'card',
+				/* ★ 先装武器再杀：第一步必须保持 equip 类型，不能伪装成普通 card。 */
+				type: planBest.action.type === 'equip' ? 'equip' : 'card',
 				id: planBest.action.id,
 				score: planBest.total,
 				reason: '★ 残局解：' + planBest.steps.map(function (s) { return s.id; }).join(' → ') + '（' + planBest.steps.reduce(function (s, x) { return s + (x.dmg || 0); }, 0) + ' 点伤害）',
 				killTarget: planBest.target,
-				/* ★ 新增：显式带出目标，供 engine 同步 bestT（规划目标与最终目标一致） */
-				target: planBest.target,
+				/* 装备动作本身没有玩家目标；真正攻击目标保留在 killTarget，下一决策点会重新规划。 */
+				target: planBest.action.type === 'equip' ? null : planBest.target,
 				isKill: true,
 			};
 		}

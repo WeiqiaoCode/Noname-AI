@@ -4338,7 +4338,11 @@ function bestAction() {
 		/* ★ 指令 02：tiesuo 的 target 由 evaluator 决定（use=目标名数组；recast=null），
 		 * 其他牌的 target 仍沿用既有 bestT 结果，保持路径不变。 */
 		let _finalTarget = bestT ? (bestT.name1 || bestT.name || bestT.name2 || null) : null;
-		if (best && best.id === 'tiesuo') {
+		/* 装备动作没有玩家目标；planner 的“装备→杀”序列会把真正击杀目标放在 killTarget，
+		 * 不能把当时的 bestT 误写成 equip 的 target。 */
+		if (best && best.type === 'equip') {
+			_finalTarget = null;
+		} else if (best && best.id === 'tiesuo') {
 			_finalTarget = Array.isArray(best.target) ? best.target : null;
 		}
 		const _finalResult = {
