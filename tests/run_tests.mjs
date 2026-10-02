@@ -51,6 +51,11 @@ const _here = dirname(fileURLToPath(import.meta.url));          /* 无名AI/test
 const _repoRoot = resolve(_here, '..', '..', '..');             /* WUMAING */
 const _hostPath = join(_repoRoot, 'noname.js');
 const _hostOwned = !existsSync(_hostPath);
+/* Node 18 不会对 package 边界外的 .js 自动做 ESM 语法探测。
+ * 当测试/训练脚本临时生成 noname.js 宿主桩时，同时在同目录生成最小 package.json，
+ * 明确声明 type=module；仅在原文件不存在时创建并在退出时清理，绝不覆盖真实宿主工程。 */
+const _hostPkgPath = join(_repoRoot, 'package.json');
+const _hostPkgOwned = _hostOwned && !existsSync(_hostPkgPath);
 const _HOST_STUB = `/* 自动生成的测试宿主桩——run_tests.mjs 退出时删除，勿手改、勿打包 */
 const fn = function () { return undefined; };
 const configStore = {};
@@ -70,7 +75,11 @@ export const _configStore = configStore;
 export default { lib, game, ui, get, ai, _status };
 `;
 if (_hostOwned) writeFileSync(_hostPath, _HOST_STUB, 'utf8');
-function _cleanupHost() { if (_hostOwned && existsSync(_hostPath)) { try { rmSync(_hostPath); } catch (e) {} } }
+if (_hostPkgOwned) writeFileSync(_hostPkgPath, '{"type":"module"}\n', 'utf8');
+function _cleanupHost() {
+    if (_hostOwned && existsSync(_hostPath)) { try { rmSync(_hostPath); } catch (e) {} }
+    if (_hostPkgOwned && existsSync(_hostPkgPath)) { try { rmSync(_hostPkgPath); } catch (e) {} }
+}
 process.on('exit', _cleanupHost);
 
 /* ---------- 浏览器环境桩（必须在 import 业务模块前装好） ---------- */

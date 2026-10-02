@@ -31,7 +31,7 @@
 ## P1 · 工程与测试
 
 ### 4. 自动化测试
-- [ ] 将 `node tests/run_tests.mjs` 接入 GitHub Actions
+- [x] 将 `node tests/run_tests.mjs` 接入 GitHub Actions
 - [ ] PR 必须通过核心测试后再合并
 - [ ] 行为 bug 优先先写 failing test，再修实现
 - [ ] 将游戏内 manual smoke 与 Node 自动测试明确区分
