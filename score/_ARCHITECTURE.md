@@ -15,18 +15,18 @@
 | 决策内核层 | `score/decision/`<br>`score/cognition/` `score/perception/` `score/knowledge/` | 感知 → 候选生成 → 逐层打分 → 收敛 → 复核 → 护栏 | 无 |
 | 学习闭环层 | `score/model/` | 130 维特征契约、冠军策略、异步后检测、训练与回流、模型热更新 | 无 |
 
-### 耦合现状（实测）
+### 耦合现状（自动审计）
 
-| 指标 | 实测值 |
+| 指标 | 权威来源 |
 |---|---|
-| 内核 JS 文件 | 182 |
+| 内核 JS 文件数 | `score/verification/semanticAudit.js → AUDIT.files` |
 | 宿主耦合点 | **1**（`score/foundation/adapt/host.js`）✅ |
-| 已完全语义化（无牌名/身份/阶段字面量） | 100 / 182（**55%**） |
-| 仍含游戏专有词表的文件 | 82（共 1495 处） |
+| 已完全语义化文件 | `AUDIT.cleanFiles / AUDIT.files` |
+| 仍含游戏专有词表 | `AUDIT.legacyFiles` 个文件 / `AUDIT.hits` 处 |
 
-> **宿主耦合已彻底收敛**；**语义层已建立并成为权威来源**（新增模块只认语义）；
-> 但历史模块中的牌名/身份/阶段字面量仍在按目录下沉中。
-> 该指标由 `build/semantic_audit.mjs` 实测生成 → `score/verification/semanticAudit.js` + `/workspace/语义化进度报告.md`。
+> **宿主耦合已收敛到 `host.js`**；语义层已建立并作为新增模块的权威来源。
+> 历史模块中的牌名/身份/阶段字面量仍在持续下沉。不要在本文手工维护快照数字：
+> 运行 `node build/semantic_audit.mjs` 后，以生成的 `score/verification/semanticAudit.js` 为准。
 
 配套：`score/view/`（面板）、`score/verification/`（自检）、`score/foundation/`（宿主适配 / 存储 / 总线 / 诊断）。
 
@@ -171,20 +171,20 @@ __DJSC.proReady.report()   // 结构化：{ kernel, profile, extension, config, 
 __DJSC.proReady.text()     // 可读文本，逐项列出「还差什么、去哪填」
 ```
 
-输出示例（当前）：
+输出格式示例（具体数字以运行时报告为准）：
 
 ```
 内核解耦   : ✅ 宿主耦合唯一化（score/foundation/adapt/host.js）
           : ✅ 特征契约 130 维
-          : ✅ 语义层已建立并作为权威来源（新增模块只认语义）
-适配词表   : 55% 文件已洁净（100/182），残留 1495 处 / 82 文件
+          : ✅ 语义层已建立并作为权威来源
+适配词表   : <AUDIT.cleanRate>% 文件已洁净
 ──────────────────────────────────────────────
-游戏档案   : 无名杀 / 无名杀运行时
-扩展点     : 2/40  (5%)
-配置规格   : 已接入 30 项 / 预留 6 项
+游戏档案   : <profile>
+扩展点     : <registered>/<expect>
+配置规格   : 已接入 <active> 项 / 预留 <pending> 项
 ──────────────────────────────────────────────
-综合就绪度 : 55%   (档案 88% · 扩展点 5% · 配置 83% · 词表 55%)
-待填清单（共 16 项）：…
+综合就绪度 : <overall>%
+待填清单   : <gaps>
 ```
 
 `gaps` 里每一条都是**可直接执行的待办**（去哪填、填什么）。
@@ -195,7 +195,7 @@ __DJSC.proReady.text()     // 可读文本，逐项列出「还差什么、去�
 
 | # | 方向 | 落点 | 你只需填 |
 |---|---|---|---|
-| 0 | **适配词表下沉**（82 文件 / 1495 处 → 0） | `terms.js` 语义查询 | 逐模块替换为 `idsOf/bucketIds/isSemantic/semanticOf`，用 `build/semantic_audit.mjs` 追踪进度 |
+| 0 | **适配词表下沉**（`AUDIT.legacyFiles / AUDIT.hits → 0`） | `terms.js` 语义查询 | 逐模块替换为 `idsOf/bucketIds/isSemantic/semanticOf`，用 `build/semantic_audit.mjs` 追踪进度 |
 | 1 | 适配第 2 款卡牌游戏 | `gameProfile.js` | 一张语义表 + 阶段/阵营/事件名 |
 | 2 | 升级模型后端（本地→远程/集成） | `extPoints.modelBackend` | 一个 `predict()` 实现 + `modelBackendUrl` |
 | 3 | 特征契约扩展（130 → N） | `extPoints.featureBlock` | `dims` + 一个取特征函数 + `featureBlockDims` |
@@ -234,4 +234,4 @@ score/model/                                    学习闭环（冠军策略 / �
 
 
 > 目标约定：内核只引用**语义**，游戏专有名词全部集中到 `gameProfile.js`。
-> 现状：新增模块已遵守该约定；既有 82 个模块的词表正在下沉（洁净率 55%），进度由 `build/semantic_audit.mjs` 追踪。
+> 现状：新增模块应遵守该约定；历史模块的词表下沉进度由 `build/semantic_audit.mjs` 自动审计，具体数字以 `score/verification/semanticAudit.js` 为准。
