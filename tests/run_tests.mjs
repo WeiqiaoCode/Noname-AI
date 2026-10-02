@@ -2307,6 +2307,52 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+/* ================= 10.35 多步规划：先装备武器再击杀远距离残血目标 =================
+ * 目标：
+ *   1) planner 不得把当前攻击范围外的【杀】误判成可直接执行；
+ *   2) 手牌武器若能把目标纳入攻击范围，应生成「装备 → 杀」序列；
+ *   3) 多把可达武器中优先选择价值较高者；
+ *   4) 规划第一步是装备时，refineBestWithPlan 必须返回 type= equip 且不把敌人当作装备目标。
+ */
+{
+    const fs35 = await import('node:fs');
+    const pl35 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'strategy', 'planner.js')).href);
+    const src35 = fs35.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+
+    eq(typeof pl35.projectAttackDistanceWithWeapon, 'function', '10.35 导出 projectAttackDistanceWithWeapon');
+    eq(typeof pl35.chooseRangeEnablingWeapon, 'function', '10.35 导出 chooseRangeEnablingWeapon');
+
+    /* 当前无武器：攻击距离3，装备 attackFrom=-2（攻击范围3）后 → 距离1，可杀 */
+    eq(pl35.projectAttackDistanceWithWeapon(3, 0, -2), 1, '10.35 无武器：distance 3 + range3 weapon → attack distance 1');
+
+    /* 当前已有 range2 武器（attackFrom=-1），换 range3（-2）：distance2 → distance1 */
+    eq(pl35.projectAttackDistanceWithWeapon(2, -1, -2), 1, '10.35 替换武器时正确移除旧 attackFrom 再加入新值');
+
+    /* range 不足仍不可达 */
+    eq(pl35.projectAttackDistanceWithWeapon(4, 0, -2), 2, '10.35 range3 weapon 无法覆盖 distance4');
+
+    const pick = pl35.chooseRangeEnablingWeapon(3, 0, [
+        { id: 'range2', attackFrom: -1, value: 9 },
+        { id: 'range3_low', attackFrom: -2, value: 5 },
+        { id: 'range3_high', attackFrom: -2, value: 8 },
+    ]);
+    ok(pick && pick.id === 'range3_high', '10.35 只在可达武器中选择，且同等可达时优先高价值');
+    eq(pl35.chooseRangeEnablingWeapon(5, 0, [{ id: 'range3', attackFrom: -2, value: 8 }]), null,
+        '10.35 没有任何武器能覆盖目标 → null');
+
+    /* 源码守卫：kill sequence 真正消费 range helper，而不是只新增死函数 */
+    ok(src35.indexOf('_findRangeEnablingWeapon(me, target)') >= 0,
+        '10.35 _findKillSequence 调用 range-enabling weapon 搜索');
+    ok(src35.indexOf('shaReachable') >= 0,
+        '10.35 【杀】进入残局解前必须经过攻击范围门禁');
+    ok(/steps\.push\(\{ id: rangeWeapon\.id, type: 'equip'/.test(src35),
+        '10.35 远距离击杀序列显式先 push equip step');
+    ok(/type:\s*planBest\.action\.type === 'equip' \? 'equip' : 'card'/.test(src35),
+        '10.35 planner 第一动作是装备时返回 equip 类型');
+    ok(/target:\s*planBest\.action\.type === 'equip' \? null : planBest\.target/.test(src35),
+        '10.35 装备动作不错误携带敌方 player target');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
