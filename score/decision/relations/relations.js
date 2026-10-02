@@ -54,7 +54,12 @@ import { isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, iden
 function exposureOf(me, t) {
 	try {
 		if (!t) return { shown: false, known: 0, source: 'none', inferConfidence: 0 };
-		let shown = !!t.identityShown || t === game.zhu || t.identity === 'mingzhong' || (!!t.group && t.identityShown === true);
+		const strategy = getModeStrategy();
+		const identityMode = !!(strategy && (strategy.name === 'identity' || strategy.name === 'connect'));
+		/* 身份局严格只认公开身份；国战等其它模式保留原有“公开 group”语义。 */
+		let shown = identityMode
+			? (!!t.identityShown || t === game.zhu || t.identity === 'mingzhong')
+			: (!!t.identityShown || (!!t.group && t.identityShown !== false));
 		let source = 'none';
 		let known = 0;
 
