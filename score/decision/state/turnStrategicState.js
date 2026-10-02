@@ -134,15 +134,28 @@ function _relOf(player, target, context) {
 	try { return dispositionOf(player, target); } catch (e) { _swallow(e); return 0; }
 }
 
-function _stateValueOf(player, target, cardId, context) {
+function _rawStateValueOf(player, target, cardId, context) {
 	try {
-		const rel = _relOf(player, target, context);
-		const v = delayedControlValue(player, cardId, rel, target, context);
-		if (typeof v === 'number' && isFinite(v)) {
-			return Math.round(v * STRATEGIC_WEIGHT * 1000) / 1000;
+		const state = _stateOf(cardId);
+		if (!state) return 0;
+		/* 扩展点：新游戏/新状态可直接注入 stateValueOf，不需要改本模块。 */
+		if (context && typeof context.stateValueOf === 'function') {
+			const injected = context.stateValueOf(player, target, cardId, state);
+			if (typeof injected === 'number' && isFinite(injected)) return injected;
+		}
+		/* 当前无名杀档案的战略状态都位于判定区，复用既有判定价值权威。 */
+		if (state.zone === 'j') {
+			const rel = _relOf(player, target, context);
+			const v = delayedControlValue(player, cardId, rel, target, context);
+			if (typeof v === 'number' && isFinite(v)) return v;
 		}
 	} catch (e) { _swallow(e); }
 	return 0;
+}
+
+function _stateValueOf(player, target, cardId, context) {
+	const v = _rawStateValueOf(player, target, cardId, context);
+	return Math.round(v * STRATEGIC_WEIGHT * 1000) / 1000;
 }
 
 /* ================= ③ 本回合 provenance ================= */
@@ -298,7 +311,12 @@ export function clearTurnState() {
 
 function _countAlternativeRemovals(target) {
 	try {
-		let n = _cardsOf(target, 'h').length + _cardsOf(target, 'e').length;
+		/* 手牌只读数量，不读取隐藏牌身份；装备/判定区本来就是公开信息。 */
+		let handCount = 0;
+		try {
+			if (target && typeof target.countCards === 'function') handCount = target.countCards('h') || 0;
+		} catch (e) { handCount = 0; }
+		let n = handCount + _cardsOf(target, 'e').length;
 		const j = _judgeCardsOf(target);
 		for (const c of j) {
 			const id = _cardName(c, target);
@@ -335,7 +353,7 @@ export function evaluateDestroyPenalty(player, target, context) {
 		for (const id of ids) {
 			const st = _stateOf(id);
 			const key = _stateKey(st);
-			const v = delayedControlValue(player, id, rel, target, context);
+			const v = _rawStateValueOf(player, target, id, context);
 			if (typeof v === 'number' && isFinite(v)) value += v;
 			if (_hasValidRecord(player, target, key)) selfCreated = true;
 		}
