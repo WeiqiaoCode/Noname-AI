@@ -4,18 +4,18 @@
  * 重新生成：node build/semantic_audit.mjs（发布前必须重跑，P2-34）
  */
 export const AUDIT = {
-	"generated": "2026-09-30",
-	"files": 204,
+	"generated": "2026-10-02",
+	"files": 212,
 	"cleanFiles": 88,
-	"legacyFiles": 116,
-	"hits": 3310,
-	"cleanRate": 43,
+	"legacyFiles": 124,
+	"hits": 3381,
+	"cleanRate": 42,
 	"byDomain": {
 		"cognition": 120,
-		"decision": 1778,
+		"decision": 1844,
 		"foundation": 50,
 		"knowledge": 218,
-		"model": 280,
+		"model": 285,
 		"perception": 739,
 		"verification": 6,
 		"view": 119
@@ -23,7 +23,7 @@ export const AUDIT = {
 	"top": [
 		{
 			"file": "score/decision/engine/engine.js",
-			"count": 356
+			"count": 364
 		},
 		{
 			"file": "score/perception/observer/identity.js",
@@ -54,7 +54,7 @@ export const AUDIT = {
 			"count": 80
 		},
 		{
-			"file": "score/decision/cardplay/responseAI.js",
+			"file": "score/decision/relations/relations.js",
 			"count": 60
 		},
 		{
