@@ -18,7 +18,7 @@ import { decideSkill } from '../skills/skillPlayBrain.js';
 import { decideEquip } from '../basic/equipBrain.js';
 import { decideJudge } from '../basic/judgeBrain.js';
 import { pickTargetByPurpose, targetScore as targetBrainScore } from '../basic/targetBrain.js';
-import { evaluateTiesuoActions } from '../cards/tiesuoEvaluator.js';   /* ★ 指令 02：铁索唯一权威策略源 */
+import { evaluateTiesuoActions, tiesuoUtilityToEngineRaw } from '../cards/tiesuoEvaluator.js';   /* ★ 指令 02：铁索唯一权威策略源 */
 import { evaluateDestroyPenalty, recordSelfCreatedControl } from '../state/turnStrategicState.js';   /* ★ 指令 04：回合内动作一致性唯一权威源 */
 import { buildPlayerSnapshot, buildTargetCandidate } from '../state/playerSnapshot.js';   /* ★ 指令 05 Stage A+C：统一 Player State Snapshot + 目标候选契约（禁止再猜宿主字段） */
 import { codeGainOf, skillRuleOf, detectCombo, skillProfileOf, skillBranchesOf, checkBranch, skillStagesOf, skillInteractionOf, skillTagsOf } from '../skills/skills.js';
@@ -3682,16 +3682,22 @@ function bestAction() {
 							enemyAttrThreat: enemyAttrThreat,
 						});
 						const tieBest = tieRes.bestAction;
+						const tieUtility = (tieBest && tieBest.type === 'use')
+							? tieBest.delta
+							: ((tieRes && typeof tieRes.recastValue === 'number') ? tieRes.recastValue : 0);
+						/* ★ 铁索统一量纲：使用与重铸都从 evaluator utility → engine raw，
+						 * 禁止 use 继续沿用普通卡 s、recast 却只拿 1.2，避免尺度断层。 */
+						actScore = tiesuoUtilityToEngineRaw(tieUtility);
 						if (tieBest && tieBest.type === 'use' && tieBest.targets && tieBest.targets.length) {
 							targetNames = tieBest.targets.map(function (p) { return p.name || p.name1; });
-							targetDesc = '→' + targetNames.join('+') + '（连' + targetNames.length + '个，ΔU' + tieBest.delta + '）';
+							targetDesc = '→' + targetNames.join('+') + '（连' + targetNames.length + '个，ΔU' + tieBest.delta
+								+ '，门槛' + tieRes.useThreshold + '，raw' + actScore + '）';
 						} else {
-							/* evaluator 判定重铸优于任何使用（或无有效目标）→ 显式重铸，不伪装成 use */
+							/* evaluator 未达到使用门槛（或无有效目标）→ 显式重铸，不伪装成 use */
 							recast = true;
 							targetNames = null;
-							actScore = (tieRes && typeof tieRes.recastValue === 'number') ? tieRes.recastValue : 0;
-							targetDesc = '（重铸摸牌 RecastValue=' + actScore
-								+ (tieBest && tieBest.type === 'use' ? ' ≥ 最佳使用 ΔU' + tieBest.delta : '') + '）';
+							targetDesc = '（重铸摸牌 RecastValue=' + tieUtility
+								+ '，使用门槛=' + tieRes.useThreshold + '，raw=' + actScore + '）';
 						}
 					} catch (eT) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eT); }
 				} else {

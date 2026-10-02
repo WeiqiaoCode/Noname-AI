@@ -79,17 +79,29 @@ const dRe = ev.scoreTiesuoAction(meU, mk([E1d], before), ctx);
 ok(dRe < 0, '已 linked 敌人再次被选 → 解链（降分）');
 ok(ev.scoreTiesuoAction(meU, mk([A1d], new Set([A1d])), ctx) > 0, '解除 linked 队友 → 正');
 
-/* ---- 重铸竞争 + 主入口 ---- */
+/* ---- 重铸门槛 + 主入口 ---- */
 ok(ev.estimateTiesuoRecastValue(meU, {}) > 0, 'recast 基准为正');
 eq(ev.estimateTiesuoRecastValue(meU, { recastValue: 3 }), 3, 'recastValue 可覆写');
+eq(ev.tiesuoUseThreshold(1.2, {}), 2.5, '默认 use threshold = 1.2 + 1.3');
+eq(ev.tiesuoUtilityToEngineRaw(1.2), 3, 'recast utility 1.2 → engine raw 3');
+eq(ev.tiesuoUtilityToEngineRaw(4), 10, '双目标 utility 4 → engine raw 10');
 
+/* 普通单敌 ΔU=2，不足 2.5 门槛 → 重铸 */
+const singleNormal = P('E_single', -1);
+const resSingle = ev.evaluateTiesuoActions(meU, { name: 'tiesuo' }, {
+    candidates: [singleNormal],
+    players: [singleNormal],
+    relationOf: function (mi, t) { return t.rel; },
+});
+eq(resSingle.bestAction.type, 'recast', '普通单敌 → 收益不足门槛，重铸');
+
+/* 两个普通敌人总 ΔU=4，超过门槛 → 双目标 use */
 const res = ev.evaluateTiesuoActions(meU, { name: 'tiesuo' }, {
     candidates: [P('E_a', -1), P('E_b', -1), P('A_a', 1)],
     players: all,
     relationOf: function (mi, t) { return t.rel; },
-    recastValue: 0.5,
 });
-eq(res.bestAction.type, 'use', '满敌人局面 → 选 use 而非低价值重铸');
-ok(res.bestAction.targets.length >= 1, '最优动作带合法目标');
+eq(res.bestAction.type, 'use', '双敌人局面 → 超过门槛，选 use');
+eq(res.bestAction.targets.length, 2, '双敌人局面 → 优先双目标');
 
 finish('tiesuo');
