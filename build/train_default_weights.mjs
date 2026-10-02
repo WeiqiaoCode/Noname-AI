@@ -22,6 +22,7 @@
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { scoreToLabel } from '../score/model/train/labelPolicy.js';
 
 /* ---------- 参数 ---------- */
 const args = process.argv.slice(2);
@@ -96,17 +97,7 @@ if (samples.length < 200) {
 /* ---------- 导入生产训练路径 ---------- */
 const wm = await import(pathToFileURL(join(_pkg, 'score', 'model', 'weights', 'weights.js')).href);
 
-/* 标签映射：与 localTrainer._scoreToLabel 完全一致 */
-function scoreToLabel(score) {
-    if (score > 147) score = 147;
-    else if (score < -147) score = -147;
-    if (score >= 80) return 0;
-    if (score >= 30) return 1;
-    if (score >= 0) return 2;
-    if (score >= -30) return 3;
-    if (score >= -80) return 4;
-    return 5;
-}
+/* 标签映射由 score/model/train/labelPolicy.js 统一提供。 */
 
 /* 冷启动：v6 默认权重 fail-closed → 随机初始化（就绪位由训练后 markReady 设置） */
 wm.loadWeights();
