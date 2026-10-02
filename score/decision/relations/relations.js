@@ -40,7 +40,7 @@
  */
 import { game, get } from '../../foundation/adapt/host.js';
 import { getModeStrategy } from '../strategy/modeStrategy.js';
-import { isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, identityOfFor, beliefOfFor, hardIdentityOf } from '../../perception/observer/identity.js';
+import { isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, identityOfFor, beliefOfFor, hardIdentityOf, isRolePossibleFor } from '../../perception/observer/identity.js';
 
 /* ================= 暴露系统（exposureOf） =================
  * 返回对 target 的“认知状态”，只记录，不下敌友结论。
@@ -144,34 +144,87 @@ function isSameCamp(a, b) { return campRelationOf(a, b) === 'same'; }
 
 /* ================= 敌我系统（dispositionOf） =================
  * 返回 me 眼里 t 的处置关系：+1 友 / -1 敌 / 0 中性。
- * 基线：宿主 get.attitude 三态（本体 AI 同源，最可靠）。
- * 叠加暴露系统证据的“软翻转”：
- *   - attitude=0（中性/身份未明）时，用行为推断置信度，
- *     高置信疑似敌人 → -1；高置信疑似队友 → +1；否则保持 0。
- * 不再用 阵营 isSameCamp 兼任敌我 —— 杜绝“身份未明被当敌 → 给敌方摸牌/乱救/乱杀”。
+ *
+ * 身份模式：
+ *   - 禁止调用宿主 get.attitude / isFriend 作为输入，因为本体身份 AI 可能读取未公开 identity；
+ *   - 只消费公开事实、observer-specific posterior、规则剩余槽位；
+ *   - “身份不可能”由 isRolePossibleFor 判断，绝不用四舍五入后的概率 === 0；
+ *   - 内奸 identity 固定，但 stance 根据公平可见的阵营质量动态变化。
+ *
+ * 其它模式保持宿主关系语义作为兜底。
  */
-function dispositionOf(me, t) {
-	if (!me || !t || t === me) return 0;
-	try { if (t.isFriend && t.isFriend(me)) return 1; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+function _identitySpyDisposition(me, t) {
+	try {
+		if (!me || !t || me === t) return 0;
+		const alive = (game.players || []).filter(function (p) { return p && p.alive !== false; });
+		const aliveCount = alive.length;
 
-	/* 身份场先应用“规则约束后的 Identity Belief”：
-	 * 已经逻辑排除的敌方身份不能被宿主旧 attitude 再翻回敌人。
-	 * 内奸本人例外：Identity 固定，但 stance 必须允许随局势动态变化，因此落回 attitude。 */
+		/* 主公：多人阶段必须保命；只剩内奸与主公时转为最终敌人。 */
+		if (t === game.zhu) return aliveCount <= 2 ? -1 : 1;
+
+		const tb = beliefOfFor(me, t);
+		if (!tb) return 0;
+		const hard = hardIdentityOf(me, t);
+		if (hard.role === 'nei') return 0;
+
+		let loyalMass = 0;
+		let rebelMass = 0;
+		for (const p of alive) {
+			if (!p || p === me) continue;
+			if (p === game.zhu) { loyalMass += 1; continue; }
+			const pb = beliefOfFor(me, p);
+			if (!pb) continue;
+			loyalMass += pb.zhong || 0;
+			rebelMass += pb.fan || 0;
+		}
+
+		const rebelStrong = rebelMass > loyalMass + 0.75;
+		const loyalStrong = loyalMass > rebelMass + 0.75;
+		const fanP = tb.fan || 0;
+		const loyalP = tb.zhong || 0;
+
+		/* 帮弱打强：只在目标阵营 posterior 明显时落到敌/友，模糊目标保持 neutral。 */
+		if (rebelStrong) {
+			if (fanP >= 0.60) return -1;
+			if (loyalP >= 0.65) return 1;
+		} else if (loyalStrong) {
+			if (loyalP >= 0.60) return -1;
+			if (fanP >= 0.65) return 1;
+		}
+		return 0;
+	} catch (e) { return 0; }
+}
+
+function _identityDisposition(me, t) {
 	try {
 		const myRole = me === game.zhu ? 'zhu' : me.identity;
-		if (myRole !== 'nei') {
-			const conf = idConfidenceOfFor(me, t);
-			if (isLikelyEnemy(me, t) && conf >= 0.45) return -1;
-			if (isLikelyAlly(me, t) && conf >= 0.45) return 1;
+		if (myRole === 'nei') return _identitySpyDisposition(me, t);
 
-			const b = beliefOfFor(me, t);
-			if (b) {
-				if ((myRole === 'zhu' || myRole === 'zhong' || myRole === 'mingzhong') && (b.fan || 0) === 0) return 0;
-				if (myRole === 'fan' && t !== game.zhu && (b.zhong || 0) === 0) return 0;
-			}
+		if (isLikelyEnemy(me, t)) return -1;
+		if (isLikelyAlly(me, t)) return 1;
+
+		/* 规则层排除：忠/主只把仍可能为反的未知人保留为“可疑”；
+		 * fan 槽位耗尽时明确 neutral，但不升级成 ally。 */
+		if (myRole === 'zhu' || myRole === 'zhong' || myRole === 'mingzhong') {
+			if (!isRolePossibleFor(me, t, 'fan')) return 0;
+		} else if (myRole === 'fan') {
+			if (t === game.zhu) return -1;
+			if (!isRolePossibleFor(me, t, 'zhong')) return 0;
 		}
-	} catch (eI) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eI); }
+		return 0;
+	} catch (e) { return 0; }
+}
 
+function dispositionOf(me, t) {
+	if (!me || !t || t === me) return 0;
+	try {
+		const strategy = getModeStrategy();
+		const identityMode = !!(strategy && (strategy.name === 'identity' || strategy.name === 'connect'));
+		if (identityMode) return _identityDisposition(me, t);
+	} catch (eMode) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eMode); }
+
+	/* 非身份模式保留宿主关系逻辑。 */
+	try { if (t.isFriend && t.isFriend(me)) return 1; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	let att = 0;
 	try { att = (get && typeof get.attitude === 'function') ? get.attitude(me, t) : 0; } catch (eA) { att = 0; }
 	if (att < 0) return -1;
