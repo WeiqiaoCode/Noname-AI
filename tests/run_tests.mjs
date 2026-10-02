@@ -2345,7 +2345,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 _findKillSequence 调用 range-enabling weapon 搜索');
     ok(src35.indexOf('shaReachable') >= 0,
         '10.35 【杀】进入残局解前必须经过攻击范围门禁');
-    ok(/steps\.push\(\{ id: rangeWeapon\.id, type: 'equip'/.test(src35),
+    ok(/steps\.push\(\{\s*id:\s*rangeWeapon\.id,\s*type:\s*'equip'/.test(src35),
         '10.35 远距离击杀序列显式先 push equip step');
     ok(/type:\s*planBest\.action\.type === 'equip' \? 'equip' : 'card'/.test(src35),
         '10.35 planner 第一动作是装备时返回 equip 类型');
