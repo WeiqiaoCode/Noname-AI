@@ -34,5 +34,11 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Verify semantic audit snapshot
+        if: matrix.node == '22.x'
+        run: |
+          node build/semantic_audit.mjs
+          git diff --exit-code -- score/verification/semanticAudit.js
+
       - name: Run release gate
         run: npm test

@@ -32,7 +32,7 @@
 
 ### 4. 自动化测试
 - [x] 将 `node tests/run_tests.mjs` 接入 GitHub Actions
-- [ ] PR 必须通过核心测试后再合并
+- [x] PR 必须通过核心测试后再合并
 - [ ] 行为 bug 优先先写 failing test，再修实现
 - [ ] 将游戏内 manual smoke 与 Node 自动测试明确区分
 
@@ -97,4 +97,4 @@
 - 原作者：**飞升**
 - 当前模型契约：**130 → 128 → 64 → 6 + Critic**
 - 自动测试：已有 `tests/run_tests.mjs` 与 `tests/behavior/`
-- 下一阶段重点：**真实对局验证 + CI + 发布流程**
+- 下一阶段重点：**真实对局验证 + 发布流程**

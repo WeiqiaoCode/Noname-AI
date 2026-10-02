@@ -1,40 +1,36 @@
 # 无名AI 二次开发指南
 
-> 版本：v1.1.0
-> 最后更新：2026-09-21
+> 版本：v3.1β（semver 3.1.1）
+> 最后更新：2026-10-02
 
 ---
 
 ## 📁 目录结构
 
 ```
-无名AI/
-├── extension.js            # 扩展入口（挂载面板）
-├── js/                     # 扩展外壳层
-│   ├── config.js           # 配置项（所有开关都在这里）
-│   ├── configLayout.js     # 配置面板布局
-│   └── ...
-├── score/                  # 决策引擎（按功能域分层，详见 score/_DOMAIN.md）
-│   ├── index.js            # ★ 唯一对外入口（外部只引用它）
-│   ├── core/               # 基础设施：util / logger / storage / eventBus / compat / perf
-│   ├── model/              # 特征(130维) / weights / trainer / 热更新 / 模型护栏
-│   ├── think/              # 深度思考 / 元认知 / 认知日志 / 博弈 / 心理
-│   ├── decision/           # engine / 冠军策略 / 异步后检测 / 规划 / 收敛
-│   ├── economy/            # 经济 / 代价 / 留牌弃牌 / 响应 / 牌堆记忆 / 判定区
-│   ├── timing/             # 各结算时机的专项加成（AOE / 决斗 / 借刀 / 酒…）
-│   ├── observe/            # 旁路 hook / 对手队友建模 / 跨局记忆 / 战报归档
-│   ├── guard/              # 护栏 / 原生接管 / 同阵营豁免 / 伤害转移
-│   ├── optimize/           # 衰减 / 延迟 / 顺序 / 残局 / 杀目标优化器
-│   ├── ui/                 # 面板 / 图表 / 主题 / 战报 / 自动演示
-│   ├── selfcheck/          # 全量自检 / 模块自检
-│   ├── override/           # 原生 AI 接管层（独立子系统）
-│   └── _DOMAIN.md          # ★ 域结构索引（权威，新增代码前先读）
+Noname-AI/
+├── extension.js            # 扩展入口
+├── js/                     # 扩展外壳：bootstrap / config / content / help / shared
+├── score/                  # AI 内核（按职责分域）
+│   ├── index.js            # ★ 对外入口
+│   ├── foundation/         # 宿主适配 / 配置 / 存储 / runtime / 诊断
+│   ├── cognition/          # 深度思考 / 元认知 / 推理 / 解释
+│   ├── decision/           # engine / evaluator / 策略 / 护栏 / 基础决策
+│   ├── knowledge/          # 通用知识与数值表
+│   ├── model/              # 130维特征 / v7权重 / 训练 / A-B状态机
+│   ├── perception/         # 身份 / 记忆 / 对局日志 / 队友意图 / 回放
+│   ├── plugins/            # 插件生命周期接入
+│   ├── verification/       # 自检 / 分层验证 / semantic audit
+│   ├── view/               # dashboard / panel / report / autoplay
+│   └── _DOMAIN.md          # ★ 域结构索引（新增代码前先读）
+├── tests/                  # release gate + 行为回归
+├── build/                  # semantic audit / defaultWeights 离线训练
 └── DEV_GUIDE/              # 本目录
 ```
 
 > **路径约定**：为便于阅读，下文代码片段中的 `import { x } from './foo.js'` 一律是简写，
 > 实际应写 `import { x } from './score/<域>/foo.js'`（跨域用相对路径，例如
-> `decision/engine.js` 引用特征模块写 `'../model/features.js'`）。具体域归属见 `score/_DOMAIN.md`。
+> `decision/engine/engine.js` 引用特征模块应使用其真实相对路径）。具体域归属见 `score/_DOMAIN.md`。
 
 ---
 
@@ -202,11 +198,11 @@ import { extractFeatures } from './features.js';
 const f = extractFeatures(me, act, ctx);
 
 // ❌ 错误：手动构造
-const f = new Float32Array(48);
-f[0] = me.countCards('h') / 10;  // 维度必须严格对齐 48 维！
+const f = new Int8Array(130);
+f[0] = 127;  // 不得绕过 features.js 的 FEATURE_DIM / DIM_NAMES 契约
 ```
 
-**为什么**：特征维度必须严格对齐 48 维，少一个多一个都会导致模型崩。
+**为什么**：当前特征契约为 `FEATURE_DIM = 130`。维度、槽位语义和量化方式必须以 `score/model/features/features.js` 为唯一来源；扩容还必须同步升级模型快照契约。
 
 ### 4. 训练数据
 
@@ -254,7 +250,7 @@ window.__DJSC.openSmartPanel();  // 打开智能可视化面板
 
 ```js
 {
-    f: [Int8 x 48],   // 特征向量
+    f: [Int8 x 130],  // 特征向量（FEATURE_DIM=130）
     r: Int8,           // reward（-127 ~ 127）
     m: {               // 元数据（可选）
         mode: 'identity',
@@ -267,10 +263,12 @@ window.__DJSC.openSmartPanel();  // 打开智能可视化面板
 
 ```js
 {
-    v: 1234567890,     // 版本号（时间戳）
-    W: [Int8 x 48],    // 权重
-    b: Int8,            // 偏置
-    acc: 0.62,          // 准确率
+    v: 7,               // MODEL_SCHEMA.version
+    dv: 2,              // DATA_EPOCH（训练数据纪元）
+    trained: 12345,
+    accuracy: 0.62,
+    // 多层参数：隐藏层、输出层、投影与 Critic 参数
+    // 权重 Int8，偏置 Int16；具体字段以 weights.js 的 MODEL_SCHEMA / snapshot 校验为准
 }
 ```
 
@@ -278,9 +276,9 @@ window.__DJSC.openSmartPanel();  // 打开智能可视化面板
 
 ## 🔄 版本更新规则
 
-1. **小版本号**：修 bug、加小功能（v1.0.1 → v1.0.2）
-2. **中版本号**：加新模块、大功能（v1.0.x → v1.1.0）
-3. **大版本号**：架构重构、不兼容改动（v1.x.x → v2.0.0）
+1. 对外版本遵循仓库当前 semver（现为 3.1.1，对应展示版本 v3.1β）
+2. Bug 修复、功能新增和不兼容改动按 semver 语义升级
+3. 模型结构、特征维度或快照格式变化时，必须同步升级 `MODEL_SCHEMA.version`，不能只改展示版本
 
 ---
 
@@ -312,7 +310,7 @@ try { trainRecordSample(me, best, sit, best.score); } catch (e) {}
 
 A: 
 1. 样本量不够（需要 ≥200）
-2. 特征维度不对（必须严格 48 维）
+2. 特征维度/槽位契约不对（当前必须严格遵循 FEATURE_DIM=130）
 3. reward 太稀疏（用边际收益，不要用最终得分）
 
 ---
@@ -320,8 +318,9 @@ A:
 ## 📞 联系方式
 
 - 作者：飞升
-- 面板开发：微雀qiao星の语
-- 仓库维护：请说谢谢小猫
+- 当前维护：WeiqiaoCode（微雀qiao）
+- 面板开发：WeiqiaoCode（微雀qiao）、星の语
+- 功能开发：夜白
 - 内测宣传：小小王同志
 
 ---
