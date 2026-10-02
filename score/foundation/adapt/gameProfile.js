@@ -88,6 +88,10 @@ export const NONAME_PROFILE = {
 			operation: 'create-state',
 			state: { family: 'delayed-control', dimension: 'resource-denial', zone: 'j' },
 		},
+		shandian: {
+			operation: 'create-state',
+			state: { family: 'delayed-hazard', dimension: 'damage-risk', zone: 'j' },
+		},
 		guohe: { operation: 'remove-target-card' },
 		shunshou: { operation: 'remove-target-card' },
 	},
