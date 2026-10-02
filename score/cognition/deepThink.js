@@ -20,18 +20,21 @@
 
 /* ★ 特征维度单一来源：直接引用 features.js 导出的 FEATURE_DIM，杜绝散落硬编码导致漂移 */
 import { FEATURE_DIM } from '../model/features/features.js';
+import { isReady as weightsReady } from '../model/weights/weights.js';
 
 const GAP_THRESHOLD = 6;   /* top 候选分差 <= 该值 → 判定"分歧大，需深度辨析" */
 const TOP_N = 3;           /* 深度辨析的候选数量上限（防放大算力开销） */
 const MODEL_W = 28;        /* 模型置信(moxt 0..1) 折算为分数单位的权重 */
 
-const _stats = { runs: 0, deepChecks: 0, replaced: 0, lastGap: 0, mode: '深度思考' };
+const _stats = { runs: 0, deepChecks: 0, replaced: 0, skippedNotReady: 0, lastGap: 0, mode: '深度思考' };
 
 function _num(x) { return (typeof x === 'number' && !isNaN(x)) ? x : 0; }
 
 /* ★ 取某候选的模型置信(最大后验概率)，作为"模型思考证据"。只读，不改任何分数。 */
 function _modelConfidenceOf(feat) {
 	try {
+		/* 双保险：即便有人绕过 engine 的 safeModelPredict，也不允许未就绪模型进入深度复核。 */
+		if (!weightsReady()) return 0;
 		const conf = window.__DJSC && window.__DJSC.confidence;
 		if (!conf) return 0;
 		const buf = new Int8Array(FEATURE_DIM);
@@ -74,6 +77,15 @@ export function criticBest(me, acts, best, ctx) {
 			out.thinking.push('候选不足，跳过深度思考');
 			return out;
 		}
+
+		/* P0 fail-closed：模型未就绪时，本层没有改写最终决策的资格。
+		 * 不能退化成“规则分-风险”再排一次，否则 deepThink 仍可能越权推翻规则/冠军策略。 */
+		if (!weightsReady()) {
+			_stats.skippedNotReady++;
+			out.thinking.push('模型未就绪：跳过模型深度思考，不允许改写当前决策');
+			return out;
+		}
+
 		/* 候选按规则分排序，取次优作对照 */
 		const sorted = acts.slice().filter(function (a) {
 			return a && a !== best && typeof a.score === 'number';
@@ -140,6 +152,6 @@ function _deepEvaluate(me, cands, best, out, ctx) {
 }
 
 export function thinkingStats() {
-	try { return { runs: _stats.runs, deepChecks: _stats.deepChecks, replaced: _stats.replaced, lastGap: _stats.lastGap, mode: '深度思考' }; }
+	try { return { runs: _stats.runs, deepChecks: _stats.deepChecks, replaced: _stats.replaced, skippedNotReady: _stats.skippedNotReady, lastGap: _stats.lastGap, mode: '深度思考' }; }
 	catch (e) { return { mode: '深度思考' }; }
 }
