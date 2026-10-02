@@ -2393,27 +2393,32 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 
     const me36 = P36('me36', 1, { identity: 'zhu', identityShown: true });
-    const p36 = P36('p36', -1, { identity: 'zhong', identityShown: false });
+    const p36 = P36('p36', -1, { identity: 'fan', identityShown: false });
+    const q36 = P36('q36', 0, { identity: 'nei', identityShown: false });
+    const r36 = P36('r36', 0, { identity: 'zhong', identityShown: false });
     host36.game.me = me36;
     host36.game.zhu = me36;
-    host36.game.players = [me36, p36];
+    host36.game.players = [me36, p36, q36, r36];
     host36.game.dead = [];
-    host36.game.alivePlayers = [me36, p36];
+    host36.game.alivePlayers = [me36, p36, q36, r36];
     host36._status.currentPhase = me36;
     host36._status.roundNumber = 2;
     host36._status.mode = 'identity';
     host36.get.mode = function () { return 'identity'; };
     host36.get.attitude = function (me, t) { return t && typeof t.rel === 'number' ? t.rel : 0; };
 
-    /* A. relation fingerprint + enemiesOf：同回合态度翻转必须即时失效。 */
+    /* A. 真实身份场流程：未明目标先按现有态度被视为敌；
+     * 同一 round 身份公开为忠臣后，即使旧 attitude 仍为负，也必须立即作废旧敌人缓存。 */
     th36.clearThreatCache();
+    id36.resetBelief();
     const rk1 = rel36.relationStateKey(me36);
-    ok(th36.enemiesOf(me36).indexOf(p36) >= 0, '10.36 初始敌对 → enemiesOf 包含目标');
-    p36.rel = 1;
+    ok(th36.enemiesOf(me36).indexOf(p36) >= 0, '10.36 未明身份 + 当前敌对态度 → enemiesOf 暂含目标');
+    p36.identity = 'zhong';
+    p36.identityShown = true;
     const rk2 = rel36.relationStateKey(me36);
-    ok(rk1 !== rk2, '10.36 关系翻转 → relationStateKey 变化');
+    ok(rk1 !== rk2, '10.36 身份公开改变关系事实 → relationStateKey 变化');
     eq(th36.enemiesOf(me36).indexOf(p36) < 0, true,
-        '10.36 同一 round 内敌→友后 enemiesOf 不得返回旧缓存');
+        '10.36 同一 round 公开为友方后 enemiesOf 不得返回旧敌缓存');
 
     /* B. relation fingerprint 只消费公开/推断后的关系结果，不把隐藏 identity 当作状态事实。 */
     p36.rel = 0;
