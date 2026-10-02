@@ -145,11 +145,13 @@ export function roleInventory() {
 	const out = { counts: { zhu: 0, zhong: 0, fan: 0, nei: 0 }, total: 0, source: 'none', constrainable: false };
 	try {
 		const mode = currentMode();
-		const sub = (_status && _status.mode) ? String(_status.mode) : '';
-		/* 身份模式的 _status.mode 通常是 normal 子模式；测试/旧宿主若 get.mode 不可用，
-		 * 也允许由 normal 子模式确认。其它特殊子模式宁可不约束，避免错推。 */
+		/* 真实宿主这里是字符串；Node 最小 Proxy 桩会让 get/_status 共享函数属性，
+		 * 非字符串值不能被误当成身份子模式。 */
+		const subRaw = _status && _status.mode;
+		const sub = typeof subRaw === 'string' ? subRaw : '';
 		const identityLike = mode === 'identity' || sub === 'normal' || sub === 'identity';
 		if (!identityLike) return out;
+		/* 只有真实字符串子模式才做特殊模式保护。 */
 		if (sub && ['normal', 'identity'].indexOf(sub) < 0) return out;
 
 		const total = _allPlayers().length || ((game.players || []).length + (game.dead || []).length);
