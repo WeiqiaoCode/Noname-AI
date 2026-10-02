@@ -56,7 +56,7 @@ import { focusBonus, broadcastIntent, installBroadcastHooks, uninstallBroadcastH
 import { refineBestWithPlan, planSequence } from '../strategy/planner.js';
 import { strategize } from '../strategy/strategist.js';
 import { getModeStrategy, isSameCamp, isEnemy, applyModeBoost } from '../strategy/modeStrategy.js';
-import { actionValue as relActionValue, exposureOf as relExposureOf } from '../relations/relations.js';   /* ★ 统一收益/暴露系统入口 */
+import { actionValue as relActionValue, exposureOf as relExposureOf, relationStateKey } from '../relations/relations.js';   /* ★ 统一收益/暴露系统入口 */
 import { autoRegister as globalAutoRegister, installProbes } from '../../foundation/runtime/globalScanner.js';
 import '../../foundation/runtime/missingModules.js';  // ★ 缺失模块补全：5个真正工作的模块
 import '../../model/train/autoLearn.js';       // ★ 自动学习表：新卡牌/新技能自动打分
@@ -2008,6 +2008,7 @@ function _calcAllyDamagePenalty(player, target, cardId) {
 /* ★ 决策缓存：100ms内不重复计算，减少CPU负载 */
 let _lastBestAction = null;
 let _lastBestActionTime = 0;
+let _lastRelationStateKey = '';
 
 /* ============================================
  * ★ 拆分的子函数（原bestAction巨石函数拆分）
@@ -2470,9 +2471,21 @@ function bestAction() {
 	const _perfT0 = performance.now();
 	profStart('bestAction');
 
-	/* ★ 事件驱动：状态变化才重算
-	 * ★ 指令 04（State Freshness）：状态一旦变化，必须同时失效 100ms bestAction 缓存，
-	 *   否则「挂乐/兵后的下一步」会命中陈旧计划，看不到新控制状态而自我抵消。 */
+	/* ★ World-state invalidation：
+	 * 身份明置、阵营/态度翻转、行为证据导致敌友关系变化时，即使 HP/手牌/装备均未变化，
+	 * 旧 bestAction 也必须立即失效。这里不识别“跳身份”事件，只比较统一 relation fingerprint。 */
+	try {
+		const _relMe = (_status && _status.currentPhase) || game.me;
+		const _relKey = _relMe ? relationStateKey(_relMe) : '';
+		if (_relKey !== _lastRelationStateKey) {
+			_lastRelationStateKey = _relKey;
+			_lastBestAction = null;
+			_lastBestActionTime = 0;
+			clearThreatCache();
+		}
+	} catch (eRelState) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRelState); }
+
+	/* ★ 事件驱动：其它 world-state 变化同样重算。 */
 	if (checkStateChanged()) {
 		_lastBestAction = null;
 		_lastBestActionTime = 0;
@@ -5203,6 +5216,7 @@ export function clearScoreState() {
 	try { deckReset(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { clearCompensation(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	_turnUse = 0; _lastTurnPlayer = null;
+	_lastBestAction = null; _lastBestActionTime = 0; _lastRelationStateKey = '';
 	try { resetReportShown(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionFeedback(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ 清理策略总线信号 */
