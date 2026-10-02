@@ -1,0 +1,273 @@
+
+/* ===== 版本号校验（功能层面防盗） ===== */
+const _fs_version = '\x33\x2e\x31\u03b2';
+const _fs_author = '\x98de\x5347\x539f\x521b';
+
+try {
+    const decoded_ver = _fs_version;
+    const decoded_author = _fs_author;
+    console.log('%c[无名AI] 版本: ' + decoded_ver + ' | 作者: ' + decoded_author, 'color: #00d4ff;');
+} catch(e) {
+    console.warn('[无名AI] 版本校验失败，请确认是官方版本');
+}
+/* ==================================== */
+
+// ===== 隐藏水印（不影响功能） =====
+const __AUTHOR__ = "飞升原创";
+const __CONTACT__ = "交流群: 123456789";
+const __VERSION__ = "v" + VERSION;
+// ====================================
+/*
+ * ============================================
+ * // Wydawca: Feisheng Original
+ * 交流群: 123456789
+ * v3.1β
+ * 版权所有，侵权必究
+ * ============================================
+ */
+
+/* ★ 挂载全部 24 个面板到 window.__DJSC（扩展一加载就挂载好）
+ * ★ P1-30：单个面板 import 失败不再被静默吞掉——Promise.allSettled 汇总，
+ *   成功/失败计数与失败面板名单都打到日志，杜绝"失败了仍打印全部挂载完成"的假成功。 */
+(async function mountAllPanels() {
+	const failed = [];
+	try {
+		window.__DJSC = window.__DJSC || {};
+
+		/* panel.js里的13个面板（同一模块，整体失败记 1 项） */
+		const panel = await import('./score/view/panel/panel.js');
+		window.__DJSC.openScorePanel = panel.openScorePanel;
+		window.__DJSC.openScoreDetailPanel = panel.openScoreDetailPanel;
+		window.__DJSC.openPlanPanel = panel.openPlanPanel;
+		window.__DJSC.openFeedbackPanel = panel.openFeedbackPanel;
+		window.__DJSC.openArchivePanel = panel.openArchivePanel;
+		window.__DJSC.openRecommendPanel = panel.openRecommendPanel;
+		window.__DJSC.openConfigPanel = panel.openConfigPanel;
+		window.__DJSC.openMemoryPanel = panel.openMemoryPanel;
+		window.__DJSC.openSkillPanel = panel.openSkillPanel;
+		window.__DJSC.openOverridePanel = panel.openOverridePanel;
+		window.__DJSC.openSkillBreakdownPanel = panel.openSkillBreakdownPanel;
+		window.__DJSC.openSkillCustomPanel = panel.openSkillCustomPanel;
+		window.__DJSC.openHealthPanel = panel.openHealthPanel;
+
+		/* 其他文件里的11个面板：逐个独立挂载，失败记录名单 */
+		const dyn = [
+			['openBrainDashboard', './score/view/dashboard/brainDashboard.js'],
+			['openCalibratorPanel', './score/model/calibrate/calibratorPanel.js'],
+			['openComparePanel', './score/view/dashboard/comparePanel.js'],
+			['openDecisionDashboard', './score/view/dashboard/decisionDashboard.js'],
+			['openExportPanel', './score/foundation/io/exportAll.js'],
+			['openGuardPanel', './score/model/net/modelGuard.js'],
+			['openProfilerPanel', './score/foundation/diag/profiler.js'],
+			['openReplayPanel', './score/view/dashboard/replayPanel.js'],
+			['openSelfCheck', './score/verification/selfCheck.js'],
+			['openSmartPanel', './score/view/panel/smartPanel.js'],
+			['openChampionPanel', './score/view/dashboard/championPanel.js'],
+		];
+		const results = await Promise.allSettled(dyn.map(function (d) {
+			return import(/* webpackIgnore: true */ d[1]).then(function (m) {
+				if (typeof m[d[0]] !== 'function') throw new Error('导出缺失: ' + d[0]);
+				window.__DJSC[d[0]] = m[d[0]];
+			});
+		}));
+		results.forEach(function (r, i) {
+			if (r.status === 'rejected') failed.push(dyn[i][0]);
+		});
+
+		const loaded = 24 - failed.length;
+		console.log('%c[无名AI v' + VERSION + '] ✅ 扩展加载完成！', 'color: #00d4ff; font-weight: bold;');
+		console.log('%c作者: 飞升原创 | 交流群: 123456789', 'color: #aaa; font-size: 10px;');
+		/* ★ P1-29：面板实为 24 个（13 + 11），日志与数量口径对齐 */
+		if (failed.length) {
+			console.warn('[无名AI] ⚠️ 面板挂载 ' + loaded + '/24 完成，失败 ' + failed.length + ' 个：' + failed.join('、'));
+		} else {
+			console.log('%c[无名AI] ✅ 所有24个面板挂载完成！', 'color: #0f0;');
+		}
+	} catch(e) {
+		console.error('[无名AI] ❌ 面板挂载失败:', e);
+		try { if (window.__DJSC && window.__DJSC.reportUnexpected) window.__DJSC.reportUnexpected('extension.mountAllPanels', '面板整体挂载失败', e); } catch (_) {}
+	}
+})();
+
+/* ===== 目标合理性校验（前置校验，不拦截，仅日志） =====
+ * ★ P1-25：保存定时器句柄与原始 useCard 引用，扩展卸载时可完整还原，
+ *   杜绝"扩展关了补丁还在 / 热重载后旧闭包残留"的永久猴补丁。 */
+let _useCardPatchTimer = null;
+_useCardPatchTimer = setTimeout(function () {
+    _useCardPatchTimer = null;
+    try {
+        var _p = lib.element.Player.prototype;
+        if (_p.__logicCheck) return;
+        _p.__logicCheck = true;
+        var _o = _p.useCard;
+        _p.__djsc_origUseCard = _o;  /* ★ P1-25：保存原函数供卸载还原 */
+        var TARGET_RESTRICT_CARDS = ['sha','huosha','leisha','juedou','huogong','nanman','wanjian',
+                   'zhujin','jiedao','lijian','shunshou','guohe','lebu','bingliang',
+                   'tiesuo','fanjian','sidian'];
+        _p.useCard = function (card, cards, target) {
+            try {
+                var me = this;
+                var cn = typeof card === 'string' ? card : (card && (card.name || card.cardname));
+                if (cn && TARGET_RESTRICT_CARDS.indexOf(cn) >= 0) {
+                    var list = Array.isArray(target) ? target : (target ? [target] : []);
+                    for (var i = 0; i < list.length; i++) {
+                        var t = list[i];
+                        if (!t || typeof t !== 'object' || t === me) continue;
+                        var myId = me.identity, tid = t.identity;
+                        var isSameFaction = false;
+                        if (myId === 'zhu' && (tid === 'zhong' || tid === 'mingzhong')) isSameFaction = true;
+                        if ((myId === 'zhong' || myId === 'mingzhong') && tid === 'zhu') isSameFaction = true;
+                        if ((myId === 'zhong' || myId === 'mingzhong') && (tid === 'zhong' || tid === 'mingzhong')) isSameFaction = true;
+                        if (myId === 'fan' && tid === 'fan') isSameFaction = true;
+                        try { if (get.attitude(me, t) > 0) isSameFaction = true; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+                        if (isSameFaction) {
+                            var exempt = false;
+                            try {
+                                if (window.__DJSC && window.__DJSC.checkAllyExempt) {
+                                    exempt = window.__DJSC.checkAllyExempt(me, t, cn);
+                                }
+                            } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+                            if (!exempt) {
+                                try { game.log('⚠️ 校验：' + cn + ' 对同阵营目标 ' + (t.name1 || t.name) + ' 不推荐'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+                            } else {
+                                try { game.log('✅ 豁免：' + cn + ' 对同阵营目标 ' + (t.name1 || t.name) + ' 合理'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+                            }
+                        }
+                    }
+                }
+            } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+            return _o.apply(me, arguments);
+        };
+        try { game.log('✅ 目标合理性校验模块已就绪（仅日志，不拦截）'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+    } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+}, 3000);
+
+/* ★ P2-32：观测器必须最先求值——全模块任何 catch 触发时 window.__DJSC.swallow 都已可用 */
+import './score/foundation/diag/swallow.js';
+import { lib, game, ui, get, ai, _status } from './js/shared/utils.js';
+import { arenaReady } from './js/bootstrap/arenaReady.js';
+import { config } from './js/config/config.js';
+import { content } from './js/content/content.js';
+import { precontent } from './js/content/precontent.js';
+import { help } from './js/help/help.js';
+import { installScoreEngine, uninstallScoreEngine, isScoreEngineEnabled } from './score/index.js';
+import { VERSION, VERSION_SEMVER, BUILD_DATE } from './js/config/version.js';  /* ★ P2-35：版本号唯一权威源 */
+
+let extensionPackage = {
+	name: '无名AI',
+	arenaReady,
+	content,
+	precontent,
+	config,
+	help,
+	package: {},
+	files: {},
+	css: ['./css/AIjinjiang.css'],
+};
+
+/* ★ 兼容旧版 WebView：不使用模块顶层 await（需 Chrome89+/ES2022），
+ *   改为在异步 IIFE 内读取 info.json 并合并到 package，保证低版本也能整包解析加载。 */
+(function () {
+    try {
+        Promise.resolve(lib.init.promises.json(`${lib.assetURL}extension/无名AI/info.json`)).then(function (extensionInfo) {
+            if (!extensionInfo || typeof extensionInfo !== 'object') return;
+            Object.keys(extensionInfo)
+                .filter(function (key) { return key !== 'name'; })
+                .forEach(function (key) {
+                    if (extensionPackage.package && typeof extensionPackage.package === 'object') {
+                        extensionPackage.package[key] = extensionInfo[key];
+                    }
+                });
+        }).catch(function () {});
+    } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+})();
+
+/* ★ 整合：原 content 钩子后初始化决策积分引擎（可配置开关） */
+const _content = extensionPackage.content;
+extensionPackage.content = function (config, pack) {
+	try { if (typeof _content === 'function') _content(config, pack); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try {
+		if (isScoreEngineEnabled()) {
+			installScoreEngine();
+		}
+	} catch (e) {
+		if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e);
+		if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.reportUnexpected) window.__DJSC.reportUnexpected('engine', 'installScoreEngine 安装失败', e);
+	}
+};
+
+/* ★ 卸载时清理决策积分引擎 + 还原 useCard 猴补丁（P1-25） */
+const _uninstall = extensionPackage.uninstall;
+extensionPackage.uninstall = function () {
+	try { uninstallScoreEngine(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	/* ★ P1-25：还原 Player.prototype.useCard，取消未执行的 3s 补丁定时器 */
+	try { if (_useCardPatchTimer) { clearTimeout(_useCardPatchTimer); _useCardPatchTimer = null; } } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try {
+		const _p = lib.element && lib.element.Player && lib.element.Player.prototype;
+		if (_p && _p.__djsc_origUseCard) {
+			_p.useCard = _p.__djsc_origUseCard;
+			try { delete _p.__djsc_origUseCard; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+			try { delete _p.__logicCheck; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		}
+	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try { if (typeof _uninstall === 'function') _uninstall(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+};
+
+/* ★ 挂载校验相关接口到 window.__DJSC（直接内联，避免加载失败） */
+window.__DJSC = window.__DJSC || {};
+/* ★ 兼容别名：游戏内控制台/旧教程里常裸写 DJSC.xxx，指向同一对象避免 ReferenceError */
+window.DJSC = window.__DJSC;
+/* ★ P2-35：版本号单一权威源下发到全局，面板/自检/战报一律读此值，不再各自写死 */
+window.__DJSC.VERSION = VERSION;
+window.__DJSC.VERSION_SEMVER = VERSION_SEMVER;
+window.__DJSC.BUILD_DATE = BUILD_DATE;
+
+/* ★ 提前挂载训练数据导入/导出（扩展加载时就可用，不用进对局） */
+import('./score/model/train/trainExport.js').then(function (m) {
+    window.__DJSC.trainExport = function() { return m.exportForImport(); };
+    window.__DJSC.trainImport = function(jsonStr) { return m.importFromJson(jsonStr); };
+    window.__DJSC.trainBufferSize = function() { return m.bufferSize(); };
+    console.log('[extension] ✅ trainExport/trainImport 已挂载（提前加载）');
+}).catch(function (e) {
+    console.warn('[extension] trainExport 加载失败:', e);
+});
+
+/* 合法性校验函数（直接内联，不依赖 allyExempt.js） */
+window.__DJSC.checkAllyExempt = function (me, target, cardName) {
+    try {
+        if (!me || !target) return false;
+
+        /* 1. 技能战术判定：目标有卖血技能 */
+        const SPECIAL_SKILLS = ['yiji', 'jianxiong', 'fankui', 'gangzhi', 'yongsi', 'juejing', 'guicai', 'buyi', 'xingshang'];
+        if (target.getSkills) {
+            const skills = target.getSkills();
+            for (let i = 0; i < skills.length; i++) {
+                if (SPECIAL_SKILLS.indexOf(skills[i]) >= 0) return true;
+            }
+        }
+
+        /* 2. 送牌收益判定：目标手牌少 */
+        const hc = target.countCards ? target.countCards('h') : 0;
+        if (hc <= 1) return true;
+
+        /* 3. 残局判定：只剩2人且目标残血 */
+        try {
+            const alive = (game.players || []).filter(function (p) { return p && p.alive !== false; });
+            if (alive.length <= 2 && target.hp <= 1) return true;
+        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+        return false;
+    } catch (e) { return false; }
+};
+
+/* 校验记录器（动态加载） */
+import('./score/decision/safety/guardRecorder.js').then(function (m) {
+    window.__DJSC.guardRecorder = {
+        record: m.recordGuardEvent,
+        getStats: m.getGuardStats,
+        reset: m.resetGuardRecorder,
+    };
+}).catch(function (e) { console.warn('guardRecorder 加载失败:', e); });
+
+export let type = 'extension';
+export default extensionPackage;
