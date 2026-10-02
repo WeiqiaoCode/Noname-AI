@@ -2543,8 +2543,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
         /* 即便宿主旧 attitude 仍为敌，规则已排除 fan 时忠臣也不应继续把该人当敌。 */
         x37.rel = -1;
-        eq(rel37.dispositionOf(me37, x37) === -1, false,
-            '10.37 忠臣视角：fan 已无剩余槽位 → 未明忠/内不沿用旧敌对 attitude');
+        eq(rel37.dispositionOf(me37, x37), 0,
+            '10.37 忠臣视角：fan 已无剩余槽位 → 未明忠/内保持中立，不沿用旧敌对 attitude');
+        eq(id37.isLikelyAlly(me37, x37), false,
+            '10.37 忠/内仍各有槽位时不能把未明目标升级成确定队友');
 
         /* 再公开 y=内奸，则 x 成为唯一剩余忠臣：hard lock。 */
         y37.identity = 'nei';
@@ -2554,6 +2556,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         eq(hardX37.role, 'zhong', '10.37 剩余身份槽位唯一 → x hard-lock 为忠臣');
         eq(hardX37.source, 'unique_remaining_slot', '10.37 hard-lock 来源=规则唯一解');
         eq(id37.confidenceOfFor(me37, x37), 1, '10.37 规则唯一解置信度=1');
+        eq(id37.isLikelyAlly(me37, x37), true,
+            '10.37 唯一剩余忠臣 hard-lock 后才可作为确定队友');
 
         /* hard identity 不因后续敌对行为漂移。 */
         obs37.observeAttack(x37, zhu37, 10);
