@@ -19,6 +19,7 @@
  */
 
 import { getSamples } from './trainExport.js';
+import { scoreToLabel } from './labelPolicy.js';
 import { FEATURE_DIM } from '../features/features.js';
 import { trainOne, trainOneWithValue, saveWeights, setAccuracy, markReady, getMeta, forward, setTrainLR } from '../weights/weights.js';
 import { cfg } from '../../foundation/config/util.js';  /* ★ 导入配置读取函数 */
@@ -71,19 +72,6 @@ export function trainLocalAsync(onDone) {
     });
 }
 
-function _scoreToLabel(score) {
-    /* 把分数映射到 6 个标签 [A/B/C/D/E/F] */
-    /* score 范围大约 -127 ~ 127；先把可能的"必胜+999"极端值收拢到该量纲内，避免标签失真 */
-    if (score > 147) score = 147;
-    else if (score < -147) score = -147;
-    if (score >= 80) return 0;      /* A: 极好 */
-    if (score >= 30) return 1;      /* B: 好 */
-    if (score >= 0) return 2;       /* C: 一般 */
-    if (score >= -30) return 3;     /* D: 差 */
-    if (score >= -80) return 4;     /* E: 很差 */
-    return 5;                       /* F: 极差 */
-}
-
 async function _train() {
     const samples = getSamples();
     if (!samples || samples.length < 200) {
@@ -128,7 +116,7 @@ async function _train() {
             const count = s.count || 1;
             const effectiveCount = Math.min(count, 3);  /* batch里最多重复3次 */
             for (let c = 0; c < effectiveCount; c++) {
-                trainOne(s.f, _scoreToLabel(s.r), lr);
+                trainOne(s.f, scoreToLabel(s.r), lr);
                 totalTrained++;
                 const _y = _maybeYield();  /* ★ P2-38：分片让出主线程 */
                 if (_y) await _y;
@@ -152,7 +140,7 @@ async function _train() {
         const s = samples[i];
         const off = i * dim;
         for (let j = 0; j < dim; j++) X[off + j] = s.f[j] | 0;
-        Y[i] = _scoreToLabel(s.r);
+        Y[i] = scoreToLabel(s.r);
         V[i] = (s.value_target !== undefined) ? s.value_target : 0;
     }
 
