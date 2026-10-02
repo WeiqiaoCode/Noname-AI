@@ -21,7 +21,7 @@
  * 注：本模块内联身份模式判断（不依赖 mode.js），保持叶子性。
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
-import { attackBy, aidBy, hostilityOf, friendlinessOf, getObservationRevision } from './observer.js';
+import { attackBy, aidBy, hostilityOf, friendlinessOf, getObservationRevision, getObs } from './observer.js';
 import { probHasCard } from '../../model/predict/handInference.js';
 
 /* 计算某玩家打反贼的总次数（内奸也会打反贼） */
@@ -106,47 +106,154 @@ function _allPlayers() {
 	} catch (e) { return game.players || []; }
 }
 
-/* 已明置(含阵亡)为某阵营的玩家数量 */
-function _countShownRole(role) {
-	try {
-		let c = 0;
-		_allPlayers().forEach(function (x) {
-			try {
-				if (x && x.identityShown && x.identity === role) c++;
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		});
-		return c;
-	} catch (e) { return 0; }
+/* ---------- Role Inventory：规则配额 + 公开事实 ---------- */
+
+const _ROLE_IDS = ['zhu', 'zhong', 'fan', 'nei'];
+
+function _normalizeRole(role) {
+	if (role === 'mingzhong') return 'zhong';
+	return _ROLE_IDS.indexOf(role) >= 0 ? role : null;
 }
 
-/* 各阵营数量上限：OL 标准身份局配置；未知人数退化为保守上限(仅内奸唯一生效) */
-function _campCaps() {
+/* 公开事实：只允许读取已经明置的身份；主公天然公开。 */
+function _publicRoleOf(p) {
 	try {
-		if (currentMode() !== "identity") return null;
-		const all = _allPlayers();
-		let nonZhu = 0;
-		all.forEach(function (x) {
-			if (!x) return;
-			if (x === game.zhu) return;
-			try { if (x.identity === "zhu") return; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-			nonZhu++;
-		});
-		if (nonZhu <= 0) return null;
-		/* 非主公人数 N → [忠, 反, 内]（OL 标准） */
-		const table = {
-			1: [0, 1, 1],
-			2: [0, 1, 1],
-			3: [1, 1, 1],
-			4: [1, 2, 1],
-			5: [2, 2, 1],
-			6: [2, 3, 1],
-			7: [2, 4, 1],
-			8: [2, 5, 1],
-		};
-		const cfg = table[nonZhu];
-		if (!cfg) return { fan: nonZhu, zhong: nonZhu, nei: 1 }; /* 未知配置：退保守 */
-		return { zhong: cfg[0], fan: cfg[1], nei: cfg[2] };
+		if (!p) return null;
+		if (p === game.zhu) return 'zhu';
+		if (p.identity === 'mingzhong') return 'zhong'; /* 明忠是规则上的公开身份 */
+		if (!p.identityShown) return null;
+		return _normalizeRole(p.identity);
 	} catch (e) { return null; }
+}
+
+/* 观察者知道自己的真实身份；这不是透视，而是玩家自身私有信息。 */
+function _selfRoleOf(observer) {
+	try {
+		if (!observer) return null;
+		if (observer === game.zhu) return 'zhu';
+		return _normalizeRole(observer.identity);
+	} catch (e) { return null; }
+}
+
+/**
+ * 当前身份场的规则身份配额。
+ * 优先调用无名杀本体 get.identityList(numberOfPlayers)；该 API 会读取当前 mode_config，
+ * 包括标准人数表以及双内等已由模式规则改写过的身份列表。
+ * 若宿主版本没有该 API，再退回 mode_config / 官方公式。
+ */
+export function roleInventory() {
+	const out = { counts: { zhu: 0, zhong: 0, fan: 0, nei: 0 }, total: 0, source: 'none', constrainable: false };
+	try {
+		if (currentMode() !== 'identity') return out;
+		const sub = (_status && _status.mode) ? String(_status.mode) : '';
+		/* 特殊身份子模式可能有额外角色编码；未建模时宁可不约束，避免错推。 */
+		if (sub && ['normal', 'identity'].indexOf(sub) < 0) return out;
+
+		const total = _allPlayers().length || ((game.players || []).length + (game.dead || []).length);
+		if (total < 2) return out;
+		let list = null;
+
+		try {
+			if (get && typeof get.identityList === 'function') {
+				const x = get.identityList(total);
+				if (Array.isArray(x)) { list = x.slice(); out.source = 'host_identityList'; }
+			}
+		} catch (e) { /* fallback below */ }
+
+		if (!list) {
+			try {
+				const cfg = lib && lib.config && lib.config.mode_config && lib.config.mode_config.identity;
+				const lists = cfg && cfg.identity;
+				const x = Array.isArray(lists) ? lists[total - 2] : null;
+				if (Array.isArray(x)) { list = x.slice(); out.source = 'mode_config'; }
+			} catch (e) { /* fallback below */ }
+		}
+
+		if (!list) {
+			const n = total - 1;
+			const loyal = Math.round((n * 3) / 9);
+			const spy = Math.round((n * 2) / 9);
+			list = ['zhu']
+				.concat(Array.from({ length: loyal }, function () { return 'zhong'; }))
+				.concat(Array.from({ length: spy }, function () { return 'nei'; }))
+				.concat(Array.from({ length: n - loyal - spy }, function () { return 'fan'; }));
+			out.source = 'official_formula';
+		}
+
+		let unsupported = false;
+		for (const raw of list) {
+			const role = _normalizeRole(raw);
+			if (!role) { unsupported = true; continue; }
+			out.counts[role] = (out.counts[role] || 0) + 1;
+			out.total++;
+		}
+		out.constrainable = !unsupported && out.total === total && out.counts.zhu === 1;
+		return out;
+	} catch (e) { return out; }
+}
+
+/**
+ * 从规则配额中扣除：
+ *   - 所有公开身份（含阵亡公开）
+ *   - observer 自己的私有身份
+ * 得到该观察者视角下尚未分配的身份槽位。
+ */
+export function remainingRoleSlots(observer) {
+	const inv = roleInventory();
+	const rem = {
+		zhu: inv.counts.zhu || 0,
+		zhong: inv.counts.zhong || 0,
+		fan: inv.counts.fan || 0,
+		nei: inv.counts.nei || 0,
+	};
+	const seen = Object.create(null);
+	try {
+		if (!inv.constrainable) return { counts: rem, source: inv.source, constrainable: false, unknownCount: 0 };
+
+		for (const p of _allPlayers()) {
+			if (!p) continue;
+			const k = keyOf(p);
+			if (!k || seen[k]) continue;
+			seen[k] = 1;
+			let role = _publicRoleOf(p);
+			if (!role && observer && p === observer) role = _selfRoleOf(observer);
+			if (role && rem[role] > 0) rem[role]--;
+		}
+
+		let unknownCount = 0;
+		for (const p of _allPlayers()) {
+			if (!p) continue;
+			if (observer && p === observer) continue;
+			if (!_publicRoleOf(p)) unknownCount++;
+		}
+		return { counts: rem, source: inv.source, constrainable: true, unknownCount: unknownCount };
+	} catch (e) {
+		return { counts: rem, source: inv.source, constrainable: false, unknownCount: 0 };
+	}
+}
+
+/**
+ * 只有“公开事实”或“规则槽位唯一解”才算 hard identity。
+ * 行为概率再高也不 hard-lock，避免一次误判永久污染。
+ */
+export function hardIdentityOf(observer, target) {
+	try {
+		if (!target) return { role: null, source: 'none' };
+		const pub = _publicRoleOf(target);
+		if (pub) return { role: pub, source: 'public' };
+		if (observer && target === observer) {
+			const own = _selfRoleOf(observer);
+			if (own) return { role: own, source: 'self' };
+		}
+
+		const rs = remainingRoleSlots(observer);
+		if (!rs.constrainable || rs.unknownCount <= 0) return { role: null, source: 'none' };
+		const positive = ['zhong', 'fan', 'nei'].filter(function (r) { return (rs.counts[r] || 0) > 0; });
+		if (positive.length === 1 && (rs.counts[positive[0]] || 0) === rs.unknownCount) {
+			return { role: positive[0], source: 'unique_remaining_slot' };
+		}
+		return { role: null, source: 'none' };
+	} catch (e) { return { role: null, source: 'none' }; }
 }
 
 /* ---------- 单个玩家的信念计算 ---------- */
@@ -397,54 +504,29 @@ function _computeBelief(p) {
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 
-	/* ★ 已阵亡/已明置阵营反推（核心功能）：某阵营已全部现身 → 剩余存活者剔除该阵营
-	 * 依据客观规则：
-	 *   ① 内奸恒为 1 → 已有 1 名内奸现身，其余玩家必非内奸（每次都很强）
-	 *   ② 反贼/忠臣有配置上限 → 现身数达上限即清空
-	 * 保守性：仅当“现身数 ≥ 上限”才归零，绝不提前清除。 */
-	try {
-		const caps = _campCaps();
-		if (caps) {
-			let shownSelf = "";
-			try { if (p.identityShown && p.identity) shownSelf = p.identity; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-			for (const r of ["fan", "zhong", "nei"]) {
-				if (shownSelf === r) continue; /* 自己就明置该阵营 → 不动（后面也会覆盖） */
-				if (_countShownRole(r) >= caps[r]) {
-					b[r] = 0; /* 阵营已清空 → 该存活者不可能是此身份 */
-				}
-			}
-		}
-	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-	/* 归一化为 0~1 */
+	/* 行为层只产生 soft likelihood，不读取任何未公开真实身份。
+	 * 负分先截断；完全无证据时保持中性 1/3，规则配额在查询层再约束。 */
+	b.fan = Math.max(0, Number(b.fan) || 0);
+	b.zhong = Math.max(0, Number(b.zhong) || 0);
+	b.nei = Math.max(0, Number(b.nei) || 0);
 	const total = b.fan + b.zhong + b.nei;
 	if (total > 0) {
-		b.fan = b.fan / total;
-		b.zhong = b.zhong / total;
-		b.nei = b.nei / total;
+		b.fan /= total;
+		b.zhong /= total;
+		b.nei /= total;
 	} else {
-		/* 无证据：按人数均分（弱先验） */
-		let fanCount = 0, zhongCount = 0, neiCount = 0;
-		try {
-			(game.players || []).forEach(function (x) {
-				if (!x.alive || x === game.zhu) return;
-				if (x.identity === "fan") fanCount++;
-				else if (x.identity === "zhong") zhongCount++;
-				else if (x.identity === "nei") neiCount++;
-			});
-		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		const sum = (fanCount + zhongCount + neiCount) || 1;
-		b.fan = fanCount / sum;
-		b.zhong = zhongCount / sum;
-		b.nei = neiCount / sum;
+		b.fan = 1 / 3;
+		b.zhong = 1 / 3;
+		b.nei = 1 / 3;
 	}
 
 	/* 若本体已公开 identityShown，直接覆盖 */
 	try {
 		if (p.identityShown || p.identity === "mingzhong") {
-			if (p.identity === "fan") { b.fan = 1; b.zhong = 0; b.nei = 0; }
-			else if (p.identity === "zhong" || p.identity === "mingzhong") { b.zhong = 1; b.fan = 0; b.nei = 0; }
-			else if (p.identity === "nei") { b.nei = 1; b.fan = 0; b.zhong = 0; }
+			const shownRole = _normalizeRole(p.identity);
+			if (shownRole === "fan") { b.fan = 1; b.zhong = 0; b.nei = 0; }
+			else if (shownRole === "zhong") { b.zhong = 1; b.fan = 0; b.nei = 0; }
+			else if (shownRole === "nei") { b.nei = 1; b.fan = 0; b.zhong = 0; }
 		}
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
