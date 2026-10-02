@@ -2351,6 +2351,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 planner 第一动作是装备时返回 equip 类型');
     ok(/target:\s*planBest\.action\.type === 'equip' \? null : planBest\.target/.test(src35),
         '10.35 装备动作不错误携带敌方 player target');
+
+    const eng35 = fs35.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    ok(/if \(best && best\.type === 'equip'\) \{\s*_finalTarget = null;/.test(eng35),
+        '10.35 engine 最终结果中 equip.target 强制为 null');
 }
 
 /* ---------- 汇总 ---------- */
