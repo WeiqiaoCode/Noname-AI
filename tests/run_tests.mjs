@@ -2357,6 +2357,100 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 engine 最终结果中 equip.target 强制为 null');
 }
 
+/* ================= 10.36 通用 Strategic Transition：禁止退化成牌名规则堆积 =================
+ * 真实回归案例仍用乐/兵/拆/顺复现，但核心实现必须只认 profile operation/state。
+ */
+{
+    const fs36 = await import('node:fs');
+    const host36 = await import(pathToFileURL(_hostPath).href);
+    host36.get.name = function (c) { return c && c.name; };
+
+    const tss36 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js')).href);
+    const terms36 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'terms.js')).href);
+
+    function C36(id) { return { name: id }; }
+    function P36(name, rel, o) {
+        o = o || {};
+        return {
+            name: name, rel: rel, alive: true, hp: 4, maxHp: 4,
+            _h: o.h || [], _e: o.e || [], _j: o.j || [],
+            getCards: function (z) {
+                if (z === 'h') return this._h;
+                if (z === 'e') return this._e;
+                if (z === 'j') return this._j;
+                return [];
+            },
+            countCards: function (z) {
+                if (z === 'h') return this._h.length;
+                if (z === 'e') return this._e.length;
+                if (z === 'j') return this._j.length;
+                return 0;
+            },
+        };
+    }
+    const rel36 = { relationOf: function (me, t) { return t.rel; } };
+    const me36 = P36('me36', 1, { h: [C36('sha')] });
+    host36._status.currentPhase = me36;
+
+    eq(terms36.strategicEffectOf('lebu').operation, 'create-state',
+        '10.36 具体控制牌由 gameProfile 映射成 create-state');
+    eq(terms36.strategicEffectOf('guohe').operation, 'remove-target-card',
+        '10.36 具体移除牌由 gameProfile 映射成 remove-target-card');
+
+    const only36 = P36('enemyOnly', -1, { j: [C36('lebu')] });
+    host36.game.players = [me36, only36];
+    tss36.clearTurnState();
+    tss36.recordStateCreation(me36, only36, 'lebu');
+    const dpOnly36 = tss36.evaluateDestroyPenalty(me36, only36, rel36);
+    ok(dpOnly36.effectivePenalty > 0, '10.36 只有有利状态可拆时，目标级保持正 opportunity cost');
+    ok(tss36.evaluateRemovalChoice(me36, only36, only36._j[0], rel36).adjustment < 0,
+        '10.36 具体选牌层保护敌方有利状态');
+
+    const alt36 = P36('enemyAlt', -1, { e: [C36('weapon')], j: [C36('lebu')] });
+    const dpAlt36 = tss36.evaluateDestroyPenalty(me36, alt36, rel36);
+    ok(dpAlt36.effectivePenalty > 0 && dpAlt36.effectivePenalty < dpAlt36.penalty,
+        '10.36 同目标有其它资源时只保留小额 target penalty');
+    ok(tss36.evaluateRemovalChoice(me36, alt36, alt36._j[0], rel36).adjustment < 0,
+        '10.36 允许选目标但仍不应拆有利状态');
+
+    const ally36 = P36('ally36', 1, { j: [C36('lebu')] });
+    ok(tss36.evaluateRemovalChoice(me36, ally36, ally36._j[0], rel36).adjustment > 0,
+        '10.36 队友有害状态应被鼓励解除');
+
+    const eA36 = P36('eA36', -1, { j: [C36('lebu')] });
+    const eB36 = P36('eB36', -1, { j: [] });
+    host36.game.players = [me36, eA36, eB36];
+    tss36.clearTurnState();
+    tss36.recordStateCreation(me36, eA36, 'lebu');
+    eA36._j.length = 0;
+    const reA36 = tss36.evaluateCreateConsistency(me36, eA36, 'lebu', rel36);
+    ok(reA36.penalty > 0 && Number.isFinite(reA36.penalty),
+        '10.36 CREATE→消失→同目标RECREATE 只有有限 reversal penalty');
+    eq(tss36.evaluateCreateConsistency(me36, eB36, 'lebu', rel36).penalty, 0,
+        '10.36 换目标重建不视为自我反转');
+
+    /* 跨 phase 不污染 */
+    host36._status.currentPhase = P36('otherPhase36', 1, {});
+    eq(tss36.evaluateCreateConsistency(me36, eA36, 'lebu', rel36).penalty, 0,
+        '10.36 phase 切换后 commitment 自动失效');
+
+    /* 源码架构守卫：核心状态层/engine 不允许重新出现这组专用 if。 */
+    const tssSrc36 = fs36.readFileSync(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js'), 'utf8');
+    const engSrc36 = fs36.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const optSrc36 = fs36.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'optimization.js'), 'utf8');
+
+    eq(/\['lebu',\s*'bingliang'/.test(tssSrc36), false,
+        '10.36 turnStrategicState 不维护具体控制牌名单');
+    ok(engSrc36.indexOf('evaluateActionTransitionPenalty(me, bestT, id') >= 0,
+        '10.36 engine 统一调用 action transition evaluator');
+    eq(engSrc36.indexOf("if (_cid === 'lebu' || _cid === 'bingliang')") < 0, true,
+        '10.36 engine 不再按具体牌名记录 commitment');
+    ok(optSrc36.indexOf("idsWithStrategicOperation('remove-target-card')") >= 0,
+        '10.36 具体移除动作由 profile operation 枚举');
+    eq(optSrc36.indexOf('const shunshou = lib.card') < 0 && optSrc36.indexOf('const guohe = lib.card') < 0, true,
+        '10.36 button 层不再复制两套逐牌逻辑');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
