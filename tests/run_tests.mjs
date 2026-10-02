@@ -2591,6 +2591,187 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+/* ================= 10.38 Identity information boundary：公平信息 / 不确定性 / 逻辑可能性 =================
+ * 修复 PR #9 审计项：
+ *   A. 身份模式不得通过宿主 get.attitude/rawAttitude 间接读取 hidden identity；
+ *   B. 50/50 或接近打平必须保持 unknown；
+ *   C. “概率很低/显示为0.00”与“规则槽位为0=逻辑不可能”严格分离；
+ *   D. observer-specific 推理不得混入匿名 identityOf(other)；
+ *   E. 内奸 identity 固定，stance 仅由公平可见信息动态变化。
+ */
+{
+    const host38 = await import(pathToFileURL(_hostPath).href);
+    const obs38 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'observer.js')).href);
+    const id38 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+    const rel38 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'relations', 'relations.js')).href);
+    const fs38 = await import('node:fs');
+
+    function P38(name, identity, shown) {
+        return {
+            name: name, name1: name, playerid: name, alive: true, hp: 4, maxHp: 4,
+            identity: identity || '', identityShown: !!shown,
+            storage: {}, ai: { shown: 0 }, _h: [], _e: [], _j: [],
+            countCards: function () { return 0; },
+            getCards: function () { return []; },
+        };
+    }
+    function install38(players, me, zhu, roleList) {
+        host38.game.me = me;
+        host38.game.zhu = zhu;
+        host38.game.players = players;
+        host38.game.dead = [];
+        host38.game.alivePlayers = players.filter(function (p) { return p.alive !== false; });
+        host38._status.currentPhase = me;
+        host38._status.roundNumber = 4;
+        host38._status.mode = 'normal';
+        host38.get.mode = function () { return 'identity'; };
+        host38.get.identityList = function () { return roleList.slice(); };
+    }
+
+    const oldIdentityList38 = host38.get.identityList;
+    const oldAtt38 = host38.get.attitude;
+    try {
+        /* A + B：四反已出，忠视角剩余 1忠1内 → 50/50 必须 unknown，不得硬选忠。 */
+        {
+            const zhu = P38('zhu38a', 'zhu', true);
+            const me = P38('me38a', 'zhong', false);
+            const fans = [1,2,3,4].map(function (i) { return P38('f38a' + i, 'fan', true); });
+            const x = P38('x38a', 'fan', false);    // hidden 真值故意错误
+            const y = P38('y38a', 'zhong', false);
+            install38([zhu, me].concat(fans, [x, y]), me, zhu,
+                ['zhu','zhong','zhong','nei','fan','fan','fan','fan']);
+            host38.get.attitude = function (from, to) {
+                /* 故意模拟会偷看 hidden identity 的宿主 attitude。 */
+                return to && to.identity === 'fan' ? -9 : 9;
+            };
+            obs38.resetObs();
+            id38.resetBelief();
+
+            const bx = id38.beliefOfFor(me, x);
+            ok(bx && Math.abs((bx.zhong || 0) - (bx.nei || 0)) < 1e-9,
+                '10.38 忠/内各一槽且无行为证据 → posterior 50/50');
+            eq(id38.identityOfFor(me, x), 'unknown',
+                '10.38 50/50 不确定身份 → identityOfFor=unknown');
+            eq(id38.isLikelyAlly(me, x), false,
+                '10.38 50/50 忠/内 → 不升级为确定队友');
+            eq(rel38.dispositionOf(me, x), 0,
+                '10.38 四反已满 + 忠/内未分 → neutral');
+
+            const beforeBelief = JSON.stringify(id38.beliefOfFor(me, x));
+            const beforeDisp = rel38.dispositionOf(me, x);
+            x.identity = 'zhong'; // 未明置 hidden 真值改变
+            const afterBelief = JSON.stringify(id38.beliefOfFor(me, x));
+            const afterDisp = rel38.dispositionOf(me, x);
+            eq(afterBelief, beforeBelief,
+                '10.38 hidden identity 改变不能经宿主 attitude 污染 belief');
+            eq(afterDisp, beforeDisp,
+                '10.38 hidden identity 改变不能经宿主 attitude 污染 disposition');
+        }
+
+        /* C：概率即使低到四舍五入显示 0.00，只要仍有槽位，就不能判“逻辑不可能”。 */
+        {
+            const zhu = P38('zhu38b', 'zhu', true);
+            const me = P38('me38b', 'zhong', false);
+            const x = P38('x38b', 'fan', false);
+            const others = Array.from({ length: 7 }, function (_, i) { return P38('u38b' + i, '', false); });
+            install38([zhu, me, x].concat(others), me, zhu,
+                ['zhu','zhong','zhong','zhong','zhong','zhong','zhong','zhong','zhong','fan']);
+            host38.get.attitude = function () { return 0; };
+            obs38.resetObs();
+            id38.resetBelief();
+            obs38.observeAid(x, zhu, 100);
+
+            const b = id38.beliefOfFor(me, x);
+            ok(b && b.fan > 0 && b.fan < 0.01,
+                '10.38 fan posterior 可低于1%但仍为正');
+            eq(Math.round((b.fan || 0) * 100) / 100, 0,
+                '10.38 低概率显示到两位小数可成为0.00');
+            eq(id38.isRolePossibleFor(me, x, 'fan'), true,
+                '10.38 fan 槽位仍存在 → 逻辑上仍可能为fan');
+        }
+
+        /* D：observer 私有身份会改变合法剩余槽位；匿名视角不能混进当前玩家推理链。 */
+        {
+            const zhu = P38('zhu38c', 'zhu', true);
+            const me = P38('me38c', 'zhong', false);
+            const x = P38('x38c', 'fan', false);
+            const y = P38('y38c', 'nei', false);
+            install38([zhu, me, x, y], me, zhu, ['zhu','zhong','nei','fan']);
+            host38.get.attitude = function () { return 0; };
+            obs38.resetObs();
+            id38.resetBelief();
+
+            const observerBelief = id38.beliefOfFor(me, x);
+            const anonymousBelief = id38.beliefOf(x);
+            ok(observerBelief && anonymousBelief &&
+                Math.abs((observerBelief.zhong || 0) - (anonymousBelief.zhong || 0)) > 0.1,
+                '10.38 observer-specific posterior 与匿名视角确实不同');
+        }
+
+        /* E：内奸身份固定；stance 随公开阵营质量变化，不依赖 hidden identity/get.attitude。 */
+        {
+            const zhu = P38('zhu38d', 'zhu', true);
+            const spy = P38('spy38d', 'nei', false);
+            const f1 = P38('f38d1', 'fan', true);
+            const f2 = P38('f38d2', 'fan', true);
+            const f3 = P38('f38d3', 'fan', true);
+            const f4 = P38('f38d4', 'fan', true);
+            const x = P38('x38d', 'fan', false);
+            const y = P38('y38d', 'fan', false);
+            install38([zhu, spy, f1, f2, f3, f4, x, y], spy, zhu,
+                ['zhu','zhong','zhong','nei','fan','fan','fan','fan']);
+            host38.get.attitude = function (from, to) {
+                return to && to.identity === 'fan' ? -9 : 9;
+            };
+            obs38.resetObs();
+            id38.resetBelief();
+
+            eq(id38.identityOfFor(spy, spy), 'nei',
+                '10.38 内奸知道自己的固定身份');
+            eq(rel38.dispositionOf(spy, f1), -1,
+                '10.38 反方公开质量更强 → 内奸公平地压反');
+            eq(rel38.dispositionOf(spy, x), 1,
+                '10.38 规则唯一剩余忠臣 → 反方强时内奸可暂时合作');
+
+            /* 两名公开反贼退出存活局面 → 强弱翻转；身份不变但 stance 翻转。 */
+            f3.alive = false;
+            f4.alive = false;
+            host38.game.alivePlayers = host38.game.players.filter(function (p) { return p.alive !== false; });
+            eq(id38.identityOfFor(spy, spy), 'nei',
+                '10.38 局势变化后内奸 identity 仍固定');
+            eq(rel38.dispositionOf(spy, x), -1,
+                '10.38 主忠公开质量更强 → 内奸转而压忠');
+            eq(rel38.dispositionOf(spy, f1), 1,
+                '10.38 主忠更强时 → 内奸可暂时与反合作');
+        }
+
+        /* 源码守卫：身份推理链不再消费宿主 hidden-role attitude，也不混淆概率0与槽位0。 */
+        const idSrc38 = fs38.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
+        const relSrc38 = fs38.readFileSync(join(_pkg, 'score', 'decision', 'relations', 'relations.js'), 'utf8');
+        const identityRelBlock38 = relSrc38.slice(
+            relSrc38.indexOf('function _identitySpyDisposition'),
+            relSrc38.indexOf('function isAllyOf')
+        );
+        eq(/get\.attitude\s*\(\s*zhu\s*,\s*p\s*\)/.test(idSrc38), false,
+            '10.38 identity belief 不再使用宿主 get.attitude(zhu,p)');
+        eq(identityRelBlock38.indexOf('get.attitude') >= 0, false,
+            '10.38 identity disposition 分支不调用宿主 get.attitude');
+        eq(identityRelBlock38.indexOf('.isFriend(') >= 0, false,
+            '10.38 identity disposition 分支不调用宿主 isFriend');
+        ok(idSrc38.indexOf('isRolePossibleFor') >= 0,
+            '10.38 逻辑可能性由 role slots 独立表达');
+        eq(/\(b\.fan \|\| 0\) === 0|\(b\.zhong \|\| 0\) === 0/.test(relSrc38), false,
+            '10.38 relations 不再用四舍五入 belief===0 判逻辑不可能');
+        eq(idSrc38.indexOf('const otherId = identityOf(other)') >= 0, false,
+            '10.38 基础行为 belief 不再混入匿名 identityOf(other)');
+        ok(idSrc38.indexOf('const otherId = _publicRoleOf(other)') >= 0,
+            '10.38 二阶行为证据只使用公开身份');
+    } finally {
+        host38.get.identityList = oldIdentityList38;
+        host38.get.attitude = oldAtt38;
+    }
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
