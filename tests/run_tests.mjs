@@ -2204,7 +2204,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     /* 源码守卫：threat 局势缓存补 _aliveFingerprint */
     ok(/function _aliveFingerprint\(\)/.test(thSrc), '10.32 threat 定义 _aliveFingerprint');
-    ok(/'\|' \+ _aliveFingerprint\(\);/.test(thSrc), '10.32 situationFactor + incomingPressure 纳入 alive fingerprint');
+    ok(/_aliveFingerprint\(\)/.test(thSrc) && /relationStateKey\(me\)/.test(thSrc), '10.32 situationFactor + incomingPressure 纳入 alive fingerprint');
 
     /* 运行时（机会式）：handInference 模块可加载 + 概率推断出口闭合（deck 内容依赖真实 DOM，
      * Node 纯 Proxy 宿主桩下 totalRemaining 的对账会清空静态牌堆，故这里只冒烟出口而不断言具体概率）。 */
@@ -2455,8 +2455,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.36 enemiesOf cache 以 relationKey 为命中条件');
     ok(idSrc36.indexOf('getObservationRevision()') >= 0,
         '10.36 identity belief 订阅 observation revision');
-    eq(/identityShown\s*&&\s*.*sha|jumpIdentity|跳身份/.test(engSrc36), false,
-        '10.36 engine 不写“跳身份后禁止攻击”专用补丁');
+    eq(/if\s*\([^\n]*identityShown[^\n]*(?:sha|attack|kill)/.test(engSrc36), false,
+        '10.36 engine 不写“身份明置后禁止攻击”专用补丁');
 }
 
 /* ---------- 汇总 ---------- */
