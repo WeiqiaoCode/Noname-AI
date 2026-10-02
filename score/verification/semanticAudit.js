@@ -6,14 +6,14 @@
 export const AUDIT = {
 	"generated": "2026-10-02",
 	"files": 212,
-	"cleanFiles": 88,
-	"legacyFiles": 124,
-	"hits": 3386,
+	"cleanFiles": 89,
+	"legacyFiles": 123,
+	"hits": 3345,
 	"cleanRate": 42,
 	"byDomain": {
 		"cognition": 120,
-		"decision": 1849,
-		"foundation": 50,
+		"decision": 1804,
+		"foundation": 54,
 		"knowledge": 218,
 		"model": 285,
 		"perception": 739,
@@ -23,7 +23,7 @@ export const AUDIT = {
 	"top": [
 		{
 			"file": "score/decision/engine/engine.js",
-			"count": 365
+			"count": 359
 		},
 		{
 			"file": "score/perception/observer/identity.js",
