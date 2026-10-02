@@ -21,7 +21,7 @@
  * 注：本模块内联身份模式判断（不依赖 mode.js），保持叶子性。
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
-import { attackBy, aidBy, hostilityOf, friendlinessOf } from './observer.js';
+import { attackBy, aidBy, hostilityOf, friendlinessOf, getObservationRevision } from './observer.js';
 import { probHasCard } from '../../model/predict/handInference.js';
 
 /* 计算某玩家打反贼的总次数（内奸也会打反贼） */
@@ -41,9 +41,32 @@ function attackFans(p, zhu) {
 
 const BELIEF = Object.create(null);
 let _beliefRound = -1;
+let _beliefEvidenceRevision = -1;
+let _beliefPublicKey = '';
+let _beliefUpdating = false;
 
 function keyOf(p) {
 	try { return p && (p.name1 || p.name || p.name2 || ""); } catch (e) { return ""; }
+}
+
+/* 只读取公开身份/存活等可观测字段，不读取隐藏身份。
+ * 用于同一回合内“身份明置/阵营公开”后立即刷新信念。 */
+function _publicIdentityFingerprint() {
+	try {
+		const all = (game.players || []).concat(game.dead || []);
+		const out = [];
+		for (const p of all) {
+			if (!p) continue;
+			const k = keyOf(p);
+			if (!k) continue;
+			const shown = !!p.identityShown || p === game.zhu || p.identity === 'zhu' || p.identity === 'mingzhong';
+			const pubId = shown ? String(p.identity || (p === game.zhu ? 'zhu' : '')) : '?';
+			const group = (shown && p.group) ? String(p.group) : '';
+			out.push(k + ':' + (p.alive === false ? '0' : '1') + ':' + (shown ? '1' : '0') + ':' + pubId + ':' + group);
+		}
+		out.sort();
+		return out.join('|');
+	} catch (e) { return ''; }
 }
 
 /* 内联模式判断：identity 局才启用 */
@@ -430,23 +453,38 @@ function _computeBelief(p) {
 
 /* ---------- 全量刷新 ---------- */
 export function updateBelief() {
+	if (_beliefUpdating) return;
 	try {
 		if (currentMode() !== "identity") return;
+		_beliefUpdating = true;
+
+		/* 先写 revision marker，避免 _computeBelief 内部间接查询 identityOf 时递归刷新。 */
+		_beliefRound = (_status && _status.roundNumber) || 0;
+		_beliefEvidenceRevision = getObservationRevision();
+		_beliefPublicKey = _publicIdentityFingerprint();
+
 		(game.players || []).forEach(function (p) {
-			if (!p || !p.alive) return;
+			if (!p || p.alive === false) return;
 			const b = _getB(p);
 			if (!b) return;
 			const nb = _computeBelief(p);
 			Object.assign(b, nb);
 		});
-		_beliefRound = (_status && _status.roundNumber) || 0;
-	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	} catch (e) {
+		if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e);
+	} finally {
+		_beliefUpdating = false;
+	}
 }
 
 function _syncBelief() {
 	try {
+		if (_beliefUpdating) return;
 		const r = (_status && _status.roundNumber) || 0;
-		if (r !== _beliefRound) updateBelief();
+		const ev = getObservationRevision();
+		const pub = _publicIdentityFingerprint();
+		/* 不再“每回合只算一次”：行为证据或公开身份一变化，同回合立即刷新。 */
+		if (r !== _beliefRound || ev !== _beliefEvidenceRevision || pub !== _beliefPublicKey) updateBelief();
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
@@ -554,6 +592,9 @@ export function identityBiasOf(me, tgt, weight) {
 export function resetBelief() {
 	for (const k in BELIEF) delete BELIEF[k];
 	_beliefRound = -1;
+	_beliefEvidenceRevision = -1;
+	_beliefPublicKey = '';
+	_beliefUpdating = false;
 }
 
 export function explainIdentity(p) {
