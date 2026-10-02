@@ -2363,8 +2363,6 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 {
     const fs36 = await import('node:fs');
     const host36 = await import(pathToFileURL(_hostPath).href);
-    host36.get.name = function (c) { return c && c.name; };
-
     const tss36 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js')).href);
     const terms36 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'terms.js')).href);
 
