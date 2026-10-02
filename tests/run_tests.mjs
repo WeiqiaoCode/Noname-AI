@@ -2357,6 +2357,108 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 engine 最终结果中 equip.target 强制为 null');
 }
 
+/* ================= 10.36 World-state invalidation：关系变化不得沿用旧敌我/旧目标 =================
+ * 真实案例：某目标刚被当作敌人，随后同回合身份明置/态度翻转/行为证据改变。
+ * 约束：不能写“跳身份后别杀”特判；缓存必须依赖统一 relation world-state。
+ */
+{
+    const fs36 = await import('node:fs');
+    const host36 = await import(pathToFileURL(_hostPath).href);
+    const obs36 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'observer.js')).href);
+    const id36 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+    const rel36 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'relations', 'relations.js')).href);
+    const th36 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'threat', 'threat.js')).href);
+    const cache36 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'storage', 'cache.js')).href);
+
+    function P36(name, rel, opts) {
+        opts = opts || {};
+        return {
+            name: name, name1: name, playerid: name, rel: rel, alive: opts.alive !== false,
+            hp: opts.hp == null ? 4 : opts.hp, maxHp: 4,
+            identity: opts.identity || '', identityShown: !!opts.identityShown,
+            group: opts.group || '',
+            _h: opts.h || [], _e: opts.e || [], _j: opts.j || [],
+            countCards: function (z) {
+                if (z === 'h' || z === 'hs') return this._h.length;
+                if (z === 'e') return this._e.length;
+                if (z === 'j') return this._j.length;
+                return 0;
+            },
+            getCards: function (z) {
+                if (z === 'h' || z === 'hs') return this._h;
+                if (z === 'e') return this._e;
+                if (z === 'j') return this._j;
+                return [];
+            },
+        };
+    }
+
+    const me36 = P36('me36', 1, { identity: 'zhu', identityShown: true });
+    const p36 = P36('p36', -1, { identity: 'zhong', identityShown: false });
+    host36.game.me = me36;
+    host36.game.zhu = me36;
+    host36.game.players = [me36, p36];
+    host36.game.dead = [];
+    host36.game.alivePlayers = [me36, p36];
+    host36._status.currentPhase = me36;
+    host36._status.roundNumber = 2;
+    host36._status.mode = 'identity';
+    host36.get.mode = function () { return 'identity'; };
+    host36.get.attitude = function (me, t) { return t && typeof t.rel === 'number' ? t.rel : 0; };
+
+    /* A. relation fingerprint + enemiesOf：同回合态度翻转必须即时失效。 */
+    th36.clearThreatCache();
+    const rk1 = rel36.relationStateKey(me36);
+    ok(th36.enemiesOf(me36).indexOf(p36) >= 0, '10.36 初始敌对 → enemiesOf 包含目标');
+    p36.rel = 1;
+    const rk2 = rel36.relationStateKey(me36);
+    ok(rk1 !== rk2, '10.36 关系翻转 → relationStateKey 变化');
+    eq(th36.enemiesOf(me36).indexOf(p36) < 0, true,
+        '10.36 同一 round 内敌→友后 enemiesOf 不得返回旧缓存');
+
+    /* B. foundation cache：公开身份明置属于 world-state；隐藏身份值本身不得泄漏进 key。 */
+    p36.rel = 0;
+    p36.identityShown = false;
+    p36.identity = 'fan';
+    cache36.checkStateChanged();  // 同步基线
+    eq(cache36.checkStateChanged(), false, '10.36 world-state 未变 → cache 保留');
+    p36.identity = 'zhong';       // 仍未明置：隐藏值变化不应影响公开缓存指纹
+    eq(cache36.checkStateChanged(), false, '10.36 未明置 identity 变化不进入公开 state key');
+    p36.identityShown = true;
+    eq(cache36.checkStateChanged(), true, '10.36 身份明置 → cache state key 立即变化');
+
+    /* C. identity belief：行为证据 revision 不再等到下一 round。 */
+    p36.identityShown = false;
+    p36.identity = '';
+    p36.rel = 0;
+    obs36.resetObs();
+    id36.resetBelief();
+    id36.updateBelief();
+    const rev0 = obs36.getObservationRevision();
+    const beforeId = id36.identityOf(p36);
+    obs36.observeAttack(p36, me36, 4);
+    ok(obs36.getObservationRevision() > rev0, '10.36 新行为证据 → observation revision 递增');
+    const afterId = id36.identityOf(p36);
+    ok(beforeId !== afterId || afterId === 'fan',
+        '10.36 同一 round 新攻击证据会触发 belief 重算（无需等下一轮）');
+
+    /* D. 架构守卫：engine 只依赖 relation fingerprint，不出现“身份跳明置”事件特判。 */
+    const engSrc36 = fs36.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const thSrc36 = fs36.readFileSync(join(_pkg, 'score', 'decision', 'threat', 'threat.js'), 'utf8');
+    const idSrc36 = fs36.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
+
+    ok(engSrc36.indexOf('relationStateKey(_relMe)') >= 0,
+        '10.36 engine bestAction 接入统一 relation world-state fingerprint');
+    ok(engSrc36.indexOf('_lastBestAction = null') >= 0 && engSrc36.indexOf('clearThreatCache()') >= 0,
+        '10.36 relation world-state 变化同步失效 bestAction + threat caches');
+    ok(thSrc36.indexOf('hit.relationKey === relKey') >= 0,
+        '10.36 enemiesOf cache 以 relationKey 为命中条件');
+    ok(idSrc36.indexOf('getObservationRevision()') >= 0,
+        '10.36 identity belief 订阅 observation revision');
+    eq(/identityShown\s*&&\s*.*sha|jumpIdentity|跳身份/.test(engSrc36), false,
+        '10.36 engine 不写“跳身份后禁止攻击”专用补丁');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
