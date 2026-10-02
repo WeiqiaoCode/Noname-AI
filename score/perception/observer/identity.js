@@ -700,8 +700,17 @@ export function isLikelyAlly(me, other) {
 
 		const b = beliefOfFor(me, other);
 		if (!b) return false;
-		if (myId === 'zhu' || myId === 'zhong') return (b.zhong || 0) >= 0.45 && (b.fan || 0) < 0.25;
-		if (myId === 'fan') return (b.fan || 0) >= 0.45;
+		/* “敌方身份已排除”只代表不该打，不等于可以当确定队友喂资源。
+		 * 忠/内 50:50 这类剩余槽位保持 neutral；只有 hard fact 或明显 posterior 优势才视为 ally。 */
+		const hard = hardIdentityOf(me, other);
+		if (myId === 'zhu' || myId === 'zhong') {
+			if (hard.role === 'zhong') return true;
+			return (b.zhong || 0) >= 0.65 && (b.zhong || 0) - (b.nei || 0) >= 0.20 && (b.fan || 0) < 0.25;
+		}
+		if (myId === 'fan') {
+			if (hard.role === 'fan') return true;
+			return (b.fan || 0) >= 0.65 && (b.fan || 0) - Math.max(b.zhong || 0, b.nei || 0) >= 0.20;
+		}
 		return false;
 	} catch (e) { return false; }
 }
