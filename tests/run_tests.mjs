@@ -51,6 +51,11 @@ const _here = dirname(fileURLToPath(import.meta.url));          /* 无名AI/test
 const _repoRoot = resolve(_here, '..', '..', '..');             /* WUMAING */
 const _hostPath = join(_repoRoot, 'noname.js');
 const _hostOwned = !existsSync(_hostPath);
+/* Node 18 不会对 package 边界外的 .js 自动做 ESM 语法探测。
+ * 当测试/训练脚本临时生成 noname.js 宿主桩时，同时在同目录生成最小 package.json，
+ * 明确声明 type=module；仅在原文件不存在时创建并在退出时清理，绝不覆盖真实宿主工程。 */
+const _hostPkgPath = join(_repoRoot, 'package.json');
+const _hostPkgOwned = _hostOwned && !existsSync(_hostPkgPath);
 const _HOST_STUB = `/* 自动生成的测试宿主桩——run_tests.mjs 退出时删除，勿手改、勿打包 */
 const fn = function () { return undefined; };
 const configStore = {};
@@ -70,7 +75,11 @@ export const _configStore = configStore;
 export default { lib, game, ui, get, ai, _status };
 `;
 if (_hostOwned) writeFileSync(_hostPath, _HOST_STUB, 'utf8');
-function _cleanupHost() { if (_hostOwned && existsSync(_hostPath)) { try { rmSync(_hostPath); } catch (e) {} } }
+if (_hostPkgOwned) writeFileSync(_hostPkgPath, '{"type":"module"}\n', 'utf8');
+function _cleanupHost() {
+    if (_hostOwned && existsSync(_hostPath)) { try { rmSync(_hostPath); } catch (e) {} }
+    if (_hostPkgOwned && existsSync(_hostPkgPath)) { try { rmSync(_hostPkgPath); } catch (e) {} }
+}
 process.on('exit', _cleanupHost);
 
 /* ---------- 浏览器环境桩（必须在 import 业务模块前装好） ---------- */
@@ -534,6 +543,58 @@ eq(hs.forceDiscard(), true, '10.6 forceDiscard 成功');
 eq(hs.hotSwapStats().hasCandidate, false, '10.6 discard 后候选清空');
 eq(ms.getState(), 'stable', '10.6 §8 统一状态机：discard 后 state=stable');
 eq(hashModel(true), hStable, '10.6 discard 后 active === stable');
+
+/* ================= 10.35 训练标签契约一致性（P0） =================
+ * Stable / Candidate / Default 三条训练链必须共享同一 reward -> A-F 映射。
+ * 防止 modelState 热更新候选继续使用 2/1/0/-1 的旧阈值，与正式训练语义漂移。
+ */
+{
+    const lp = await import(pathToFileURL(join(_pkg, 'score', 'model', 'train', 'labelPolicy.js')).href);
+
+    /* 边界契约：5 个阈值切出 6 档 A-F */
+    eq(lp.scoreToLabel(127), 0, '10.35 +127 -> A');
+    eq(lp.scoreToLabel(80), 0, '10.35 +80 -> A');
+    eq(lp.scoreToLabel(79), 1, '10.35 +79 -> B');
+    eq(lp.scoreToLabel(30), 1, '10.35 +30 -> B');
+    eq(lp.scoreToLabel(29), 2, '10.35 +29 -> C');
+    eq(lp.scoreToLabel(0), 2, '10.35 0 -> C');
+    eq(lp.scoreToLabel(-1), 3, '10.35 -1 -> D');
+    eq(lp.scoreToLabel(-30), 3, '10.35 -30 -> D');
+    eq(lp.scoreToLabel(-31), 4, '10.35 -31 -> E');
+    eq(lp.scoreToLabel(-80), 4, '10.35 -80 -> E');
+    eq(lp.scoreToLabel(-81), 5, '10.35 -81 -> F');
+    eq(lp.scoreToLabel(-127), 5, '10.35 -127 -> F');
+
+    /* 直观回归样本：修复前 modelState 会分别判 A/E/E */
+    eq(lp.scoreToLabel(20), 2, '10.35 reward +20 应为 C，不得误判 A');
+    eq(lp.scoreToLabel(-20), 3, '10.35 reward -20 应为 D，不得误判 E');
+    eq(lp.scoreToLabel(-100), 5, '10.35 reward -100 应为 F，不得压成 E');
+
+    /* 非法 reward fail-closed；已编码 label 走独立兼容入口 */
+    eq(lp.scoreToLabel(NaN), null, '10.35 NaN reward 拒绝');
+    eq(lp.scoreToLabel(Infinity), null, '10.35 Infinity reward 拒绝');
+    eq(lp.normalizeLabelIndex(5), 5, '10.35 已编码数字标签 5 -> F');
+    eq(lp.normalizeLabelIndex('F'), 5, '10.35 已编码字符标签 F -> 5');
+    eq(lp.normalizeLabelIndex(20), null, '10.35 reward 20 不得被误当 label index');
+
+    /* 源码守卫：阈值只允许存在于 labelPolicy.js。 */
+    const fs35 = await import('node:fs');
+    const lt35 = fs35.readFileSync(join(_pkg, 'score', 'model', 'train', 'localTrainer.js'), 'utf8');
+    const ms35 = fs35.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelState.js'), 'utf8');
+    const off35 = fs35.readFileSync(join(_pkg, 'build', 'train_default_weights.mjs'), 'utf8');
+
+    ok(/from '\.\/labelPolicy\.js'/.test(lt35), '10.35 localTrainer 使用 labelPolicy');
+    ok(/scoreToLabel\(s\.r\)/.test(lt35), '10.35 localTrainer reward 走 scoreToLabel');
+    ok(/function\s+_scoreToLabel\s*\(/.test(lt35) === false, '10.35 localTrainer 不再私有复制阈值');
+
+    ok(/from '\.\.\/train\/labelPolicy\.js'/.test(ms35), '10.35 modelState 使用 labelPolicy');
+    ok(/scoreToLabel\(s\.r\)/.test(ms35), '10.35 Candidate reward 走统一 scoreToLabel');
+    ok(/normalizeLabelIndex\(s\.label\)/.test(ms35), '10.35 Candidate 已编码 label 与 reward 明确分流');
+    ok(/function\s+_labelIdx\s*\(/.test(ms35) === false, '10.35 modelState 旧 2/1/0/-1 映射已移除');
+
+    ok(/labelPolicy\.js/.test(off35) && /scoreToLabel/.test(off35), '10.35 离线默认权重训练使用 labelPolicy');
+    ok(/function\s+scoreToLabel\s*\(/.test(off35) === false, '10.35 离线训练不再复制阈值');
+}
 
 /* ================= 10.9 插件生命周期：注册/安装分离、依赖拓扑、自恢复、卸载清理 ================= */
 /* P0-02 注册与安装分离；P1-22 依赖恢复自动重试；P1-23 卸载逆向清理 props + 级联卸载。

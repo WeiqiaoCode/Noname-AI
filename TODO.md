@@ -31,7 +31,7 @@
 ## P1 · 工程与测试
 
 ### 4. 自动化测试
-- [ ] 将 `node tests/run_tests.mjs` 接入 GitHub Actions
+- [x] 将 `node tests/run_tests.mjs` 接入 GitHub Actions
 - [ ] PR 必须通过核心测试后再合并
 - [ ] 行为 bug 优先先写 failing test，再修实现
 - [ ] 将游戏内 manual smoke 与 Node 自动测试明确区分
@@ -65,6 +65,7 @@
 
 ### 9. 面板与可观测性
 - [ ] 改善异常统计、性能统计和决策解释入口
+- [ ] 增加训练样本 A–F 分布可视化：直观展示各档数量/占比、阈值区间与典型样本，便于判断标签阈值是否需要调整
 - [ ] 支持面板位置/尺寸记忆
 - [ ] 评估多面板并排与主题切换
 

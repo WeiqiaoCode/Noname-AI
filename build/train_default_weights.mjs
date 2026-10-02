@@ -22,6 +22,7 @@
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { scoreToLabel } from '../score/model/train/labelPolicy.js';
 
 /* ---------- 参数 ---------- */
 const args = process.argv.slice(2);
@@ -45,6 +46,11 @@ const OUT_FILE = join(_pkg, 'score', 'model', 'weights', 'defaultWeights.js');
 /* ---------- 宿主桩 + 浏览器环境桩（与 tests/run_tests.mjs 同口径） ---------- */
 const _hostPath = join(_repoRoot, 'noname.js');
 const _hostOwned = !existsSync(_hostPath);
+/* Node 18 不会对 package 边界外的 .js 自动做 ESM 语法探测。
+ * 当测试/训练脚本临时生成 noname.js 宿主桩时，同时在同目录生成最小 package.json，
+ * 明确声明 type=module；仅在原文件不存在时创建并在退出时清理，绝不覆盖真实宿主工程。 */
+const _hostPkgPath = join(_repoRoot, 'package.json');
+const _hostPkgOwned = _hostOwned && !existsSync(_hostPkgPath);
 const _HOST_STUB = `/* 自动生成的训练宿主桩——脚本退出时删除，勿手改、勿打包 */
 const fn = function () { return undefined; };
 const configStore = {};
@@ -59,7 +65,11 @@ export const get = P(); export const ai = P(); export const _status = P();
 export default { lib, game, ui, get, ai, _status };
 `;
 if (_hostOwned) writeFileSync(_hostPath, _HOST_STUB, 'utf8');
-process.on('exit', function () { if (_hostOwned && existsSync(_hostPath)) { try { rmSync(_hostPath); } catch (e) {} } });
+if (_hostPkgOwned) writeFileSync(_hostPkgPath, '{"type":"module"}\n', 'utf8');
+process.on('exit', function () {
+    if (_hostOwned && existsSync(_hostPath)) { try { rmSync(_hostPath); } catch (e) {} }
+    if (_hostPkgOwned && existsSync(_hostPkgPath)) { try { rmSync(_hostPkgPath); } catch (e) {} }
+});
 
 const _mem = new Map();
 globalThis.window = globalThis.window || {};
@@ -96,17 +106,7 @@ if (samples.length < 200) {
 /* ---------- 导入生产训练路径 ---------- */
 const wm = await import(pathToFileURL(join(_pkg, 'score', 'model', 'weights', 'weights.js')).href);
 
-/* 标签映射：与 localTrainer._scoreToLabel 完全一致 */
-function scoreToLabel(score) {
-    if (score > 147) score = 147;
-    else if (score < -147) score = -147;
-    if (score >= 80) return 0;
-    if (score >= 30) return 1;
-    if (score >= 0) return 2;
-    if (score >= -30) return 3;
-    if (score >= -80) return 4;
-    return 5;
-}
+/* 标签映射由 score/model/train/labelPolicy.js 统一提供。 */
 
 /* 冷启动：v6 默认权重 fail-closed → 随机初始化（就绪位由训练后 markReady 设置） */
 wm.loadWeights();
