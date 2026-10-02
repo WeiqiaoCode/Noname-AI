@@ -13,7 +13,7 @@
  * 覆盖所有无名杀标准模式
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
-import { identityOf } from '../../perception/observer/identity.js';
+import { identityOfFor, beliefOfFor, confidenceOfFor } from '../../perception/observer/identity.js';
 // Author: Feisheng Original | License: GPL-3.0
 
 /* ===== 工具函数 ===== */
@@ -151,13 +151,13 @@ const IDENTITY_STRATEGY = Object.assign({}, DEFAULT_STRATEGY, {
     getCamp: function (player) {
         try {
             if (!player) return 'unknown';
-            const id = player.identity;
-            /* 主忠阵营 */
-            if (id === 'zhu') return 'loyal';
-            if (id === 'zhong' || id === 'mingzhong') return 'loyal';
-            /* 反贼阵营 */
+            /* getCamp 是“公开规则阵营”接口，不允许读取未明置 target.identity。 */
+            let id = null;
+            if (player === game.zhu) id = 'zhu';
+            else if (player.identity === 'mingzhong') id = 'zhong';
+            else if (player.identityShown) id = player.identity;
+            if (id === 'zhu' || id === 'zhong') return 'loyal';
             if (id === 'fan') return 'rebel';
-            /* 内奸（独立阵营） */
             if (id === 'nei') return 'nei';
             return 'unknown';
         } catch (e) { return 'unknown'; }
@@ -166,21 +166,16 @@ const IDENTITY_STRATEGY = Object.assign({}, DEFAULT_STRATEGY, {
     isSameCamp: function (a, b) {
         if (!a || !b) return false;
         try {
-            const ca = this.getCamp(a);
-            const cb = this.getCamp(b);
-            /* 内奸和任何人都不是同阵营 */
-            if (ca === 'nei' || cb === 'nei') return false;
-            /* 双方显式已知 → 直接比较 */
-            if (ca !== 'unknown' && cb !== 'unknown') return ca === cb;
-            /* 一方/双方身份未知 → 用推理（identity.js，含已阵亡阵营反推）补足
-             * 注意：已知方 ca/cb 已是 camp 域('loyal'/'rebel')勿再映射；仅 unknown 需经 identityOf 再映射。 */
             const camp = { zhu: 'loyal', zhong: 'loyal', mingzhong: 'loyal', fan: 'rebel', nei: 'nei' };
-            const ma = ca !== 'unknown' ? ca : (camp[identityOf(a)] || null);
-            const mb = cb !== 'unknown' ? cb : (camp[identityOf(b)] || null);
-            if (!ma || !mb) return false;          /* 推理仍无法判定 → 保守视敌 */
-            if (ma === 'nei' || mb === 'nei') return false; /* 推理出内奸 → 非同阵营 */
+            /* a 是观察者，知道自己的身份；b 只能用公开事实/合法后验。 */
+            const aRole = a === game.zhu ? 'zhu' : a.identity;
+            const bRole = identityOfFor(a, b);
+            const ma = camp[aRole] || this.getCamp(a);
+            const mb = camp[bRole] || this.getCamp(b);
+            if (!ma || !mb || ma === 'unknown' || mb === 'unknown') return false;
+            if (ma === 'nei' || mb === 'nei') return false;
             return ma === mb;
-        } catch (e) { return get.attitude(a, b) > 0; }
+        } catch (e) { return false; }
     },
 
     getExclusiveSkills: function () {
@@ -190,90 +185,63 @@ const IDENTITY_STRATEGY = Object.assign({}, DEFAULT_STRATEGY, {
     decisionBoost: function (me, act) {
         let bonus = 0;
         try {
-            const myId = me.identity;
+            const myId = me === game.zhu ? 'zhu' : me.identity; /* 自己的身份是合法私有信息 */
             const tgt = getTarget(act);
             const isDmg = isAttackAct(act);
             const isHeal = isHealAct(act);
+            const tgtId = tgt ? identityOfFor(me, tgt) : 'unknown';
+            const tgtConf = tgt ? confidenceOfFor(me, tgt) : 0;
+            const tgtBelief = tgt ? beliefOfFor(me, tgt) : null;
+            const strongSupport = !!(tgtBelief && (tgtBelief.zhong || 0) >= 0.65 &&
+                (tgtBelief.zhong || 0) - (tgtBelief.nei || 0) >= 0.20);
 
             /* ===== 主公策略 ===== */
             if (myId === 'zhu') {
-                /* ① 打不明身份的人降权（避免盲忠） */
-                if (isDmg && tgt) {
-                    if (!tgt.identityShown && !tgt.identity) {
-                        const hp = tgt.hp || 0;
-                        if (hp <= 1) bonus -= 1.5;  /* 残血不明 → 强烈不建议打 */
-                        else if (hp <= 2) bonus -= 0.8;
-                        else bonus -= 0.3;
-                    }
+                if (isDmg && tgt && tgtId === 'unknown') {
+                    const hp = tgt.hp || 0;
+                    if (hp <= 1) bonus -= 1.5;
+                    else if (hp <= 2) bonus -= 0.8;
+                    else bonus -= 0.3;
                 }
-                /* ② 救明忠加成 */
-                if (isHeal && tgt) {
-                    if (tgt.identity === 'zhong' || tgt.identity === 'mingzhong') {
-                        bonus += 0.8;
-                    }
-                }
-                /* ③ 打反贼加成 */
-                if (isDmg && tgt && tgt.identity === 'fan') {
-                    bonus += 0.6;
-                }
+                if (isHeal && tgt && tgtId === 'zhong' && (tgtConf >= 0.99 || strongSupport)) bonus += 0.8;
+                if (isDmg && tgt && tgtId === 'fan' && tgtConf >= 0.45) bonus += 0.6;
             }
 
             /* ===== 忠臣策略 ===== */
             if (myId === 'zhong' || myId === 'mingzhong') {
-                /* ① 护主：救主公加成 */
-                if (isHeal && tgt && tgt === game.zhu) {
-                    bonus += 0.8;
-                }
-                /* ② 打反贼加成 */
-                if (isDmg && tgt && tgt.identity === 'fan') {
-                    bonus += 0.5;
-                }
-                /* ③ 打内奸降权（内奸最后再处理） */
-                if (isDmg && tgt && tgt.identity === 'nei') {
-                    bonus -= 0.3;
-                }
+                if (isHeal && tgt && tgt === game.zhu) bonus += 0.8;
+                if (isDmg && tgt && tgtId === 'fan' && tgtConf >= 0.45) bonus += 0.5;
+                /* 内奸不是固定敌人；身份确定后仍由局势 stance 决定，默认不抢先处理。 */
+                if (isDmg && tgt && tgtId === 'nei' && tgtConf >= 0.45) bonus -= 0.3;
             }
 
             /* ===== 反贼策略 ===== */
             if (myId === 'fan') {
-                /* ① 集火主公加成 */
-                if (isDmg && tgt && tgt === game.zhu) {
-                    bonus += 0.8;
-                }
-                /* ② 集火明忠加成 */
-                if (isDmg && tgt && (tgt.identity === 'zhong' || tgt.identity === 'mingzhong')) {
-                    bonus += 0.4;
-                }
+                if (isDmg && tgt && tgt === game.zhu) bonus += 0.8;
+                if (isDmg && tgt && tgtId === 'zhong' && tgtConf >= 0.45) bonus += 0.4;
             }
 
-            /* ===== 内奸策略 ===== */
+            /* ===== 内奸策略：Identity 固定，Strategic Stance 动态 ===== */
             if (myId === 'nei') {
-                /* ① 永远不打主公（除非最后只剩主内） */
                 if (isDmg && tgt && tgt === game.zhu) {
-                    /* 看场上存活人数 */
                     const aliveCount = (game.players || []).filter(isAlive).length;
-                    if (aliveCount > 2) {
-                        bonus -= 1.0;  /* 人多时绝对不打主公 */
-                    } else {
-                        bonus += 0.2;  /* 只剩主内时可以打 */
-                    }
+                    if (aliveCount > 2) bonus -= 1.0;
+                    else bonus += 0.2;
                 }
-                /* ② 平衡策略：帮弱势方 */
+
                 if (isDmg && tgt) {
-                    const loyalCount = (game.players || []).filter(function (p) {
-                        return isAlive(p) && (p.identity === 'zhong' || p.identity === 'mingzhong');
-                    }).length;
-                    const rebelCount = (game.players || []).filter(function (p) {
-                        return isAlive(p) && p.identity === 'fan';
-                    }).length;
-                    /* 反贼太强 → 帮主公打反贼 */
-                    if (rebelCount > loyalCount + 1 && tgt.identity === 'fan') {
-                        bonus += 0.3;
+                    /* 不读取任何人的隐藏 identity；用内奸自己视角下的合法 posterior 估计阵营实力。 */
+                    let loyalMass = 0, rebelMass = 0;
+                    for (const p of (game.players || [])) {
+                        if (!p || !isAlive(p) || p === me) continue;
+                        if (p === game.zhu) { loyalMass += 1; continue; }
+                        const pb = beliefOfFor(me, p);
+                        if (!pb) continue;
+                        loyalMass += pb.zhong || 0;
+                        rebelMass += pb.fan || 0;
                     }
-                    /* 主忠太强 → 帮反贼打忠 */
-                    if (loyalCount > rebelCount + 1 && (tgt.identity === 'zhong' || tgt.identity === 'mingzhong')) {
-                        bonus += 0.3;
-                    }
+                    if (rebelMass > loyalMass + 1 && tgtId === 'fan') bonus += 0.3;
+                    if (loyalMass > rebelMass + 1 && tgtId === 'zhong') bonus += 0.3;
                 }
             }
         } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }

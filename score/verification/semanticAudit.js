@@ -8,15 +8,15 @@ export const AUDIT = {
 	"files": 212,
 	"cleanFiles": 88,
 	"legacyFiles": 124,
-	"hits": 3386,
+	"hits": 3436,
 	"cleanRate": 42,
 	"byDomain": {
 		"cognition": 120,
-		"decision": 1849,
+		"decision": 1858,
 		"foundation": 50,
 		"knowledge": 218,
 		"model": 285,
-		"perception": 739,
+		"perception": 780,
 		"verification": 6,
 		"view": 119
 	},
@@ -27,7 +27,7 @@ export const AUDIT = {
 		},
 		{
 			"file": "score/perception/observer/identity.js",
-			"count": 307
+			"count": 348
 		},
 		{
 			"file": "score/perception/memory/deckMemory.js",
@@ -39,7 +39,7 @@ export const AUDIT = {
 		},
 		{
 			"file": "score/decision/strategy/modeStrategy.js",
-			"count": 101
+			"count": 90
 		},
 		{
 			"file": "score/decision/skills/skills.js",
@@ -55,7 +55,7 @@ export const AUDIT = {
 		},
 		{
 			"file": "score/decision/relations/relations.js",
-			"count": 60
+			"count": 80
 		},
 		{
 			"file": "score/model/features/features.js",

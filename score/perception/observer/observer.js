@@ -17,6 +17,15 @@ import { suitRemaining } from '../memory/deckMemory.js';
 
 const OBS = Object.create(null);
 
+/* 观测证据修订号：任何会影响关系/身份推断的行为证据发生变化时递增。
+ * 下游缓存只依赖 revision，不需要知道具体是“杀、桃、锦囊还是某个身份事件”。 */
+let _observationRevision = 0;
+function _touchObservation() {
+	_observationRevision = (_observationRevision + 1) >>> 0;
+	if (_observationRevision === 0) _observationRevision = 1;
+}
+export function getObservationRevision() { return _observationRevision; }
+
 function keyOf(p) {
 	try {
 		if (!p) return "";
@@ -61,6 +70,7 @@ export function observeAttack(source, target, weight) {
 		se.hostile += w;
 		const te = _ensure(tk);
 		te.attackedBy[sk] = (te.attackedBy[sk] || 0) + w;
+		_touchObservation();
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
@@ -75,6 +85,7 @@ export function observeAid(source, target, weight) {
 		se.friendly += w;
 		const te = _ensure(tk);
 		te.aidedBy[sk] = (te.aidedBy[sk] || 0) + w;
+		_touchObservation();
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
@@ -90,6 +101,7 @@ export function observeKill(source, victim) {
 		if (!se.kills) se.kills = [];
 		se.kills.push(vk);
 		se.hostile += 2.0;
+		_touchObservation();
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
@@ -102,6 +114,7 @@ export function observeSave(source, saved) {
 		if (!se.saves) se.saves = [];
 		se.saves.push(svk);
 		se.friendly += 1.5;
+		_touchObservation();
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
@@ -113,11 +126,13 @@ export function observeCardUse(source, card, target) {
 		if (!id) return;
 		
 		var se = _ensure(keyOf(source));
+		let touchedDirectly = false;
 
 		// 1. 记录 AOE 使用倾向
 		if (id === "wanjian" || id === "nanman") {
 			se.aoeUse = (se.aoeUse || 0) + 1.0;
 			se.hostile += 1.5;
+			_touchObservation();
 			return;
 		}
 
@@ -125,12 +140,14 @@ export function observeCardUse(source, card, target) {
 		if (id === "tao") {
 			se.saveUse = (se.saveUse || 0) + 1.0;
 			if (target !== source) se.friendly += 1.0;
+			touchedDirectly = true;
 		}
 
 		// 3. 记录锦囊偏好
 		var TRICK_IDS = ["wuzhong", "shunshou", "guohe", "lebu", "bingliang", "jiedao", "zhujin", "wuxie"];
 		if (TRICK_IDS.indexOf(id) >= 0) {
 			se.trickUse[id] = (se.trickUse[id] || 0) + 1.0;
+			touchedDirectly = true;
 		}
 
 		// 4. 原有的攻/援牌处理
@@ -145,6 +162,8 @@ export function observeCardUse(source, card, target) {
 				else if (CARD_AID_W[id] !== undefined) observeAid(source, target, CARD_AID_W[id]);
 			}
 		}
+
+		if (touchedDirectly) _touchObservation();
 
 		// ★ 五期：同时记录花色
 		try { observeSuit(source, card); } catch (eS) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eS); }
@@ -301,7 +320,10 @@ export function styleShanFactor(p) {
 }
 
 export function getObs() { return OBS; }
-export function resetObs() { for (const k in OBS) delete OBS[k]; }
+export function resetObs() {
+	for (const k in OBS) delete OBS[k];
+	_touchObservation();
+}
 
 export function explainObs(p) {
 	try {
