@@ -1029,6 +1029,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 {
     const ev = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'cards', 'tiesuoEvaluator.js')).href);
     eq(typeof ev.estimateTiesuoRecastValue, 'function', '10.16 导出 estimateTiesuoRecastValue');
+    eq(typeof ev.tiesuoUseThreshold, 'function', '10.16 导出 tiesuoUseThreshold');
+    eq(typeof ev.tiesuoUtilityToEngineRaw, 'function', '10.16 导出 tiesuoUtilityToEngineRaw');
     eq(typeof ev.evaluateTiesuoActions, 'function', '10.16 导出 evaluateTiesuoActions');
 
     function P6(name, rel, hp, maxHp) {
@@ -1047,20 +1049,33 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const resNeg = ev.evaluateTiesuoActions(me6, {}, { candidates: [A6], players: [A6], relationOf: relationOf });
     eq(resNeg.bestAction.type, 'recast', '10.16 所有 use 为负 → 选 RECAST');
 
-    /* 高价值单目标高于 recast → use */
+    /* 默认门槛 = 1.2 + 1.3 = 2.5；普通单敌 ΔU=2 不够，应该重铸 */
     const E6 = P6('E6', -1);
-    const resUse = ev.evaluateTiesuoActions(me6, {}, { candidates: [E6], players: [E6], relationOf: relationOf });
-    eq(resUse.bestAction.type, 'use', '10.16 高价值单目标 > recast → use');
-    eq(resUse.bestAction.targets.length, 1, '10.16 use 单目标正确');
+    const resSingleNormal = ev.evaluateTiesuoActions(me6, {}, { candidates: [E6], players: [E6], relationOf: relationOf });
+    eq(resSingleNormal.useThreshold, 2.5, '10.16 默认使用门槛 = RecastValue 1.2 + Margin 1.3');
+    eq(resSingleNormal.bestAction.type, 'recast', '10.16 普通单敌 ΔU=2 < 2.5 → RECAST');
 
-    /* 最优单目标略低于 recast → RECAST */
-    const resLow = ev.evaluateTiesuoActions(me6, {}, { candidates: [E6], players: [E6], relationOf: relationOf, recastValue: 2.5 });
-    eq(resLow.bestAction.type, 'recast', '10.16 单目标略低于 recast → RECAST');
+    /* 危险单目标（1血敌人）ΔU=3.2，超过门槛 → use */
+    const E6low = P6('E6low', -1, 1, 4);
+    const resUse = ev.evaluateTiesuoActions(me6, {}, { candidates: [E6low], players: [E6low], relationOf: relationOf });
+    eq(resUse.bestAction.type, 'use', '10.16 危险单目标 ΔU>=2.5 → use');
+    eq(resUse.bestAction.targets.length, 1, '10.16 危险单目标 use 正确');
+
+    /* RecastValue 提高后，门槛同步提高 */
+    const resLow = ev.evaluateTiesuoActions(me6, {}, { candidates: [E6low], players: [E6low], relationOf: relationOf, recastValue: 2.5 });
+    eq(resLow.useThreshold, 3.8, '10.16 recast=2.5 时使用门槛=3.8');
+    eq(resLow.bestAction.type, 'recast', '10.16 危险单目标仍低于提高后的门槛 → RECAST');
+
+    /* 统一 utility→engine raw 映射：1.2→3，2→5，4→10 */
+    eq(ev.tiesuoUtilityToEngineRaw(1.2), 3, '10.16 recast utility 1.2 → engine raw 3');
+    eq(ev.tiesuoUtilityToEngineRaw(2), 5, '10.16 普通单目标 utility 2 → engine raw 5');
+    eq(ev.tiesuoUtilityToEngineRaw(4), 10, '10.16 双目标 utility 4 → engine raw 10');
+    eq(ev.tiesuoUtilityToEngineRaw(100), 20, '10.16 极端 utility 经过 raw cap=20');
 
     /* 高价值双目标 → use，且返回完整 candidates */
     const E7 = P6('E7', -1);
     const resPair = ev.evaluateTiesuoActions(me6, {}, { candidates: [E6, E7], players: [E6, E7], relationOf: relationOf });
-    eq(resPair.bestAction.type, 'use', '10.16 高价值双目标 > recast → use');
+    eq(resPair.bestAction.type, 'use', '10.16 高价值双目标超过使用门槛 → use');
     eq(resPair.bestAction.targets.length, 2, '10.16 选中双目标');
     ok(resPair.candidates.length >= 4, '10.16 返回完整 candidates（重铸+单+双）');
     ok(resPair.candidates.every(function (a) { return typeof a.score === 'number'; }), '10.16 所有候选项均被评分');
@@ -1079,8 +1094,12 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     /* ---- 源码守卫：接入唯一权威源 ---- */
     ok(engSrc.indexOf('evaluateTiesuoActions') >= 0, '10.17 engine.js 调用 evaluateTiesuoActions');
-    ok(/import\s*\{[^}]*evaluateTiesuoActions[^}]*\}\s*from\s*['"][^'"]*tiesuoEvaluator\.js['"]/.test(engSrc),
-        '10.17 engine.js 从 tiesuoEvaluator.js 导入 evaluateTiesuoActions');
+    ok(/import\s*\{[^}]*evaluateTiesuoActions[^}]*tiesuoUtilityToEngineRaw[^}]*\}\s*from\s*['"][^'"]*tiesuoEvaluator\.js['"]/.test(engSrc),
+        '10.17 engine.js 从 tiesuoEvaluator.js 导入 evaluator + utility 映射');
+    ok(engSrc.indexOf('actScore = tiesuoUtilityToEngineRaw(tieUtility)') >= 0,
+        '10.17 tiesuo use/recast 统一通过 utility→engine raw 映射');
+    eq(engSrc.indexOf('actScore = (tieRes && typeof tieRes.recastValue') < 0, true,
+        '10.17 删除 recast 直接塞 1.2、use 沿用普通 s 的尺度断层');
 
     /* ---- 源码守卫：旧 tiesuo 专用分支已删除 ---- */
     eq(engSrc.indexOf('picked.length >= 6') < 0, true, '10.17 旧「最多连 6 个敌人」分支已删除');
@@ -1101,15 +1120,13 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const rel17 = function (mi, t) { return t.rel; };
     const me17 = mkP17('me', 1, false);
 
-    /* 范例 1：E1 已横置、E2 未横置、A 未横置 → 最佳 [E2]（而非 [E1,E2] / [E1]） */
+    /* 范例 1：只有一个普通敌人值得横置 → 收益不足门槛，优先重铸 */
     {
         const A1 = mkP17('A1', 1, false);
         const E1 = mkP17('E1', -1, true);
         const E2 = mkP17('E2', -1, false);
         const r = ev17.evaluateTiesuoActions(me17, {}, { candidates: [A1, E1, E2], players: [A1, E1, E2], relationOf: rel17 });
-        eq(r.bestAction.type, 'use', '10.17 范例1 最佳动作为 use');
-        eq(r.bestAction.targets.length, 1, '10.17 范例1 允许只选 E2（单目标）');
-        eq(r.bestAction.targets[0], E2, '10.17 范例1 应选未横置的 E2（非解链 E1）');
+        eq(r.bestAction.type, 'recast', '10.17 范例1 单连普通敌人 ΔU=2 < 2.5 → RECAST');
     }
 
     /* 范例 2：A 已横置 + E1 已横置 + E2 未横置 → [A,E2] 最优（解队友 + 链新敌） */
@@ -1293,9 +1310,15 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     {
         const A = mkP20('A', 1, true), E = mkP20('E', -1, true);
         const d = dFn(me20, [me20, A, E], { relationOf: relOf20 });
-        eq(d.use, true, '10.20 [A linked, E linked] → use');
-        eq(d.targets.length, 1, '10.20 [A linked, E linked] → 单目标解除 A');
-        eq(d.targets[0], A, '10.20 解除队友 A');
+        eq(d.use, false, '10.20 [普通A linked, E linked] → 单解收益不足门槛 → recast');
+        eq(d.targets.length, 0, '10.20 普通单解队友不强行 use');
+    }
+    {
+        const A = mkP20('A_low', 1, true, 1), E = mkP20('E', -1, true);
+        const d = dFn(me20, [me20, A, E], { relationOf: relOf20, enemyAttrThreat: true });
+        eq(d.use, true, '10.20 [危险残血A linked, E linked] → 单解达到门槛 → use');
+        eq(d.targets.length, 1, '10.20 危险残血队友允许单目标解除');
+        eq(d.targets[0], A, '10.20 解除危险残血队友 A');
     }
     {
         const A = mkP20('A', 1, false), E = mkP20('E', -1, true);

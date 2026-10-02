@@ -15,7 +15,9 @@
  *   T  = 目标集合（1~2 人）
  *   S' = S △ T                                   toggle（对称差）
  *   ΔU = U(S') - U(S)                            该动作的净状态收益
- *   Action* = argmax{ RecastValue, ΔU(T1), ΔU(T2), ... }
+ *   UseThreshold = RecastValue + UseMargin
+ *   bestUse = argmax{ ΔU(T1), ΔU(T2), ... }
+ *   若可重铸：bestUse 只有达到 UseThreshold 才允许使用，否则重铸
  *
  * 本文件对全局横置集合做「最多两次 toggle」的局面状态优化，
  * 而不是「一张能选两个敌人的普通锦囊」。
@@ -241,13 +243,63 @@ export function scoreTiesuoAction(me, action, context) {
 	} catch (e) { _swallow(e); return 0; }
 }
 
-/* ================= 10.5 重铸竞争与主入口（Task 6） =================
- * RECAST 与所有 use 候选放在同一层比较：
- *   Action* = argmax{ RecastValue, ΔU(T1), ΔU(T2), ... }
+/* ================= 10.5 重铸门槛 + 全局分数映射（Task 6） =================
+ * evaluator 内部只负责「局面 utility」：
+ *   - use: ΔU
+ *   - recast: RecastValue
+ *
+ * 但“略高于重铸”不等于“值得真正打出铁索”。因此增加明确使用门槛：
+ *   UseThreshold = RecastValue + USE_MARGIN
+ *
+ * 通过门槛后，再由 tiesuoUtilityToEngineRaw() 把 utility 映射到 engine 的
+ * raw score 尺度。映射锚点：LINK_BASE=2.0（横置一名普通敌人） ↔ 全局 raw=5，
+ * 因此 GLOBAL_SCALE=2.5。最终仍由 engine 统一经过 toInt8()。
  */
 
 const RECAST_DRAW_VALUE = 2.2;   /* 重铸摸一张牌的期望价值（稳定基准） */
 const RECAST_CARD_COST = 1.0;    /* 舍弃本铁索牌的机会成本 */
+
+export const TIESUO_USE_MARGIN = 1.3;
+export const TIESUO_GLOBAL_SCALE = 2.5;
+export const TIESUO_GLOBAL_RAW_CAP = 20;
+
+/**
+ * 返回“真正值得使用铁索”的最低 ΔU。
+ * 默认：RecastValue + 1.3。可由 context.useMargin / useThreshold 覆写，
+ * 便于离线调参与行为回归，但生产默认值保持单一真相源。
+ */
+export function tiesuoUseThreshold(recastValue, context) {
+	context = context || {};
+	try {
+		if (typeof context.useThreshold === 'number' && isFinite(context.useThreshold)) {
+			return Math.round(context.useThreshold * 1000) / 1000;
+		}
+		const margin = (typeof context.useMargin === 'number' && isFinite(context.useMargin))
+			? context.useMargin
+			: TIESUO_USE_MARGIN;
+		const rv = (typeof recastValue === 'number' && isFinite(recastValue)) ? recastValue : 0;
+		return Math.round((rv + margin) * 1000) / 1000;
+	} catch (e) { _swallow(e); return Math.round(((Number(recastValue) || 0) + TIESUO_USE_MARGIN) * 1000) / 1000; }
+}
+
+/**
+ * 把 tiesuo evaluator 的 utility 映射到 engine raw score。
+ * 统一用于“使用”和“重铸”，避免 use 沿用普通卡 s、recast 却只拿 1.2 的尺度断层。
+ */
+export function tiesuoUtilityToEngineRaw(utility, context) {
+	context = context || {};
+	try {
+		if (typeof utility !== 'number' || !isFinite(utility)) return 0;
+		const scale = (typeof context.globalScale === 'number' && isFinite(context.globalScale))
+			? context.globalScale
+			: TIESUO_GLOBAL_SCALE;
+		const cap = (typeof context.globalRawCap === 'number' && isFinite(context.globalRawCap) && context.globalRawCap > 0)
+			? context.globalRawCap
+			: TIESUO_GLOBAL_RAW_CAP;
+		const raw = utility * scale;
+		return Math.round(Math.max(-cap, Math.min(cap, raw)) * 1000) / 1000;
+	} catch (e) { _swallow(e); return 0; }
+}
 
 /**
  * 估算重铸价值 RecastValue = ExpectedDrawValue - CardOpportunityCost。
@@ -296,6 +348,7 @@ function _recordDiagnostics(result, context) {
 			candidates: cands,
 			best: b ? { type: b.type, targets: (b.targets || []).map(_nameOf), score: b.score, delta: b.delta } : null,
 			recastValue: result.recastValue,
+			useThreshold: result.useThreshold,
 			currentStateValue: result.currentStateValue,
 		};
 	} catch (e) { _swallow(e); }
@@ -311,9 +364,10 @@ function _recordDiagnostics(result, context) {
  *   canRecast           是否允许重铸（默认 true）
  *   beforeLinked        已知横置集合（省略则读 players）
  *   recastValue/expectedDrawValue/cardOpportunityCost
+ *   useMargin/useThreshold  使用门槛（默认 RecastValue + 1.3）
  *   relationOf/roleValueOf/hasOurAttr/enemyAttrThreat
  *   actions             已生成的候选（省略则内部生成）
- * @returns {{bestAction:Object|null, candidates:Array, currentStateValue:number, recastValue:number}}
+ * @returns {{bestAction:Object|null, candidates:Array, currentStateValue:number, recastValue:number, useThreshold:number}}
  */
 export function evaluateTiesuoActions(player, card, context) {
 	context = context || {};
@@ -346,11 +400,26 @@ export function evaluateTiesuoActions(player, card, context) {
 			}
 		});
 
-		let bestAction = null;
+		const useThreshold = tiesuoUseThreshold(recastValue, context);
+		let recastAction = null;
+		let bestUse = null;
 		for (let i = 0; i < candidates.length; i++) {
 			const a = candidates[i];
 			if (!a) continue;
-			if (!bestAction || a.score > bestAction.score) bestAction = a;
+			if (a.type === 'recast') {
+				if (!recastAction || a.score > recastAction.score) recastAction = a;
+				continue;
+			}
+			if (a.type === 'use' && (!bestUse || a.score > bestUse.score)) bestUse = a;
+		}
+
+		/* 可重铸时：普通单目标 +2 并不足以使用，必须显著胜过重铸。
+		 * 不可重铸时则退化为“选最佳合法 use”，由 engine 的全局分数再决定是否行动。 */
+		let bestAction = null;
+		if (recastAction) {
+			bestAction = (bestUse && bestUse.score >= useThreshold) ? bestUse : recastAction;
+		} else {
+			bestAction = bestUse;
 		}
 
 		const result = {
@@ -358,6 +427,7 @@ export function evaluateTiesuoActions(player, card, context) {
 			candidates: candidates,
 			currentStateValue: currentStateValue,
 			recastValue: recastValue,
+			useThreshold: useThreshold,
 		};
 		/* 诊断落点需要 beforeSet / players（仅内部用，不长期持有） */
 		result.beforeSet = before;
@@ -366,7 +436,7 @@ export function evaluateTiesuoActions(player, card, context) {
 		return result;
 	} catch (e) {
 		_swallow(e);
-		return { bestAction: null, candidates: [], currentStateValue: 0, recastValue: 0 };
+		return { bestAction: null, candidates: [], currentStateValue: 0, recastValue: 0, useThreshold: 0 };
 	}
 }
 
@@ -445,6 +515,6 @@ export function hostTiesuoTargetEffect(me, target, players, context) {
 export default {
 	getCurrentLinkedSet, toggleLinkedSet, generateTiesuoActions,
 	evaluateLinkedState, scoreTiesuoAction,
-	estimateTiesuoRecastValue, evaluateTiesuoActions,
+	estimateTiesuoRecastValue, tiesuoUseThreshold, tiesuoUtilityToEngineRaw, evaluateTiesuoActions,
 	hostTiesuoDecision, hostTiesuoTargetEffect,
 };
