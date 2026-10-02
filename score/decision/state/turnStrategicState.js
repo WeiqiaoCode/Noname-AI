@@ -8,34 +8,21 @@
  */
 
 /* ================= Turn-level Strategic State · 唯一权威 =================
- * 指令 04：回合内动作一致性与自我抵消修复。
+ * 回合内“战略承诺 / 状态转移一致性”层。
  *
- * 问题：同一回合内先给敌人挂【乐】/【兵粮】，随后又用【过河】/【顺手】
- *       把刚建立、仍在判定区生效的控制状态破坏掉（自我抵消）。
+ * 核心原则：
+ *   1) 决策层不识别具体牌名，只消费游戏档案声明的通用 operation/state；
+ *   2) 只记录轻量 provenance，不复制 Player / game state；
+ *   3) CREATE → REMOVE → RECREATE 同目标同状态属于 reversal，使用 soft penalty；
+ *   4) REMOVE 具体卡牌时按该状态对我方的真实价值决定“应保护还是应解除”；
+ *   5) 换目标、局面变化、跨回合都不 hard-ban，允许高收益动作覆盖机会成本。
  *
- * 目标结构（方案 §目标结构）：
- *   建立轻量 Turn-level Strategic State，只记录 provenance：
- *   actor / target / state type / card id / zone / created action·turn / strategic value。
- *   第一版只跟踪 lebu / bingliang，绝不复制整个 Player / game state。
- *
- * 评分契约：
- *   FinalScore = DirectValue − SelfCreatedStateDestructionPenalty
- *   penalty 永远是 soft opportunity cost，绝不是 hard ban（绝不返回 ±Infinity）。
- *
- * 语义唯一性（方案 §Judge-zone 语义 / §生命周期）：
- *   - 判定区延时控制的敌我方向语义复用 wuxieEvaluator.delayedControlValue，
- *     不另写第二套：enemy 身上 lebu/bingliang/闪电 对我方 → 正收益（拆掉=损失）；
- *     ally 身上 → 负收益（拆掉=帮队友解除，应鼓励）。
- *   - penalty 一律以真实 game state 复核（牌是否仍在判定区、目标是否存活），
- *     跨回合 provenance 不污染、不叠加。
- *
- * 明令禁止（指令 §禁止）：
- *   - has self-created lebu → guohe = -Infinity；
- *   - 同目标再次操作一律降权；
- *   - turnState 复制整个 Player / game state。
+ * 具体卡牌到语义的映射只存在 foundation/adapt/gameProfile.js。
  */
 
 import { game, get, _status } from '../../foundation/adapt/host.js';
+import '../../foundation/adapt/gameProfile.js';   /* 默认档案注入 strategicEffects */
+import { strategicEffectOf } from '../../foundation/adapt/terms.js';
 import { dispositionOf } from '../relations/relations.js';
 import { delayedControlValue } from '../response/wuxieEvaluator.js';
 
@@ -47,16 +34,12 @@ function _swallow(e) {
 	} catch (_) { /* swallow 自身失败时不再递归 */ }
 }
 
-/* ---------- 常量 ---------- */
-/* 判定区延时族：读取与惩罚同族（兵/乐/闪电）。 */
-const DELAYED_CONTROL_IDS = ['lebu', 'bingliang', 'shandian'];
-/* 第一版只跟踪乐/兵 provenance（指令：第一版只跟踪 lebu/bingliang）。 */
-const PROVENANCE_IDS = ['lebu', 'bingliang'];
-/* 战略权重：维持一个控制状态的收益略高于锦囊「即时生效」收益
- * （持续压制节奏、限制对方行动），但保持同向、soft，不做 hard ban。 */
 const STRATEGIC_WEIGHT = 1.2;
+const REAPPLY_WEIGHT = 1.2;
+const REMOVAL_CHOICE_WEIGHT = 1.6;
+const TARGET_ALTERNATIVE_DISCOUNT = 0.2;
 
-/* ================= ① 判定区事实读取（唯一入口） ================= */
+/* ================= ① 通用状态语义 ================= */
 
 function _cardName(card, player) {
 	try {
@@ -77,6 +60,30 @@ function _cardName(card, player) {
 	return null;
 }
 
+function _effectOf(cardId) {
+	try { return cardId ? strategicEffectOf(cardId) : null; } catch (e) { _swallow(e); return null; }
+}
+
+function _stateOf(cardId) {
+	try {
+		const e = _effectOf(cardId);
+		if (!e || e.operation !== 'create-state' || !e.state) return null;
+		return Object.assign({}, e.state);
+	} catch (e) { _swallow(e); return null; }
+}
+
+function _stateKey(state) {
+	if (!state) return '';
+	return String(state.family || '') + '|' + String(state.dimension || '') + '|' + String(state.zone || '');
+}
+
+function _isRemovalAction(cardId) {
+	try {
+		const e = _effectOf(cardId);
+		return !!(e && e.operation === 'remove-target-card');
+	} catch (e) { return false; }
+}
+
 function _judgeCardsOf(player) {
 	try {
 		if (!player) return [];
@@ -89,26 +96,36 @@ function _judgeCardsOf(player) {
 	return [];
 }
 
-/** 读取角色判定区所有牌名（唯一入口）。 */
+function _cardsOf(player, zone) {
+	try {
+		if (!player || typeof player.getCards !== 'function') return [];
+		const a = player.getCards(zone);
+		return Array.isArray(a) ? a : [];
+	} catch (e) { _swallow(e); return []; }
+}
+
+/** 读取角色判定区所有牌名。 */
 export function getJudgeCardNames(player) {
 	try {
 		return _judgeCardsOf(player).map(function (c) { return _cardName(c, player); }).filter(Boolean);
 	} catch (e) { _swallow(e); return []; }
 }
 
-/** 读取角色判定区中「延时控制」牌 id 列表（兵/乐/闪电）。 */
-export function delayedControlIdsIn(player) {
+/** 读取判定区中由游戏档案声明的战略状态牌。 */
+export function strategicStateIdsIn(player) {
 	try {
-		return getJudgeCardNames(player).filter(function (n) { return DELAYED_CONTROL_IDS.indexOf(n) >= 0; });
+		return getJudgeCardNames(player).filter(function (id) {
+			const st = _stateOf(id);
+			return !!(st && (!st.zone || st.zone === 'j'));
+		});
 	} catch (e) { _swallow(e); return []; }
 }
 
-/** 角色判定区是否存在延时控制（兵/乐/闪电）。 */
-export function hasDelayedControl(player) {
-	return delayedControlIdsIn(player).length > 0;
-}
+/* 兼容旧接口：当前档案中这里就是延时控制状态。 */
+export function delayedControlIdsIn(player) { return strategicStateIdsIn(player); }
+export function hasDelayedControl(player) { return strategicStateIdsIn(player).length > 0; }
 
-/* ================= ② 关系解析（复用统一敌我系统） ================= */
+/* ================= ② 关系与价值 ================= */
 
 function _relOf(player, target, context) {
 	try {
@@ -117,10 +134,18 @@ function _relOf(player, target, context) {
 	try { return dispositionOf(player, target); } catch (e) { _swallow(e); return 0; }
 }
 
-/* ================= ③ provenance 生命周期 =================
- * 只保留「本回合」记录；相位切换即整体失效。
- * 记录本身不含任何 game state 副本，只存引用与元信息。
- */
+function _stateValueOf(player, target, cardId, context) {
+	try {
+		const rel = _relOf(player, target, context);
+		const v = delayedControlValue(player, cardId, rel, target, context);
+		if (typeof v === 'number' && isFinite(v)) {
+			return Math.round(v * STRATEGIC_WEIGHT * 1000) / 1000;
+		}
+	} catch (e) { _swallow(e); }
+	return 0;
+}
+
+/* ================= ③ 本回合 provenance ================= */
 
 let _records = [];
 let _phaseKey = null;
@@ -129,11 +154,10 @@ function _currentPhaseKey() {
 	try {
 		const cp = (typeof _status !== 'undefined' && _status) ? _status.currentPhase : null;
 		if (!cp) return '';
-		return String(cp.name || cp.name1 || cp);
+		return String(cp.playerid || cp.name || cp.name1 || cp);
 	} catch (e) { _swallow(e); return ''; }
 }
 
-/* 相位切换 → provenance 失效（跨回合不污染）。返回是否发生了切换。 */
 function _syncPhase() {
 	const k = _currentPhaseKey();
 	if (k !== _phaseKey) {
@@ -147,7 +171,7 @@ function _syncPhase() {
 function _refKey(target) {
 	try {
 		if (!target) return '';
-		return String(target.name || target.name1 || target.playerid || '');
+		return String(target.playerid || target.name || target.name1 || '');
 	} catch (e) { return ''; }
 }
 
@@ -157,130 +181,287 @@ function _resolveTarget(t) {
 		if (typeof t === 'object') return t;
 		const players = (typeof game !== 'undefined' && game && game.players) ? game.players : [];
 		for (const p of players) {
-			if (p && (p.name === t || p.name1 === t)) return p;
+			if (p && (p.playerid === t || p.name === t || p.name1 === t)) return p;
 		}
 	} catch (e) { _swallow(e); }
 	return null;
 }
 
-function _controlValueOf(player, target, cardId, context) {
-	try {
-		const rel = _relOf(player, target, context);
-		const v = delayedControlValue(player, cardId, rel, target, context);
-		if (typeof v === 'number' && isFinite(v)) return Math.round(v * STRATEGIC_WEIGHT * 1000) / 1000;
-	} catch (e) { _swallow(e); }
-	return 0;
+function _recordMatchesTarget(rec, target) {
+	if (!rec || !target) return false;
+	if (rec.targetRef) return rec.targetRef === target;
+	return rec.targetName === _refKey(target);
 }
 
-/* 记录「我方在本回合建立了一个延时控制」。返回记录或 null。 */
-export function recordControlState(actor, target, cardId, opts) {
+function _activeStateKeys(target) {
+	const out = {};
+	try {
+		const ids = strategicStateIdsIn(target);
+		for (const id of ids) {
+			const st = _stateOf(id);
+			const key = _stateKey(st);
+			if (key) out[key] = 1;
+		}
+	} catch (e) { _swallow(e); }
+	return out;
+}
+
+function _recordStillActive(rec, target) {
+	try {
+		if (!rec || !_recordMatchesTarget(rec, target)) return false;
+		const active = _activeStateKeys(target);
+		return !!active[rec.stateKey];
+	} catch (e) { _swallow(e); return false; }
+}
+
+/** 通用：记录一次 create-state 战略承诺。 */
+export function recordStateCreation(actor, target, cardId, opts) {
 	_syncPhase();
 	opts = opts || {};
 	try {
 		if (!target || target.alive === false) return null;
-		if (PROVENANCE_IDS.indexOf(cardId) < 0) return null;   /* 第一版只跟踪乐/兵 */
+		const state = _stateOf(cardId);
+		if (!state) return null;
+		const key = _stateKey(state);
+		if (!key) return null;
 		const rec = {
+			operation: 'create-state',
 			actor: actor || null,
 			actorName: _refKey(actor),
 			target: target,
 			targetRef: target,
 			targetName: _refKey(target),
-			stateType: 'delayed-control',
 			cardId: cardId,
-			zone: 'j',
+			state: state,
+			stateKey: key,
+			stateType: state.family || 'state',
+			zone: state.zone || null,
 			createdAction: opts.action || opts.strat || null,
 			createdTurn: (opts.turn != null) ? opts.turn : _currentPhaseKey(),
 			strategicValue: (typeof opts.strategicValue === 'number')
 				? opts.strategicValue
-				: _controlValueOf(actor, target, cardId, opts),
+				: _stateValueOf(actor, target, cardId, opts),
+			removed: false,
 		};
 		_records.push(rec);
 		return rec;
 	} catch (e) { _swallow(e); return null; }
 }
 
-/* 从一次「实际出牌动作」记录 provenance：仅当 rule 为 乐/兵 且目标有效。
- * action: { rule, strat, target }（engine.useCard 包装层传入）。 */
-export function recordSelfCreatedControl(player, action, target) {
+/* 旧接口兼容：内部已完全委托通用状态记录。 */
+export function recordControlState(actor, target, cardId, opts) {
+	return recordStateCreation(actor, target, cardId, opts);
+}
+
+/** 从实际动作记录战略状态；非 create-state 动作自然返回 null。 */
+export function recordStrategicStateFromAction(player, action, target) {
 	_syncPhase();
 	try {
 		action = action || {};
 		const rule = action.rule || action.id || action.cardId || null;
-		if (PROVENANCE_IDS.indexOf(rule) < 0) return null;
+		if (!_stateOf(rule)) return null;
 		let tgt = target || null;
 		if (!tgt && action.target) tgt = _resolveTarget(action.target);
 		tgt = _resolveTarget(tgt);
 		if (!tgt) return null;
-		return recordControlState(player, tgt, rule, { action: action.strat || action.rule || null });
+		return recordStateCreation(player, tgt, rule, { action: action.strat || action.rule || null });
 	} catch (e) { _swallow(e); return null; }
 }
 
-/** 读取本回合 provenance 快照（浅拷贝，调用方不得改写内部数组）。 */
-export function getControlRecords() {
+export function recordSelfCreatedControl(player, action, target) {
+	return recordStrategicStateFromAction(player, action, target);
+}
+
+export function getStrategicRecords() {
 	_syncPhase();
 	try { return _records.slice(); } catch (e) { _swallow(e); return []; }
 }
+export function getControlRecords() { return getStrategicRecords(); }
 
-/* 判断 (player,target) 是否存在「本回合自建且仍在判定区生效」的记录。 */
-function _hasValidRecord(player, target) {
+function _hasValidRecord(player, target, stateKey) {
 	try {
-		if (!_records.length) return false;
-		const ids = delayedControlIdsIn(target);   /* 真实状态复核：牌必须仍在判定区 */
-		if (!ids.length) return false;
 		for (const r of _records) {
-			if (!r) continue;
-			if (r.targetRef && r.targetRef !== target) continue;
-			if (ids.indexOf(r.cardId) >= 0) return true;
+			if (!r || !_recordMatchesTarget(r, target)) continue;
+			if (stateKey && r.stateKey !== stateKey) continue;
+			if (_recordStillActive(r, target)) return true;
 		}
 	} catch (e) { _swallow(e); }
 	return false;
 }
 
-/** 清空本回合 provenance（回合结束 / 显式重置）。 */
 export function clearTurnState() {
 	_records = [];
 	_phaseKey = _currentPhaseKey();
 }
 
-/* ================= ④ 自我抵消惩罚（soft，唯一权威） =================
- * 返回评估对象：
- *   penalty     直接可用于 FinalScore 的扣减量（可为负：拆队友负面判定 = 鼓励）
- *   selfCreated 是否存在本回合自建、且仍在判定区生效的记录
- *   controlValue 该目标判定区延时控制的净战略价值（敌我方向感知）
- *   ids / relation 便于诊断
- * 语义：拆掉「对我方有利」的控制 → penalty 为正（降权）；
- *       拆掉「对我方有害」的控制（队友身上的兵/乐）→ penalty 为负（加权鼓励）。
+/* ================= ④ 状态移除 / 重建的一致性评分 ================= */
+
+function _countAlternativeRemovals(target) {
+	try {
+		let n = _cardsOf(target, 'h').length + _cardsOf(target, 'e').length;
+		const j = _judgeCardsOf(target);
+		for (const c of j) {
+			const id = _cardName(c, target);
+			if (!_stateOf(id)) n++;
+		}
+		return n;
+	} catch (e) { _swallow(e); return 0; }
+}
+
+/**
+ * 目标级 remove-target-card 机会成本。
+ * 若目标还有手牌/装备/其它非战略判定牌可拆，则只保留小额目标级 penalty；
+ * 真正“拆哪张牌”交给 evaluateRemovalChoice 精确决定。
  */
 export function evaluateDestroyPenalty(player, target, context) {
-	const out = { penalty: 0, selfCreated: false, controlValue: 0, ids: [], relation: 0, reason: '' };
+	const out = {
+		penalty: 0,
+		effectivePenalty: 0,
+		selfCreated: false,
+		controlValue: 0,
+		ids: [],
+		relation: 0,
+		alternativeCount: 0,
+		reason: '',
+	};
 	try {
 		_syncPhase();
 		if (!player || !target || target.alive === false) return out;
-		const ids = delayedControlIdsIn(target);
+		const ids = strategicStateIdsIn(target);
 		if (!ids.length) return out;
 		const rel = _relOf(player, target, context);
 		let value = 0;
+		let selfCreated = false;
 		for (const id of ids) {
+			const st = _stateOf(id);
+			const key = _stateKey(st);
 			const v = delayedControlValue(player, id, rel, target, context);
 			if (typeof v === 'number' && isFinite(v)) value += v;
+			if (_hasValidRecord(player, target, key)) selfCreated = true;
 		}
 		out.ids = ids;
 		out.relation = rel;
 		out.controlValue = Math.round(value * 1000) / 1000;
 		out.penalty = Math.round(value * STRATEGIC_WEIGHT * 1000) / 1000;
-		out.selfCreated = _hasValidRecord(player, target);
-		out.reason = out.selfCreated ? 'self-created-control' : 'observed-control';
+		out.alternativeCount = _countAlternativeRemovals(target);
+		out.effectivePenalty = out.penalty;
+		/* 敌方身上的有利控制若还有其它牌可拆，不应把整个目标否掉；
+		 * 具体选牌层会强保护该状态。队友负面状态则保持完整鼓励。 */
+		if (out.penalty > 0 && out.alternativeCount > 0) {
+			out.effectivePenalty = Math.round(out.penalty * TARGET_ALTERNATIVE_DISCOUNT * 1000) / 1000;
+		}
+		out.selfCreated = selfCreated;
+		out.reason = selfCreated ? 'self-created-state' : 'observed-state';
 		return out;
 	} catch (e) { _swallow(e); return out; }
 }
 
-/** 便捷：仅取 penalty 数值。 */
+/**
+ * 具体卡牌级 removal utility。
+ * adjustment > 0：鼓励移除；adjustment < 0：保护该状态。
+ * 不返回 Infinity，不 hard-ban。
+ */
+export function evaluateRemovalChoice(player, target, card, context) {
+	const out = {
+		adjustment: 0,
+		stateValue: 0,
+		selfCreated: false,
+		cardId: null,
+		stateKey: '',
+		reason: 'not-strategic-state',
+	};
+	try {
+		_syncPhase();
+		if (!player || !target || !card) return out;
+		const id = _cardName(card, target);
+		const st = _stateOf(id);
+		if (!st) return out;
+		const key = _stateKey(st);
+		const value = _stateValueOf(player, target, id, context);
+		const selfCreated = _hasValidRecord(player, target, key);
+		let adjustment = -value * REMOVAL_CHOICE_WEIGHT;
+		/* 自己刚建立且仍有利的状态，再加一层“战略承诺”机会成本。 */
+		if (selfCreated && value > 0) adjustment -= value * 0.8;
+		out.cardId = id;
+		out.stateKey = key;
+		out.stateValue = value;
+		out.selfCreated = selfCreated;
+		out.adjustment = Math.round(adjustment * 1000) / 1000;
+		out.reason = adjustment < 0 ? 'protect-beneficial-state' : (adjustment > 0 ? 'remove-harmful-state' : 'neutral-state');
+		return out;
+	} catch (e) { _swallow(e); return out; }
+}
+
+/**
+ * 同回合“刚建立 → 已消失 → 又在同一目标重建同一战略状态”的 reversal penalty。
+ * 换目标不罚；仍在生效不罚；负价值旧状态不产生正向承诺。
+ */
+export function evaluateCreateConsistency(player, target, cardId, context) {
+	const out = { penalty: 0, stateKey: '', prior: null, reason: '' };
+	try {
+		_syncPhase();
+		if (!player || !target || target.alive === false) return out;
+		const st = _stateOf(cardId);
+		if (!st) return out;
+		const key = _stateKey(st);
+		out.stateKey = key;
+
+		for (let i = _records.length - 1; i >= 0; i--) {
+			const rec = _records[i];
+			if (!rec || rec.stateKey !== key || !_recordMatchesTarget(rec, target)) continue;
+			out.prior = rec;
+			if (_recordStillActive(rec, target)) {
+				out.reason = 'state-still-active';
+				return out;
+			}
+			rec.removed = true;   /* 真实状态已不存在，标记为本回合已失效；不猜是谁移除。 */
+			const committed = Math.max(0, Number(rec.strategicValue) || 0);
+			out.penalty = Math.round(committed * REAPPLY_WEIGHT * 1000) / 1000;
+			out.reason = out.penalty > 0 ? 'reapply-removed-state' : 'prior-state-not-beneficial';
+			return out;
+		}
+		return out;
+	} catch (e) { _swallow(e); return out; }
+}
+
+/**
+ * Engine 唯一入口：给任意动作 id 计算本回合战略转移 penalty。
+ * 具体牌 → operation/state 的解释由 gameProfile 完成。
+ */
+export function evaluateActionTransitionPenalty(player, target, actionId, context) {
+	const out = { penalty: 0, operation: '', detail: null, reason: '' };
+	try {
+		const e = _effectOf(actionId);
+		if (!e || !e.operation) return out;
+		out.operation = e.operation;
+		if (e.operation === 'create-state') {
+			const d = evaluateCreateConsistency(player, target, actionId, context);
+			out.penalty = d.penalty || 0;
+			out.detail = d;
+			out.reason = d.reason || '';
+			return out;
+		}
+		if (e.operation === 'remove-target-card') {
+			const d = evaluateDestroyPenalty(player, target, context);
+			out.penalty = d.effectivePenalty || 0;
+			out.detail = d;
+			out.reason = d.reason || '';
+			return out;
+		}
+		return out;
+	} catch (e) { _swallow(e); return out; }
+}
+
+/* 旧便捷接口保留：返回未折扣的状态价值，避免改变旧调用语义。 */
 export function selfCreatedDestructionPenalty(player, target, context) {
 	return evaluateDestroyPenalty(player, target, context).penalty;
 }
 
 export default {
-	getJudgeCardNames, delayedControlIdsIn, hasDelayedControl,
-	evaluateDestroyPenalty, selfCreatedDestructionPenalty,
-	recordControlState, recordSelfCreatedControl, getControlRecords, clearTurnState,
+	getJudgeCardNames, strategicStateIdsIn, delayedControlIdsIn, hasDelayedControl,
+	evaluateDestroyPenalty, evaluateRemovalChoice, evaluateCreateConsistency,
+	evaluateActionTransitionPenalty, selfCreatedDestructionPenalty,
+	recordStateCreation, recordStrategicStateFromAction,
+	recordControlState, recordSelfCreatedControl,
+	getStrategicRecords, getControlRecords, clearTurnState,
 };
