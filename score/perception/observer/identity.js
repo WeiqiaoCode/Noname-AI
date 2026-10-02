@@ -144,9 +144,12 @@ function _selfRoleOf(observer) {
 export function roleInventory() {
 	const out = { counts: { zhu: 0, zhong: 0, fan: 0, nei: 0 }, total: 0, source: 'none', constrainable: false };
 	try {
-		if (currentMode() !== 'identity') return out;
+		const mode = currentMode();
 		const sub = (_status && _status.mode) ? String(_status.mode) : '';
-		/* 特殊身份子模式可能有额外角色编码；未建模时宁可不约束，避免错推。 */
+		/* 身份模式的 _status.mode 通常是 normal 子模式；测试/旧宿主若 get.mode 不可用，
+		 * 也允许由 normal 子模式确认。其它特殊子模式宁可不约束，避免错推。 */
+		const identityLike = mode === 'identity' || sub === 'normal' || sub === 'identity';
+		if (!identityLike) return out;
 		if (sub && ['normal', 'identity'].indexOf(sub) < 0) return out;
 
 		const total = _allPlayers().length || ((game.players || []).length + (game.dead || []).length);
