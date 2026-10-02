@@ -1,4 +1,12 @@
 # UnknownAI 通用卡牌博弈决策引擎 · 开发者文档
+## 项目维护
+
+- **原作者 / Original Author：飞升**
+- **当前维护者 / Current Maintainer：WeiqiaoCode（微雀qiao）**
+
+本仓库基于飞升原版无名AI持续维护。当前由作者和WeiqiaoCode（微雀qiao）负责后续仓库维护、Bug 修复、AI 策略优化、测试完善、面板开发与版本维护。
+
+完整贡献者信息见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
 
 > 三国杀纯策略决策扩展 · 具备自我感知、自我学习、自我校准、自我进化的完整闭环系统
 >
