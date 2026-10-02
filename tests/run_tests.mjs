@@ -2368,7 +2368,6 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const id36 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
     const rel36 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'relations', 'relations.js')).href);
     const th36 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'threat', 'threat.js')).href);
-    const cache36 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'storage', 'cache.js')).href);
 
     function P36(name, rel, opts) {
         opts = opts || {};
@@ -2416,16 +2415,18 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(th36.enemiesOf(me36).indexOf(p36) < 0, true,
         '10.36 同一 round 内敌→友后 enemiesOf 不得返回旧缓存');
 
-    /* B. foundation cache：公开身份明置属于 world-state；隐藏身份值本身不得泄漏进 key。 */
+    /* B. relation fingerprint 只消费公开/推断后的关系结果，不把隐藏 identity 当作状态事实。 */
     p36.rel = 0;
     p36.identityShown = false;
     p36.identity = 'fan';
-    cache36.checkStateChanged();  // 同步基线
-    eq(cache36.checkStateChanged(), false, '10.36 world-state 未变 → cache 保留');
-    p36.identity = 'zhong';       // 仍未明置：隐藏值变化不应影响公开缓存指纹
-    eq(cache36.checkStateChanged(), false, '10.36 未明置 identity 变化不进入公开 state key');
+    id36.resetBelief();
+    const hiddenKey1 = rel36.relationStateKey(me36);
+    p36.identity = 'zhong';       // 未明置：不能因为隐藏字段本身变化就泄漏到关系状态
+    const hiddenKey2 = rel36.relationStateKey(me36);
+    eq(hiddenKey2, hiddenKey1, '10.36 未明置 identity 本身不泄漏进 relation state key');
     p36.identityShown = true;
-    eq(cache36.checkStateChanged(), true, '10.36 身份明置 → cache state key 立即变化');
+    const shownKey = rel36.relationStateKey(me36);
+    ok(shownKey !== hiddenKey2, '10.36 身份公开 → relation state key 立即变化');
 
     /* C. identity belief：行为证据 revision 不再等到下一 round。 */
     p36.identityShown = false;
