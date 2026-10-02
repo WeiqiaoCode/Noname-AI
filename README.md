@@ -53,8 +53,8 @@
 
 ### 1.1 安装
 
-1. 下载最新发布版 zip（当前为 v3.1β 架构稳定化包）
-2. 解压到无名杀扩展目录
+1. 当前仓库尚未发布正式 GitHub Release；请从仓库下载源码或使用后续发布的 Release 包
+2. 将扩展文件放入无名杀扩展目录
 3. 重载扩展即可
 
 ### 1.2 验证安装
@@ -106,51 +106,44 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    AI 大脑（闭环系统）                    │
+│                    AI 大脑（当前运行形态）                │
 ├─────────────────────────────────────────────────────────┤
-│  感知层：elementAccess   → 读取/定义技能/卡牌/武将       │
-│  学习层：elementFeedback → 观察实战，自动修正定义         │
-│  自省层：metaCognition   → 知道自己熟不熟                │
-│  分权层：confidence      → rule/blend/model/skip         │
-│  仲裁层：strategyBus     → 冲突时用规划裁决              │
-│  校准层：decisionCalibrator → 从结果回填自动微调         │
-│  模仿层：multiProfile    → 多档案互相学习                │
-│  护栏层：modelGuard      → 红线拦截，防错动作            │
-│  固化层：weightPersist   → 校准偏移刻进模型权重          │
-│  迁移层：crossModeTransfer → 跨模式共享通用认知            │
-│  对比层：decisionCompare → 多档案同局对比                │
-│  进化层：evolution       → 遗传算法优化策略                │
-│  热更层：modelState      → 统一A/B状态机(原hotSwap并入)  │
-│  协同层：sharedKnowledge → 公共知识库群体智慧              │
-│  观测层：cognitionLog / conflict / calibratorPanel /     │
-│          brainDashboard / replayPanel / comparePanel     │
+│  感知层：状态 / 关系 / 牌堆 / 身份 / 对手与团队意图      │
+│  规则层：候选生成 + 规则评分 + 专项 evaluator             │
+│  主策略：Champion Strategy 对同类型候选提权/替换           │
+│  模型层：v7 模型用于置信度、校准、训练观测与条件式复核      │
+│          （模型未 ready 时 fail-closed，不得影响最终动作） │
+│  深思层：deepThink 仅在模型 ready 且满足触发条件时复核     │
+│  护栏层：modelGuard 在执行前做最终红线检查                 │
+│  学习层：样本记录 / TD value_target / A-B Candidate        │
+│  观测层：日志 / 冲突 / 回放 / 对比 / 自检 / Dashboard      │
 └─────────────────────────────────────────────────────────┘
 ```
+
+> 当前代码中，模型逐动作直接加权已关闭（`wModel = 0`），`strategyBus` 的模型仲裁接管也处于停用状态。模型具备合法 v7 权重并处于 ready 状态时，仍可参与置信度、校准与 `deepThink` 条件式复核；未 ready 时由 readiness guard 直接跳过。
 
 ### 2.2 决策流程
 
 ```
 枚举候选动作
     ↓
-特征提取（130维 Int8）
+规则评分 + 专项 evaluator
     ↓
-元认知评估（6维 → familiarity/modulator/level）
+先得到规则 best
     ↓
-规则打分 + 模型预测（多层网络 130→128(GELU+LayerNorm)→64(同)→6 + Critic）
+Champion Strategy（当前主要学习接管层）
     ↓
-分权融合（rule / blend / model / skip）
+模型 ready ?
+    ├─ 否 → 跳过模型改写
+    └─ 是 → 置信度/校准/冲突观测 + deepThink 条件式复核
     ↓
-策略总线仲裁（规则 vs 模型冲突时）
+modelGuard 最终护栏
     ↓
-模型护栏检查（8条红线）
+输出最终动作
     ↓
-选择最高分动作
+记录样本 / 回放 / 诊断
     ↓
-执行 + 记录完整链路
-    ↓
-1500ms 后观察结果 → 校准器回填
-    ↓
-局结束 → 归档 + 热更新 + 进化 + 协同
+局结束 → TD/异步反馈 → Candidate A/B → 持久化与统计
 ```
 
 ---
@@ -431,10 +424,8 @@ export function xxx() {
     }
 }
 
-// 3. localStorage 操作必须 try-catch
-function _save() {
-    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {}
-}
+// 3. 业务模块不得直接读写 localStorage，统一走中央 storage 抽象
+import { safeGet, safeSet, getJSON, setJSONQuotaSafe } from './foundation/storage/storage.js';
 
 // 4. 变量命名
 // 私有变量：_xxx（下划线开头）
@@ -450,37 +441,25 @@ function _save() {
 ### 4.2 新增模块规范
 
 ```javascript
-// 1. 文件位置：score/xxx.js
-// 2. 必须 import logger
-import { log } from './logger.js';
+// 1. 文件位置按职责进入 foundation / cognition / decision / model / perception / view 等域
+//    具体归属以 score/_DOMAIN.md 为准
 
-// 3. 必须有挂载段
-if (typeof window !== 'undefined') {
-    window.__DJSC = window.__DJSC || {};
-    window.__DJSC.xxx = {
-        func1: func1,
-        func2: func2,
-        stats: statsFunc,
-        reset: resetFunc,
-    };
-}
+// 2. 诊断统一使用 foundation/diag；持久化统一使用 foundation/storage
+import { log } from './foundation/diag/logger.js';
+import { getJSON, setJSONQuotaSafe } from './foundation/storage/storage.js';
 
-// 4. 必须有 localStorage 持久化
+// 3. 对外接口优先通过 registry / plugin 生命周期统一挂载，避免直接覆盖 window.__DJSC
+//    兼容旧接口时也必须采用幂等软合并，禁止 window.__DJSC = { ... } 覆盖全局
+
+// 4. 只有确实需要跨局保存的数据才建立 STORAGE_KEY；业务层不得直接 localStorage
 const STORE_KEY = 'djsc_xxx_v1';
-let _loaded = false;
-function _load() { ... }
-function _save() { ... }
 
-// 5. 必须有 stats() 和 reset() 接口
+// 5. 可观测模块应提供 stats()；只有存在可重置状态时才提供 reset()
 export function stats() { ... }
-export function reset() { ... }
 
-// 6. 新增模块后必须在 engine.js 加 import
-import './xxx.js';
+// 6. 新模块应接入对应 plugin / index / runtime 生命周期，不再默认要求塞进 engine.js
 
-// 7. 新增模块后必须在 selfCheck.js 加检查项
-check('模块名', 'xxx', 'object');
-check('模块名', 'xxx.stats', 'function');
+// 7. 新增关键模块后同步自检/契约测试；行为修复优先增加 regression test
 ```
 
 ### 4.3 面板开发规范
@@ -572,7 +551,7 @@ closeBtn.addEventListener('click', () => {
 | 元认知计算 | 轻量，不超过 1ms |
 | 校准器观察 | 1500ms 延迟，不阻塞决策 |
 | 热更新训练 | 后台异步，不阻塞游戏 |
-| localStorage 读写 | 必须 try-catch，避免存储爆炸 |
+| 持久化读写 | 统一走中央 storage 抽象；大对象使用配额安全写入 |
 | 面板渲染 | 大数据量用虚拟滚动 |
 
 ### 5.3 数据持久化
@@ -586,7 +565,7 @@ closeBtn.addEventListener('click', () => {
 | djsc_calib_history_v1 | 校准历史 | 200 条 |
 | djsc_multi_profile_v1 | 多档案数据 | 8 个档案 |
 | djsc_replay_v1 | 决策回放 | 20 局 × 50 条 |
-| djsc_hotswap_v1 | 热更新数据 | 1 个候选 |
+| djsc_model_state | A/B 模型状态与候选快照 | 1 个候选（旧 `djsc_hotswap_v1` 仅用于一次性迁移） |
 | djsc_shared_knowledge_v1 | 公共知识库 | 500 条 |
 | djsc_evolution_v1 | 进化种群 | 8 个个体 |
 
@@ -597,7 +576,7 @@ closeBtn.addEventListener('click', () => {
 | 130维特征（当前） | 旧 48/96 维模型与训练数据均不兼容，载入会被维度/版本校验拒收；需清空旧数据 |
 | 旧训练数据 | 需执行 `window.__DJSC.trainBufferClear()` |
 | 面板系统 | 全屏遮罩版，兼容所有无名杀版本 |
-| localStorage | 所有数据都在 localStorage，清缓存即重置 |
+| 本地持久化 | 业务层统一走 `foundation/storage`；底层可落到浏览器本地存储，清理本地站点数据会重置相应状态 |
 
 ---
 
