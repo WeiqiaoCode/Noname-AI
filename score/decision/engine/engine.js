@@ -19,7 +19,7 @@ import { decideEquip } from '../basic/equipBrain.js';
 import { decideJudge } from '../basic/judgeBrain.js';
 import { pickTargetByPurpose, targetScore as targetBrainScore } from '../basic/targetBrain.js';
 import { evaluateTiesuoActions, tiesuoUtilityToEngineRaw } from '../cards/tiesuoEvaluator.js';   /* ★ 指令 02：铁索唯一权威策略源 */
-import { evaluateDestroyPenalty, recordSelfCreatedControl } from '../state/turnStrategicState.js';   /* ★ 指令 04：回合内动作一致性唯一权威源 */
+import { evaluateActionTransitionPenalty, beginStrategicAction, reconcileStrategicTransitions, beginStrategicTurn } from '../state/turnStrategicState.js';   /* ★ 回合内战略状态转移唯一权威源 */
 import { buildPlayerSnapshot, buildTargetCandidate } from '../state/playerSnapshot.js';   /* ★ 指令 05 Stage A+C：统一 Player State Snapshot + 目标候选契约（禁止再猜宿主字段） */
 import { codeGainOf, skillRuleOf, detectCombo, skillProfileOf, skillBranchesOf, checkBranch, skillStagesOf, skillInteractionOf, skillTagsOf } from '../skills/skills.js';
 import { cacheGet, cacheSet, checkStateChanged, initStateWatcher } from '../../foundation/storage/cache.js';
@@ -1405,16 +1405,17 @@ function installHooks() {
 					card: args[0] ? (args[0].name || args[0].suit + args[0].number) : '?',
 					target: args[1] ? (args[1].name || '?') : null
 				});
-				/* ★ 指令 04：记录本回合「自建延时控制」provenance（第一版仅乐/兵）。
-				 * 只记录动作与目标；是否仍生效由评分时的真实判定区状态复核。 */
+				/* ★ Strategic Transition V2：只记录动作前公开状态。
+				 * 是否真正 CREATE / REMOVE 由下一次决策的 before/after 差分确认；
+				 * 被无懈/无效的动作不会留下假 commitment。 */
 				try {
 					const _cid = (get && typeof get.name === 'function') ? get.name(args[0], me) : (args[0] && args[0].name);
-					if (_cid === 'lebu' || _cid === 'bingliang') {
-						const _tg = args[1];
-						const _target = Array.isArray(_tg) ? _tg[0] : _tg;
-						if (_target && typeof _target === 'object') {
-							recordSelfCreatedControl(me, { rule: _cid, strat: 'useCard' }, _target);
-						}
+					const _tg = args[1];
+					const _target = Array.isArray(_tg) ? _tg[0] : _tg;
+					if (_target && typeof _target === 'object') {
+						beginStrategicAction(me, _cid, _target, {
+							relationOf: function (mi, t) { return dispositionOf(mi, t); },
+						});
 					}
 				} catch (eRec) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRec); }
 				const next = oUse.apply(this, args);
@@ -1571,6 +1572,8 @@ function installHooks() {
 		if (typeof oPhaseBegin === 'function' && !proto.__djsc_phaseBegin_patched) {
 			proto.phaseBegin = function () {
 				const me2 = this;
+				/* 显式 turn epoch：同一角色额外回合也必须清空上一回合战略 ledger。 */
+				try { beginStrategicTurn(me2); } catch (eTurn) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTurn); }
 				const r = oPhaseBegin.apply(this, arguments);
 				try { recordTurnHistory(me2); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				return r;
@@ -2486,6 +2489,19 @@ function pickKillTarget(me, tsMap, cur) {
 function bestAction() {
 	const _perfT0 = performance.now();
 	profStart('bestAction');
+
+	/* 上一次战略动作已经结算后，用真实公开状态差分确认 CREATE/REMOVE。
+	 * confirmed transition 会影响本轮候选评分，因此先于 100ms bestAction 缓存处理。 */
+	try {
+		const _stMe = (_status && _status.currentPhase) || game.me;
+		const _confirmed = _stMe ? reconcileStrategicTransitions(_stMe, {
+			relationOf: function (mi, t) { return dispositionOf(mi, t); },
+		}) : [];
+		if (_confirmed && _confirmed.length) {
+			_lastBestAction = null;
+			_lastBestActionTime = 0;
+		}
+	} catch (eStrategicSync) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eStrategicSync); }
 
 	/* ★ World-state invalidation：
 	 * 身份明置、阵营/态度翻转、行为证据导致敌友关系变化时，即使 HP/手牌/装备均未变化，
@@ -3559,20 +3575,19 @@ function bestAction() {
 								if (pDelay >= 0.2) s *= 0.7;
 							} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 						}
-						/* ★ 指令 04：破坏自己已建立战略状态（乐/兵/闪电）的 opportunity cost（soft）。
-						 *   退役「判定区有延时牌 → 一律 ×0.4」的粗暴同目标降权（指令明令禁止）：
-						 *   改为唯一权威 evaluateDestroyPenalty，按真实判定区 + 敌我方向计分——
-						 *   拆敌方对我方有利的控制 → 正惩罚（降权）；拆队友负面判定 → 负惩罚（加权鼓励）。
-						 *   只对真正会拆除判定区的动作（过河 / 顺手）计分，soft，不做 hard ban。 */
-						try {
-							if (bestT && (id === 'guohe' || id === 'shunshou')) {
-								const dp = evaluateDestroyPenalty(me, bestT, {
-									relationOf: function (mi, t) { return dispositionOf(mi, t); },
-								});
-								if (dp && typeof dp.penalty === 'number' && dp.penalty !== 0) s -= dp.penalty;
-							}
-						} catch (eJudge) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eJudge); }
 					}
+					/* ★ 通用 Strategic Transition 候选评分：不依赖具体牌名/敌友分支。
+					 * create-state 与 remove-target-card 都由 gameProfile 语义驱动；
+					 * CREATE→REMOVE、REMOVE→CREATE 统一在 ledger 中做 soft opportunity cost。 */
+					try {
+						if (bestT) {
+							const tp = evaluateActionTransitionPenalty(me, bestT, id, {
+								relationOf: function (mi, t) { return dispositionOf(mi, t); },
+							});
+							if (tp && typeof tp.penalty === 'number' && tp.penalty !== 0) s -= tp.penalty;
+						}
+					} catch (eStrategic) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eStrategic); }
+
 					/* 治疗类对友 → 加成 */
 					if (['tao', 'taoyuan', 'wuzhong'].indexOf(id) >= 0 && !isEnemy) {
 						s *= 1.08;
