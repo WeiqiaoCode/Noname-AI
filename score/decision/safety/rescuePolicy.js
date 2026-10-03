@@ -21,7 +21,6 @@
  *
  * 「濒死」只提升紧急度，绝不反转关系方向。
  */
-import { get } from '../../foundation/adapt/host.js';
 import { dispositionOf } from '../relations/relations.js';
 
 /* Score 契约（方案 §Score Alignment） */
@@ -39,9 +38,8 @@ function _norm(d) {
     return 0;
 }
 
-/* 解析敌我倾向：ctx 注入优先（测试 seam）→ 权威 relations → attitude fallback → fail-closed(null)
- * 契约：只要 ctx 提供了任一关系源（disposition / relations / attitude），整个解析就在 ctx 内完成，
- *       不再回退到默认 dispositionOf/get.attitude —— 便于测试注入与外部覆盖。 */
+/* 解析敌我倾向：ctx 注入优先（测试 seam）→ 权威 relations → fail-closed(null)。
+ * 宿主 get.attitude 不再作为默认 fallback，避免身份模式间接读取 hidden identity。 */
 function _resolveDisposition(player, target, ctx) {
     const hasInjected = !!(ctx && (
         (typeof ctx.disposition === 'number') ||
@@ -63,14 +61,8 @@ function _resolveDisposition(player, target, ctx) {
             if (n !== null) return n;
         } catch (e) { /* 继续回退 */ }
     }
-    /* 3) attitude fallback（ctx.attitude 或宿主 get.attitude） */
-    const attFn = (ctx && typeof ctx.attitude === 'function')
-        ? ctx.attitude
-        : (hasInjected ? null : function (p, t) {
-            try {
-                return (get && typeof get.attitude === 'function') ? get.attitude(p, t) : null;
-            } catch (e) { return null; }
-        });
+    /* 3) 仅允许显式注入 attitude 作为测试/外部 seam；生产默认不回退宿主 attitude。 */
+    const attFn = (ctx && typeof ctx.attitude === 'function') ? ctx.attitude : null;
     if (attFn) {
         try {
             const n = _norm(attFn(player, target));
