@@ -2,18 +2,17 @@
  * ============================================================
  * 无名AI · 技能选牌通用策略（skillCardChoiceBrain）
  * ------------------------------------------------------------
- * 目标：处理主动技能中的“选自己的牌”阶段，但不写任何技能 ID 特判。
+ * 目标：处理主动技能中的“选自己的牌”阶段，不写技能 ID / 牌名特判。
  *
- * 语义分三类：
- *   cost    —— 技能把自己的牌当成本/交换材料（loseCard/selfDiscard/selfLose）
- *   give    —— 技能明确把牌交给他人（giveCard）
- *   unknown —— 无法可靠判断，保持原生 AI，仅做极小机会成本 tie-break
+ * 语义：
+ *   cost    —— 自有牌作为成本/转化材料；
+ *   give    —— 明确把牌交给他人；
+ *   unknown —— 无法可靠判断，保持原生 AI 主导。
  *
- * cost 模式复用 discardBrain 的保留价值：
- *   保命牌/唯一无懈强保留；冗余杀、无用酒、普通低价值牌更适合作为成本。
+ * cost 排序只使用通用资源事实：
+ *   宿主牌价值、当前手牌稀缺度、同名重复度、当前血线压力。
  * ============================================================
  */
-import { classifyHand, vetoDiscard } from '../basic/discardBrain.js';
 
 function n(v) {
 	const x = Number(v);
@@ -32,50 +31,19 @@ export function classifySkillCardSelection(profile, ctx) {
 			+ Math.abs(Math.min(0, n(tags.selfDiscard)))
 			+ Math.abs(Math.min(0, n(tags.selfLose)));
 
-		/* giveCard 是强语义：明确“把牌给别人”时不能按弃牌成本处理。 */
 		if (give > 0.15) return 'give';
 
-		/* 宿主主动技的声明本身是更直接的规则证据：
-		 * - filterCard 存在，且未关闭默认 discard/lose → 所选牌是成本/转化材料；
-		 * - discard:false / lose:false 常用于“给牌、展示、移动”等非弃置语义，不能猜。
-		 * viewAs 技能也属于“拿自己的牌作材料”，因此默认落入 cost。 */
+		/* 宿主 filterCard 是强结构事实，但 discard:false / lose:false 表示
+		 * “选牌”未必是消耗；没有额外证据时必须保持 unknown。 */
 		if (info && info.filterCard) {
 			if (info.discard !== false && info.lose !== false) return 'cost';
 			if (info.discard === false || info.lose === false) {
 				return cost > 0.15 ? 'cost' : 'unknown';
 			}
 		}
-
 		if (cost > 0.15) return 'cost';
 		return 'unknown';
 	} catch (e) { return 'unknown'; }
-}
-
-function _duplicateAdjustment(cardId, me) {
-	me = me || {};
-	try {
-		if (cardId === 'sha') {
-			const c = n(me.shaCount);
-			if (c >= 3) return 0.8;
-			if (c === 2) return 0.35;
-		}
-		if (cardId === 'shan') {
-			const c = n(me.shanCount);
-			const hp = n(me.hp) || 3;
-			if (c >= 3 && hp >= 3) return 0.6;
-			if (c >= 2 && hp >= 3) return 0.25;
-		}
-		if (cardId === 'wuxie') {
-			const c = n(me.wuxieCount);
-			if (c >= 3) return 0.55;
-			if (c === 2) return 0.2;
-		}
-		if (cardId === 'jiu') {
-			const c = n(me.jiuCount);
-			if (c >= 2 && n(me.shaCount) === 0 && n(me.hp) >= 2) return 0.55;
-		}
-	} catch (e) {}
-	return 0;
 }
 
 export function skillCardSelectionAdjustment(cardId, profile, ctx) {
@@ -85,49 +53,51 @@ export function skillCardSelectionAdjustment(cardId, profile, ctx) {
 	const hasValue = Number.isFinite(value);
 	const semantic = classifySkillCardSelection(profile, ctx);
 
-	/* give / unknown：不凭“低价值”推出“应该给/应该选”。
-	 * 只保留 Stage 3 原有的极小机会成本 tie-break。 */
 	if (semantic !== 'cost') {
 		const tiny = hasValue ? clamp(-value * 0.02, -0.2, 0.2) : 0;
 		return {
 			semantic,
 			adjustment: tiny,
-			keepScore: null,
+			opportunityCost: 0,
+			duplicateRelief: 0,
 			veto: false,
 			reason: semantic === 'give'
-				? '给牌语义：不套弃牌策略，仅保留极小机会成本'
+				? '给牌语义：用途未知，保持原生AI，仅保留极小机会成本'
 				: '选牌语义未知：保持原生AI，仅保留极小机会成本',
 		};
 	}
 
-	const keep = classifyHand(cardId, me);
-	const veto = vetoDiscard(cardId, { me, tier: keep });
+	const handSize = Math.max(0, n(me.handSize));
+	const duplicates = Math.max(1, n(ctx.duplicates) || 1);
+	const hp = Number(me.hp);
+	const maxHp = Math.max(1, n(me.maxHp) || 1);
 
-	/* cost/exchange：
-	 * - keep 50 附近为中性；
-	 * - 低保留牌得到正调整，高保留牌得到负调整；
-	 * - get.value 只作为第二证据；
-	 * - 冗余基础牌再轻微加成。
-	 *
-	 * 调整总体有限（正常范围约 -3~+2.5），避免覆盖宿主技能自身 ai。
-	 */
-	let adj = clamp((50 - keep) / 20, -2.4, 1.5);
-	if (hasValue) adj += clamp((5 - value) * 0.12, -0.6, 0.6);
-	adj += _duplicateAdjustment(cardId, me);
+	let scarcity = 1;
+	if (handSize <= 1) scarcity = 1.6;
+	else if (handSize <= 2) scarcity = 1.4;
+	else if (handSize <= 4) scarcity = 1.15;
+	else if (handSize >= 7) scarcity = 0.85;
 
-	if (veto.veto) {
-		/* 不是绝对 -Infinity：若宿主硬性要求必须选，仍允许其在所有负分候选中选择。
-		 * 但足够强地把保命牌排到最后。 */
-		adj = Math.min(adj, -6);
+	let survival = 1;
+	if (Number.isFinite(hp)) {
+		const ratio = hp / maxHp;
+		if (ratio <= 0.35) survival = 1.2;
+		else if (ratio <= 0.6) survival = 1.1;
 	}
+
+	const opportunityCost = hasValue ? Math.max(0, value) * 0.07 * scarcity * survival : 0;
+	const duplicateRelief = Math.min(0.32, Math.max(0, duplicates - 1) * 0.10);
+	const negativeRelief = hasValue && value < 0 ? Math.min(0.25, Math.abs(value) * 0.05) : 0;
+	const adjustment = clamp(-opportunityCost + duplicateRelief + negativeRelief, -1.0, 0.35);
 
 	return {
 		semantic,
-		adjustment: clamp(adj, -6, 2.5),
-		keepScore: keep,
-		veto: !!veto.veto,
-		reason: veto.veto
-			? ('成本选牌：强保留 ' + cardId + '（' + keep + '）')
-			: ('成本选牌：保留值 ' + keep + '，低价值/冗余优先作为成本'),
+		adjustment: Math.round(adjustment * 1000) / 1000,
+		opportunityCost: Math.round(opportunityCost * 1000) / 1000,
+		duplicateRelief: Math.round(duplicateRelief * 1000) / 1000,
+		veto: false,
+		reason: '成本选牌：价值成本' + Math.round(opportunityCost * 100) / 100
+			+ '，重复缓冲' + Math.round(duplicateRelief * 100) / 100
+			+ '，手牌' + handSize,
 	};
 }
