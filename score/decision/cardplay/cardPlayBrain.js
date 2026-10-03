@@ -52,7 +52,7 @@ export function equipKind(id) {
 export function vetoCard(id, ctx, tgt) {
 	ctx = ctx || {};
 	const cat = classifyCard(id);
-	const t = tgt || bestTargetOf(ctx);
+	const t = ctx.targetLocked === true ? (tgt || null) : (tgt || bestTargetOf(ctx));
 	const isAlly = t ? !!t.isAlly : null;
 
 	/* ① 延时/控制打在队友身上 → 否决（解判定除外，由 target 解） */
@@ -84,7 +84,7 @@ export function vetoCard(id, ctx, tgt) {
 export function basePriority(id, ctx, targetOverride) {
 	ctx = ctx || {};
 	const cat = classifyCard(id);
-	const t = targetOverride || bestTargetOf(ctx);
+	const t = ctx.targetLocked === true ? (targetOverride || null) : (targetOverride || bestTargetOf(ctx));
 	switch (cat) {
 		case 'gain': {
 			if (id === 'wuzhong' || id === 'wugu') return 100;                 // 纯收益神牌
@@ -251,7 +251,7 @@ function goodControlTarget(ctx, targetOverride) {
 	return (t.handCount >= 4) || !!t.nextToAct || (t.threat || 0) >= 2;
 }
 function canKill(ctx, targetOverride) {
-	const targets = targetOverride ? [targetOverride] : (ctx.targets || []);
+	const targets = targetOverride ? [targetOverride] : (ctx.targetLocked === true ? [] : (ctx.targets || []));
 	for (let i = 0; i < targets.length; i++) {
 		const t = targets[i];
 		if (!t || t.isAlly) continue;
