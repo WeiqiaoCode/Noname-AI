@@ -3413,6 +3413,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const sp43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js')).href);
     const eng43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'engine', 'engine.js')).href);
     const ao43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js')).href);
+    const host43 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'host.js')).href);
 
     /* A1. 增益作用于 target → support/ally，不再误判“资敌”。 */
     const supportSrc43 = `
@@ -3456,7 +3457,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     /* B. 模拟“炜烈类”未知技能：不写 ID 特判，源码扫描自动形成 ally/support profile。 */
     const SID43 = 'kernel_support_fixture_alpha';
-    hostStub.lib.skill[SID43] = {
+    host43.lib.skill[SID43] = {
         enable: 'phaseUse',
         filterTarget: (card, player, target) => target.isDamaged(),
         filterCard: true,
@@ -3466,8 +3467,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             if (target.isDamaged()) await target.draw(2);
         },
     };
-    hostStub.lib.translate[SID43] = 'KernelSupportFixture';
-    hostStub.lib.translate[SID43 + '_info'] = '弃置一张牌，令一名已受伤角色回复体力，若仍受伤则摸牌。';
+    host43.lib.translate[SID43] = 'KernelSupportFixture';
+    host43.lib.translate[SID43 + '_info'] = '弃置一张牌，令一名已受伤角色回复体力，若仍受伤则摸牌。';
     sk43.scanReset();
     const tags43 = sk43.skillTagsOf(SID43);
     const prof43 = sk43.skillProfileOf(SID43);
@@ -3498,7 +3499,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     /* 依赖所选卡牌的 filterTarget：预选阶段不能确证非法 → fail-open。 */
     const CARD_DEP43 = 'kernel_carddep_fixture_alpha';
-    hostStub.lib.skill[CARD_DEP43] = {
+    host43.lib.skill[CARD_DEP43] = {
         enable: 'phaseUse',
         filterCard: true,
         filterTarget: function (card, player, target) { return !!card && target.isDamaged(); },
@@ -3522,7 +3523,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 support 技能只有敌方 → 不推荐资敌目标');
 
     /* E. 宿主桥：推荐目标获得强正分；技能随后 .set('ai', ...) 也不会覆盖桥。 */
-    hostStub.game.players = [me43, allyDamaged43, enemyDamaged43];
+    host43.game.players = [me43, allyDamaged43, enemyDamaged43];
     const ba43 = {
         type: 'skill', id: SID43, targetObj: allyDamaged43,
         target: 'allyDamaged43', purpose: 'support', rule: 'defense', score: 8,
