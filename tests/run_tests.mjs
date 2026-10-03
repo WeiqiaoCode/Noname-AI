@@ -3891,6 +3891,38 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(fixed1Evt44.ai, fixed1Native44,
         '10.44 engine计划2目标但当前事件只选1个 → 不把上一阶段整组误桥过来');
 
+    const baSingle44 = {
+        type: 'skill', id: 'stage2_single_44',
+        targetObj: a1_44, target: 'a1_44',
+        skillTargetResolved: true,
+        skillTargetSingle: true,
+        purpose: 'support', rule: 'aux', score: 8,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+    };
+    const singleIntoFixed2Native44 = function () { return 4; };
+    const singleIntoFixed2Evt44 = {
+        ai: singleIntoFixed2Native44,
+        selectTarget: [2, 2],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(singleIntoFixed2Evt44, me44, 'stage2_single_44', 'ai', baSingle44);
+    eq(singleIntoFixed2Evt44.ai, singleIntoFixed2Native44,
+        '10.44 单目标计划遇到当前固定2目标事件 → stage mismatch，完全 fail-open');
+
+    const singleSelectedNative44 = function () { return 5; };
+    const singleSelectedEvt44 = {
+        ai: singleSelectedNative44,
+        selectTarget: [1, 1],
+        filterTarget: function (_card, _player, target) {
+            return !ui.selected.buttons.length || target === a1_44;
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(singleSelectedEvt44, me44, 'stage2_single_44', 'ai', baSingle44);
+    eq(singleSelectedEvt44.ai, singleSelectedNative44,
+        '10.44 单目标 filterTarget 依赖已选 button/card 等实时选择态 → 也必须 fail-open');
+
     const selectedDepNative44 = function () { return 4; };
     const selectedDepEvt44 = {
         ai: selectedDepNative44,
