@@ -18,6 +18,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
+import { skillProfileOf } from '../skills/skills.js';
 import { cfg } from '../../foundation/config/util.js';
 import { isAllyOf, dispositionOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 
@@ -358,6 +359,51 @@ function _hookSkillTargetChoice() {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
+/* ================= ★ 原生 skill effect 方向守卫 =================
+ * 与 bestAction 无关：当无名杀原生 AI 自己评估某个主动技能目标时，也统一消费
+ * Skill Decision Kernel 的 target intent，防止“内部认为不该资敌，但原生技能 AI 绕过”。
+ */
+
+export function skillTargetDirectionAdjustment(intent, confidence, relation) {
+	const c = Number(confidence || 0);
+	if (c < 0.55) return 0;
+	if (intent === 'support') {
+		if (relation < 0) return -12;
+		if (relation > 0) return 1.5;
+		return -1;
+	}
+	if (intent === 'offense') {
+		if (relation > 0) return -12;
+		if (relation < 0) return 1.5;
+		return -1;
+	}
+	return 0;
+}
+
+function _skillIdFromEffectSubject(subject) {
+	try {
+		if (typeof subject !== 'string' || !subject) return null;
+		const sk = lib.skill && lib.skill[subject];
+		return sk && typeof sk === 'object' ? subject : null;
+	} catch (e) { return null; }
+}
+
+export function skillDirectionEffectModifier(subject, player, target) {
+	try {
+		const sid = _skillIdFromEffectSubject(subject);
+		if (!sid || !player || !target) return null;
+		const prof = skillProfileOf(sid);
+		if (!prof || !prof.targets) return null;
+		const intent = prof.targets.intent;
+		const confidence = Number(prof.targets.confidence || 0);
+		if (intent !== 'support' && intent !== 'offense') return null;
+		const rel = dispositionOf(player, target);
+		const delta = skillTargetDirectionAdjustment(intent, confidence, rel);
+		if (!delta) return null;
+		return [1, delta];
+	} catch (e) { return null; }
+}
+
 /* ---------- 安装 ---------- */
 export function installAIOverride() {
 	if (_installed || lib.skill[SKILL_ID]) return;
@@ -425,6 +471,12 @@ export function installAIOverride() {
 					player(card, player, target) {
 						try {
 							if (get.itemtype(target) !== 'player') return;
+
+							/* ★ 技能方向先于 bestAction：原生技能 AI 评估也必须遵守统一敌友语义。
+							 * 这样即使该技能被 engine 降权、没有成为 bestAction，也不能绕过去资敌。 */
+							const skillDir = skillDirectionEffectModifier(card, player, target);
+							if (skillDir) return skillDir;
+
 							const ba = _getBA(player);
 							if (!ba) return;
 
