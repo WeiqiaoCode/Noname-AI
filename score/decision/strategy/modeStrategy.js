@@ -14,6 +14,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { identityOfFor, beliefOfFor, confidenceOfFor, isLikelyEnemy } from '../../perception/observer/identity.js';
+import { spyAttackBonus } from './identityStance.js';
 // Author: Feisheng Original | License: GPL-3.0
 
 /* ===== 工具函数 ===== */
@@ -221,28 +222,10 @@ const IDENTITY_STRATEGY = Object.assign({}, DEFAULT_STRATEGY, {
                 if (isDmg && tgt && tgtId === 'zhong' && tgtConf >= 0.45) bonus += 0.4;
             }
 
-            /* ===== 内奸策略：Identity 固定，Strategic Stance 动态 ===== */
-            if (myId === 'nei') {
-                if (isDmg && tgt && tgt === game.zhu) {
-                    const aliveCount = (game.players || []).filter(isAlive).length;
-                    if (aliveCount > 2) bonus -= 1.0;
-                    else bonus += 0.2;
-                }
-
-                if (isDmg && tgt) {
-                    /* 不读取任何人的隐藏 identity；用内奸自己视角下的合法 posterior 估计阵营实力。 */
-                    let loyalMass = 0, rebelMass = 0;
-                    for (const p of (game.players || [])) {
-                        if (!p || !isAlive(p) || p === me) continue;
-                        if (p === game.zhu) { loyalMass += 1; continue; }
-                        const pb = beliefOfFor(me, p);
-                        if (!pb) continue;
-                        loyalMass += pb.zhong || 0;
-                        rebelMass += pb.fan || 0;
-                    }
-                    if (rebelMass > loyalMass + 1 && tgtId === 'fan') bonus += 0.3;
-                    if (loyalMass > rebelMass + 1 && tgtId === 'zhong') bonus += 0.3;
-                }
+            /* ===== 内奸策略：Identity 固定，Strategic Stance 动态 =====
+             * 强弱判断与目标立场统一由 identityStance.js 给出；这里不再维护第二套阈值。 */
+            if (myId === 'nei' && isDmg && tgt) {
+                bonus += spyAttackBonus(me, tgt);
             }
         } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
         return bonus;
