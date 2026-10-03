@@ -3794,6 +3794,33 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(variable44.targetRangeResolved, false,
         '10.44 可变数量保留宿主追加目标的决策权');
 
+    const zeroOptional44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [0, 3],
+    }));
+    eq(zeroOptional44.targetIndex, -1,
+        '10.44 可选 [0,3] → 通用层不擅自至少选择1个目标');
+    eq(zeroOptional44.targetIndexes.length, 0,
+        '10.44 可选 [0,3] → 不预生成目标组合');
+    eq(zeroOptional44.targetRangeResolved, false,
+        '10.44 可选 [0,3] → 0还是更多目标的数量决策交回宿主');
+    eq(zeroOptional44.targetDecisionResolved, false,
+        '10.44 可选 [0,3] → 目标决策本身标记 unresolved');
+    eq(zeroOptional44.targetRequired, false,
+        '10.44 可选 [0,3] → 不得按缺少必选目标触发 veto-target');
+
+    const zeroFixed44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [0, 0],
+        targets: [],
+    }));
+    eq(zeroFixed44.targetIndex, -1,
+        '10.44 固定 [0,0] → 无目标是合法最终决策');
+    eq(zeroFixed44.targetRangeResolved, true,
+        '10.44 固定 [0,0] → 数量契约已完全解析');
+    eq(zeroFixed44.targetDecisionResolved, true,
+        '10.44 固定 [0,0] → 目标决策已完成，不是未知状态');
+    eq(zeroFixed44.targetRequired, false,
+        '10.44 固定 [0,0] → 明确无需外部目标');
+
     const mixedProf44 = Object.assign({}, profMulti44, {
         targets: { intent: 'mixed', confidence: 0.7, inferred: true },
     });
@@ -4146,6 +4173,16 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(brainSrc44.indexOf('ctx.selectTargetRange') >= 0
         && brainSrc44.indexOf('targetRangeResolved') >= 0,
         '10.44 多目标 planner 消费宿主数量契约');
+    ok(brainSrc44.indexOf('targetDecisionResolved') >= 0
+        && brainSrc44.indexOf('targetRequired') >= 0
+        && brainSrc44.indexOf('可选零目标区间') >= 0,
+        '10.44 [0,N] 以显式 provenance 表示“可合法不选目标”');
+    ok(eng44._skillTargetRange && true,
+        '10.44 engine 保留 selectTarget range 解析入口');
+    const engineSrc44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    ok(engineSrc44.indexOf('d.targetRequired !== false') >= 0
+        && engineSrc44.indexOf('d.targetDecisionResolved !== false') >= 0,
+        '10.44 veto-target 只针对“目标必选且决策已解析”的缺目标情况');
 }
 
 /* ---------- 汇总 ---------- */
