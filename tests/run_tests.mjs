@@ -1105,8 +1105,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(engSrc.indexOf('picked.length >= 6') < 0, true, '10.17 旧「最多连 6 个敌人」分支已删除');
     eq(engSrc.indexOf('cands.sort(function (a, b) { return b.ts - a.ts; })') < 0, true,
         '10.17 旧「tsMap 降序选连目标」已删除');
-    ok(engSrc.indexOf('_pickCardTargetByPurpose(me, id, bestT || null)') >= 0,
-        '10.17 其他牌的 target 选取路径保持不变');
+    ok(engSrc.indexOf('_resolveCardCandidateTarget(me, id, cardDecisionCtx, bestT || null)') >= 0,
+        '10.17 其他牌在评分前走统一候选目标解析，铁索仍由专用 evaluator 独立处理');
 
     /* ---- 源码守卫：recast 显式表达 + 消费 evaluator 目标 ---- */
     ok(engSrc.indexOf('best.target') >= 0, '10.17 _finalResult 消费 best.target');
@@ -2355,7 +2355,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 装备动作不错误携带敌方 player target');
 
     const eng35 = fs35.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
-    ok(/if \(best && best\.type === 'equip'\) \{\s*_finalTarget = null;/.test(eng35),
+    ok(/if \(best && best\.type === 'equip'\)\s*_finalTarget = null;/.test(eng35),
         '10.35 engine 最终结果中 equip.target 强制为 null');
 }
 
@@ -3192,8 +3192,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.41 engine 不再按乐/兵具体牌名记录 commitment');
     ok(eng41.indexOf('reconcileStrategicTransitions(_stMe') >= 0,
         '10.41 每次 bestAction 前先按真实状态 reconcile pending');
-    ok(eng41.indexOf('const tp = evaluateActionTransitionPenalty(me, bestT, id') >= 0,
-        '10.41 候选统一进入通用 transition evaluator');
+    ok(eng41.indexOf('const tp = evaluateActionTransitionPenalty(me, cardTarget, id') >= 0,
+        '10.41 transition evaluator 使用候选自身绑定目标，而非全局 bestT');
     ok(tssSrc41.indexOf("operation === 'remove-state'") >= 0 &&
        tssSrc41.indexOf("operation === 'create-state'") >= 0,
         '10.41 ledger 同时表达 CREATE 与 confirmed REMOVE');
