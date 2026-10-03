@@ -3467,7 +3467,6 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             if (target.isDamaged()) await target.draw(2);
         },
     };
-    host43.lib.translate[SID43] = 'KernelSupportFixture';
     host43.lib.translate[SID43 + '_info'] = '弃置一张牌，令一名已受伤角色回复体力，若仍受伤则摸牌。';
     sk43.scanReset();
     const tags43 = sk43.skillTagsOf(SID43);
