@@ -304,6 +304,37 @@ export function eventAcceptsSkillTarget(next, player, target) {
 	} catch (e) { return false; }
 }
 
+function _eventFixedTargetCount(next) {
+	try {
+		if (!next) return null;
+		const st = next.selectTarget;
+		if (typeof st === 'number') return st >= 0 ? st : null;
+		if (Array.isArray(st) && st.length >= 2) {
+			const a = Number(st[0]), b = Number(st[1]);
+			if (Number.isFinite(a) && Number.isFinite(b) && a >= 0 && a === b) return a;
+			return null;
+		}
+		if (st == null && typeof next.filterTarget === 'function') return 1;
+		return null;
+	} catch (e) { return null; }
+}
+
+export function eventAcceptsSkillTargetPlan(next, player, decision) {
+	try {
+		if (!decision || !decision.target) return false;
+		const planned = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
+		if (!eventAcceptsSkillTarget(next, player, planned[0])) return false;
+		if (planned.length <= 1) return true;
+		if (decision.targetRangeResolved !== true) return false;
+		const fixed = _eventFixedTargetCount(next);
+		if (fixed !== planned.length) return false;
+		for (const t of planned) {
+			if (!eventAcceptsSkillTarget(next, player, t)) return false;
+		}
+		return true;
+	} catch (e) { return false; }
+}
+
 export function bridgeSkillTargetChoiceOnce(next, player, skillContext, field, baOverride) {
 	try {
 		if (!skillContext || !skillContext.id) return next;
@@ -327,7 +358,7 @@ export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 		if (!next || !player || !sid || !field) return next;
 		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
 		if (!decision) return next;
-		if (!eventAcceptsSkillTarget(next, player, decision.target)) return next;
+		if (!eventAcceptsSkillTargetPlan(next, player, decision)) return next;
 		if (typeof next[field] === 'function') next[field] = wrapSkillTargetAI(next[field], player, decision);
 
 		/* 很多本体技能是 chooseTarget(...).set('ai', fn)：
@@ -437,42 +468,30 @@ export function bridgeSkillButtonEvent(next, player, sid, field, baOverride) {
 	} catch (e) { return next; }
 }
 
-function _skillCommitDecision(player, sid, baOverride) {
+function _skillExplicitControlDecision(player, sid, baOverride) {
 	try {
 		const ba = baOverride || _getBA(player);
 		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
 		if (ba.rule === 'veto' || ba.rule === 'veto-target') return null;
-		const score = Number(ba.score || 0);
-		if (!Number.isFinite(score) || score < 0) return null;
-		return ba;
-	} catch (e) { return null; }
-}
-
-function _singleNonCancelControl(next) {
-	try {
-		const controls = Array.isArray(next && next.controls) ? next.controls : [];
-		const live = controls.filter(function (x) { return x !== 'cancel2'; });
-		if (live.length === 1) return live[0];
-		if (live.length === 0 && Array.isArray(next && next.choiceList) && next.choiceList.length === 1) return '__choice0__';
-		return null;
+		/* chooseControl 的语义高度技能特化。只有 planner 明确产出 controlChoice
+		 * 才允许桥接；“唯一非取消项”本身不代表继续子效果一定更优。 */
+		if (ba.controlChoice === undefined || ba.controlChoice === null) return null;
+		return ba.controlChoice;
 	} catch (e) { return null; }
 }
 
 export function bridgeSkillControlEvent(next, player, sid, baOverride) {
 	try {
 		if (!next || !player || !sid || next.processAI) return next;
-		if (!_skillCommitDecision(player, sid, baOverride)) return next;
-		if (_singleNonCancelControl(next) === null) return next;
+		const planned = _skillExplicitControlDecision(player, sid, baOverride);
+		if (planned === null) return next;
 		const wrap = function (original) {
 			return function () {
 				try {
 					const controls = Array.isArray(next.controls) ? next.controls : [];
-					const live = controls.filter(function (x) { return x !== 'cancel2'; });
-					if (live.length === 1) {
-						const idx = controls.indexOf(live[0]);
-						if (idx >= 0) return idx;
-					}
-					if (live.length === 0 && Array.isArray(next.choiceList) && next.choiceList.length === 1) return 0;
+					if (typeof planned === 'number' && planned >= 0 && planned < controls.length) return planned;
+					const idx = controls.indexOf(planned);
+					if (idx >= 0) return idx;
 				} catch (e) {}
 				try { return typeof original === 'function' ? original.apply(this, arguments) : 0; } catch (e) { return 0; }
 			};
