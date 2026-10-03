@@ -4869,7 +4869,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(tierSorted49[0], forced49, '10.49 forced tier 高于 critical/normal，且无需伪造高 utility');
     eq(forced49.score, -2, '10.49 forced priority 不污染原始 utility');
 
-    const eng49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng49 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
     eq(eng49.indexOf('a.score += 999') < 0, true, '10.49 engine 删除 +999 灌爆收益');
     eq(/Math\.min\(a\.score,\s*-(?:12|8|6)\)/.test(eng49), false,
         '10.49 card/skill/equip/judge veto 不再伪造成负分');
@@ -4882,7 +4882,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
        eng49.indexOf('deepThinkCritic(me, eligibleActs') >= 0,
         '10.49 Champion/DeepThink 只消费 eligible candidates');
 
-    const planner49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    const planner49 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
     eq(/score:\s*100\s*\+\s*totalDmg/.test(planner49), false,
         '10.49 Planner 击杀序列不再写入 100+ fake utility');
     ok(planner49.indexOf('killRank:') >= 0 &&
@@ -4891,7 +4891,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(planner49.indexOf('samePolicyTier') >= 0,
         '10.49 普通 Planner 改判不得跨 policy tier');
 
-    const guard49 = fs49.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    const guard49 = fs50.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
     eq(/killAvailable\.score\s*>\s*action\.score\s*\+\s*5/.test(guard49), false,
         '10.49 Guard 删除旧固定 +5 击杀分差');
     ok(guard49.indexOf("priorityTier === PRIORITY_TIER.FORCED") >= 0,
@@ -4899,17 +4899,17 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(guard49.indexOf('isCandidateEligible(c)') >= 0,
         '10.49 Guard fallback 不会重新选中 veto candidate');
 
-    const champ49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
-    const deep49 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+    const champ49 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
+    const deep49 = fs50.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
     ok(champ49.indexOf('candidatePriorityRank(a) === bestTier') >= 0,
         '10.49 Champion 只在当前 policy tier 内复核');
     ok(deep49.indexOf('candidatePriorityRank(a) === bestTier') >= 0,
         '10.49 DeepThink 只在当前 policy tier 内复核');
 
-    const replay49 = fs49.readFileSync(join(_pkg, 'score', 'view', 'dashboard', 'replayPanel.js'), 'utf8');
+    const replay49 = fs50.readFileSync(join(_pkg, 'score', 'view', 'dashboard', 'replayPanel.js'), 'utf8');
     ok(replay49.indexOf('真实收益评分：') >= 0 && replay49.indexOf('策略优先级：') >= 0,
         '10.49 对局回放分别显示真实收益与策略优先级');
-    const narr49 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'explain', 'decisionNarrator.js'), 'utf8');
+    const narr49 = fs50.readFileSync(join(_pkg, 'score', 'cognition', 'explain', 'decisionNarrator.js'), 'utf8');
     ok(narr49.indexOf('真实收益评分 ') >= 0 && narr49.indexOf('策略优先级 ') >= 0,
         '10.49 决策解释器使用玩家可读的 utility / policy 说明');
 }
@@ -4917,6 +4917,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
 /* ================= 10.50 Policy band / forced-kill provenance hardening ================= */
 {
+    const fs50 = await import('node:fs');
     const ac50 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'actionCandidate.js')).href);
 
     const n1 = ac50.makeActionCandidate({ type:'card', id:'sha', target:'p1', score:5 });
@@ -4945,7 +4946,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(ac50.sameCandidatePolicyBand(critical99, critical99b), true,
         '10.50 critical 同 tier+priorityValue 可在 band 内复核');
 
-    const planner50 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    const planner50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
     ok(planner50.indexOf('sameCandidateAction(c, plannedFirst)') >= 0 &&
        planner50.indexOf('if (!firstCandidate) continue;') >= 0,
         '10.50 Planner forced/critical 只能来自现存且目标精确匹配的 eligible candidate');
@@ -4956,14 +4957,14 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(planner50.indexOf('compareActionCandidates(proposed, best)') >= 0,
         '10.50 Planner critical 提升仍服从统一 policy comparator');
 
-    const champ50 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
-    const deep50 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+    const champ50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
+    const deep50 = fs50.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
     ok(champ50.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
         '10.50 Champion 不得跨 critical/forced priorityValue 改判');
     ok(deep50.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
         '10.50 DeepThink 不得跨 critical/forced priorityValue 改判');
 
-    const guard50 = fs49.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    const guard50 = fs50.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
     ok(guard50.indexOf('sameCandidateAction(action, context.killAvailable)') >= 0,
         '10.50 Guard forced-kill 使用精确候选身份而非“任意攻击牌”放行');
     ok(guard50.indexOf('已有 Planner 严格验证的 forced-kill') <
@@ -4972,7 +4973,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(guard50.indexOf("const isUtility = ['wuzhong', 'tao', 'wuxie', 'shan', 'jiu']") >= 0, false,
         '10.50 forced-kill 不再允许 unrelated utility 例外绕过');
 
-    const eng50 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
     ok(eng50.indexOf('isCandidateEligible(a) && sameCandidateAction(a, refined)') >= 0,
         '10.50 Engine 接回 Planner 结果时使用严格 action identity');
     eq(eng50.indexOf('best.target = _a2.target') >= 0, false,
