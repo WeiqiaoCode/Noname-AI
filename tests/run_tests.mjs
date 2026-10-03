@@ -5035,8 +5035,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.51 retentionPressure 单一方向：正值保留，负值释放资源');
 
     const eng51 = fs51.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
-    eq(eng51.indexOf('handKeepBias') >= 0, false,
-        '10.51 engine 删除第二套 handKeepBias，避免双重且反向调分');
+    eq(/let\s+handKeepBias\s*=/.test(eng51), false,
+        '10.51 engine 删除第二套 handKeepBias 状态变量');
+    eq(/score\s*\*=\s*\(1\s*[+-]\s*handKeepBias/.test(eng51), false,
+        '10.51 engine 删除基于 handKeepBias 的第二套乘法调分');
     ok(eng51.indexOf("keepBonus(me, { id: id, card: { name: id }, stage: stageLabel })") >= 0,
         '10.51 engine 将阶段上下文交给统一 retention 入口');
     eq(eng51.indexOf("getDecisionBonus('keep', id)") >= 0, false,
