@@ -3738,7 +3738,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
  * A. 多目标技能遵守宿主 selectTarget 数量，不再“全阵营全选”；
  * B. 动态数量 / mixed 组合 fail-open；
  * C. chooseCardTarget = 目标计划 + 低机会成本牌轻量 tie-break；
- * D. chooseButton 仅在 button.link 真的是推荐玩家时桥接；
+ * D. chooseButton 只有 planner 明确给出 buttonChoice 才接管；
  * E. chooseControl 只有 planner 明确给出 controlChoice 才接管；
  * F. chooseButtonTarget/chooseControl 新 hook 必须可卸载。
  */
@@ -3862,6 +3862,19 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(fixed1Evt44.ai, fixed1Native44,
         '10.44 engine计划2目标但当前事件只选1个 → 不把上一阶段整组误桥过来');
 
+    const selectedDepNative44 = function () { return 4; };
+    const selectedDepEvt44 = {
+        ai: selectedDepNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return !ui.selected.targets.length || target !== ui.selected.targets[0];
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(selectedDepEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(selectedDepEvt44.ai, selectedDepNative44,
+        '10.44 多目标 filterTarget 依赖 ui.selected → 组合合法性不可静态证明，完全原生');
+
     /* C. chooseCardTarget card half：原生同分时低价值牌略优，但只做很小 tie-break。 */
     host44.get.owner = function () { return me44; };
     host44.get.value = function (card) { return card && card.v; };
@@ -3870,6 +3883,28 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const high44 = costAI44({ name: 'high44', v: 8 });
     ok(low44 > high44, '10.44 选牌成本 tie-break：低价值牌优先');
     ok(Math.abs(low44 - high44) <= 0.4, '10.44 选牌桥偏置有限，不覆盖技能原生 ai1');
+
+    const jointEvt44 = {
+        ai1: function () { return 5; },
+        ai2: function () { return 0; },
+        selectTarget: [2, 2],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(jointEvt44, me44, 'stage2_skill_44', 'ai2', baMulti44);
+    ao44.bridgeSkillCardCostEvent(jointEvt44, me44, 'stage2_skill_44', 'ai1', baMulti44);
+    ok(jointEvt44.ai1({ name: 'jointLow44', v: 1 }) > jointEvt44.ai1({ name: 'jointHigh44', v: 8 }),
+        '10.44 同一 chooseCardTarget 目标计划已确认 → 牌成本 tie-break 生效');
+
+    const detachedNative44 = function () { return 5; };
+    const detachedEvt44 = {
+        ai1: detachedNative44,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillCardCostEvent(detachedEvt44, me44, 'stage2_skill_44', 'ai1', baMulti44);
+    eq(detachedEvt44.ai1, detachedNative44,
+        '10.44 没有同事件目标桥 provenance → card half 完全 fail-open');
 
     const cardDepNative44 = function () { return 3; };
     const cardDepEvt44 = {
@@ -3882,11 +3917,27 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(cardDepEvt44.ai1, cardDepNative44,
         '10.44 target 合法性依赖所选 card → card half 完全 fail-open');
 
-    /* D. chooseButton：只有 link 本身就是推荐玩家才加分；普通卡牌/控制按钮不猜含义。 */
-    const buttonAI44 = ao44.wrapSkillButtonAI(function () { return 2; }, decMulti44);
-    ok(buttonAI44({ link: a2_44 }) >= 12, '10.44 玩家按钮命中推荐多目标 → 加分');
-    eq(buttonAI44({ link: { name: 'sha' } }), 2,
-        '10.44 非玩家 button.link → 保留原生评分');
+    /* D. chooseButton：玩家 link 也不猜语义；只有 planner 明确 buttonChoice 才接管。 */
+    const nativeBtn44 = function () { return 2; };
+    const buttonNoPlanEvt44 = {
+        ai: nativeBtn44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonEvent(buttonNoPlanEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(buttonNoPlanEvt44.ai, nativeBtn44,
+        '10.44 button.link 即使可能是玩家，无显式 buttonChoice 仍完全原生');
+
+    const buttonPlanEvt44 = {
+        ai: function () { return 2; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonEvent(buttonPlanEvt44, me44, 'stage2_skill_44', 'ai', Object.assign({}, baMulti44, {
+        buttonChoice: a2_44,
+    }));
+    ok(buttonPlanEvt44.ai({ link: a2_44 }) >= 12,
+        '10.44 planner 显式 buttonChoice=玩家 → 对应按钮加分');
+    eq(buttonPlanEvt44.ai({ link: { name: 'sha' } }), 2,
+        '10.44 显式玩家 buttonChoice 不影响其它非匹配按钮');
 
     /* E. chooseControl：没有显式 controlChoice 一律原生；只有 planner 明确给出时才接管。 */
     const nativeCtl44 = function () { return 2; };
@@ -3929,8 +3980,14 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         && src44.indexOf('proto.chooseControl = function') >= 0,
         '10.44 stage2 hook 覆盖 chooseButtonTarget / chooseButton / chooseControl');
     ok(src44.indexOf('eventAcceptsSkillTargetPlan(next, player, decision)') >= 0
-        && src44.indexOf('_eventFixedTargetCount(next)') >= 0,
-        '10.44 多目标桥要求当前宿主事件具有匹配的固定目标数');
+        && src44.indexOf('_eventFixedTargetCount(next)') >= 0
+        && src44.indexOf('_eventFilterDependsOnSelection') >= 0,
+        '10.44 多目标桥要求匹配固定目标数，且 selection-dependent 组合 fail-open');
+    ok(src44.indexOf('ba.buttonChoice === undefined || ba.buttonChoice === null') >= 0
+        && src44.indexOf('ba.controlChoice === undefined || ba.controlChoice === null') >= 0,
+        '10.44 button/control 均要求 planner 显式语义选择');
+    ok(src44.indexOf('const attached = next.__djscSkillTargetDecision') >= 0,
+        '10.44 card half 必须绑定同事件已确认的 target plan');
     ok(src44.indexOf('_protoBackup.chooseButtonTarget') >= 0
         && src44.indexOf('_protoBackup.chooseButton') >= 0
         && src44.indexOf('_protoBackup.chooseControl') >= 0,
