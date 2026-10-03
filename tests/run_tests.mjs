@@ -4126,6 +4126,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ao44.uninstallAIOverride();
     const protoLife44 = host44.lib.element.Player.prototype;
     const savedLife44 = {
+        chooseCard: protoLife44.chooseCard,
         chooseButton: protoLife44.chooseButton,
         addSkill: protoLife44.addSkill,
         getSkills: protoLife44.getSkills,
@@ -4134,6 +4135,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         libSkill: host44.lib.skill,
         checkHooked: host44.game.__djsc_check_hooked,
     };
+    const nativeChooseCardLife44 = function () { return { ai: function () { return 0; } }; };
     const nativeChooseButtonLife44 = function () { return { ai: function () { return 0; } }; };
     const nativeAddSkillLife44 = function () { return 'native-add'; };
     const nativeGetSkillsLife44 = function () { return []; };
@@ -4142,6 +4144,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     /* Node 的通用 Proxy 宿主桩会在读取 lib.skill[id] 时自动生成 truthy 函数，
      * 会触发 installAIOverride 的“已存在”守卫；本段改用普通对象模拟真实 lib.skill。 */
     host44.lib.skill = {};
+    protoLife44.chooseCard = nativeChooseCardLife44;
     protoLife44.chooseButton = nativeChooseButtonLife44;
     protoLife44.addSkill = nativeAddSkillLife44;
     protoLife44.getSkills = nativeGetSkillsLife44;
@@ -4197,6 +4200,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ao44.uninstallAIOverride();
 
     /* 恢复本段测试前宿主状态。 */
+    protoLife44.chooseCard = savedLife44.chooseCard;
     protoLife44.chooseButton = savedLife44.chooseButton;
     protoLife44.addSkill = savedLife44.addSkill;
     protoLife44.getSkills = savedLife44.getSkills;
@@ -4254,6 +4258,453 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(engineSrc44.indexOf('d.targetRequired !== false') >= 0
         && engineSrc44.indexOf('d.targetDecisionResolved !== false') >= 0,
         '10.44 veto-target 只针对“目标必选且决策已解析”的缺目标情况');
+}
+
+/* ================= 10.45 Skill Choice Transaction Stage 3 =================
+ * 目标：
+ * A. 同一技能的连续选择拥有稳定 transactionId + 单调 stageOrdinal；
+ * B. 新阶段开始时读取已完成上一阶段的宿主 result 摘要，形成 priorSelections；
+ * C. card/target/button/control 等阶段类型统一记录，但 button/control 不猜语义；
+ * D. 独立 chooseCard 只做低机会成本轻量 tie-break；
+ * E. transaction provenance 下 target bridge 按 stage 消费，允许同技能后续 target stage，
+ *    但每个 stage 不会重复消费上一阶段计划；
+ * F. chooseCard hook 纳入 generation-token 生命周期。
+ */
+{
+    const fs45 = await import('node:fs');
+    const tx45 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillChoiceTransaction.js')).href);
+    const ao45 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js')).href);
+    const host45 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'host.js')).href);
+
+    tx45._resetSkillChoiceTransactionSequenceForTests();
+
+    const me45 = { name: 'me45', name1: 'me45', playerid: 'me45' };
+    const a45 = { name: 'a45', name1: 'a45', playerid: 'a45' };
+    const b45 = { name: 'b45', name1: 'b45', playerid: 'b45' };
+
+    /* A/B. card -> target，且 target 阶段能看到上一阶段宿主 result。 */
+    const owner45a = {};
+    const ctx45a = { id: 'skill_tx_45a', event: owner45a };
+    const cardEvt45a = {};
+    const st0_45a = tx45.beginSkillChoiceStage(me45, ctx45a, 'card', cardEvt45a);
+    eq(st0_45a.ordinal, 0, '10.45 card→target：首阶段 ordinal=0');
+    eq(cardEvt45a.__djscSkillChoiceStage, st0_45a, '10.45 stage provenance 挂到宿主 choice event');
+    cardEvt45a.result = { bool: true, cards: [{ name: 'c45a' }] };
+    const targetEvt45a = {};
+    const st1_45a = tx45.beginSkillChoiceStage(me45, ctx45a, 'target', targetEvt45a);
+    eq(st1_45a.ordinal, 1, '10.45 card→target：第二阶段 ordinal=1');
+    eq(st1_45a.transactionId, st0_45a.transactionId, '10.45 card→target：同一 owner event 共用 transactionId');
+    eq(st1_45a.priorSelections.length, 1, '10.45 target 阶段携带上一阶段已完成 selection');
+    eq(st1_45a.priorSelections[0].choiceType, 'card', '10.45 priorSelections 保留 card 阶段类型');
+    eq(st1_45a.priorSelections[0].selection.cards.length, 1, '10.45 priorSelections 保留宿主已选牌摘要');
+
+    /* card -> 2 targets：目标数量来自宿主 result，不由 transaction 猜。 */
+    targetEvt45a.result = { bool: true, targets: [a45, b45] };
+    const ctlEvt45a = {};
+    const st2_45a = tx45.beginSkillChoiceStage(me45, ctx45a, 'control', ctlEvt45a);
+    eq(st2_45a.priorSelections.length, 2, '10.45 card→2targets→control：前两阶段均进入 provenance');
+    eq(st2_45a.priorSelections[1].selection.targets.length, 2,
+        '10.45 card→2targets：transaction 记录宿主实际选出的2目标，不预猜数量');
+
+    /* button -> target */
+    const owner45b = {};
+    const ctx45b = { id: 'skill_tx_45b', event: owner45b };
+    const btnEvt45b = {};
+    const b0_45 = tx45.beginSkillChoiceStage(me45, ctx45b, 'button', btnEvt45b);
+    btnEvt45b.result = { bool: true, links: ['mode45'] };
+    const b1_45 = tx45.beginSkillChoiceStage(me45, ctx45b, 'target', {});
+    eq(b1_45.ordinal, 1, '10.45 button→target：stage 顺序连续');
+    eq(b1_45.priorSelections[0].choiceType, 'button', '10.45 button→target：保留按钮阶段 provenance');
+
+    /* target -> control */
+    const owner45c = {};
+    const ctx45c = { id: 'skill_tx_45c', event: owner45c };
+    const tEvt45c = {};
+    tx45.beginSkillChoiceStage(me45, ctx45c, 'target', tEvt45c);
+    tEvt45c.result = { bool: true, targets: [a45] };
+    const c1_45 = tx45.beginSkillChoiceStage(me45, ctx45c, 'control', {});
+    eq(c1_45.priorSelections[0].choiceType, 'target', '10.45 target→control：control 可追溯上一目标阶段');
+
+    /* card -> target -> control 完整三段。 */
+    const owner45d = {};
+    const ctx45d = { id: 'skill_tx_45d', event: owner45d };
+    const d0e45 = {};
+    const d0_45 = tx45.beginSkillChoiceStage(me45, ctx45d, 'card', d0e45);
+    d0e45.result = { bool: true, cards: [{ name: 'dcard45' }] };
+    const d1e45 = {};
+    const d1_45 = tx45.beginSkillChoiceStage(me45, ctx45d, 'target', d1e45);
+    d1e45.result = { bool: true, targets: [a45] };
+    const d2_45 = tx45.beginSkillChoiceStage(me45, ctx45d, 'control', {});
+    eq(d0_45.ordinal, 0, '10.45 三段事务 card ordinal=0');
+    eq(d1_45.ordinal, 1, '10.45 三段事务 target ordinal=1');
+    eq(d2_45.ordinal, 2, '10.45 三段事务 control ordinal=2');
+    eq(d2_45.priorSelections.length, 2, '10.45 三段事务 control 看到前两段已完成选择');
+
+    const snap45 = tx45.skillChoiceTransactionSnapshot(ctx45d, me45);
+    eq(snap45.stages.length, 3, '10.45 transaction snapshot 完整保留3个阶段');
+    eq(snap45.stages[0].choiceType, 'card', '10.45 snapshot stage0=card');
+    eq(snap45.stages[1].choiceType, 'target', '10.45 snapshot stage1=target');
+    eq(snap45.stages[2].choiceType, 'control', '10.45 snapshot stage2=control');
+
+    /* transaction 隔离：不同 owner / 不同 skill / close 后重开都不能串状态。 */
+    const isoOwner1_45 = {};
+    const isoOwner2_45 = {};
+    const iso1_45 = tx45.beginSkillChoiceStage(me45, { id: 'iso_skill_45', event: isoOwner1_45 }, 'card', {});
+    const iso2_45 = tx45.beginSkillChoiceStage(me45, { id: 'iso_skill_45', event: isoOwner2_45 }, 'card', {});
+    ok(iso1_45.transactionId !== iso2_45.transactionId,
+        '10.45 相同 skillId 但不同 owner event → transaction 隔离');
+    const isoOtherSkill45 = tx45.beginSkillChoiceStage(me45, { id: 'iso_other_45', event: isoOwner1_45 }, 'target', {});
+    ok(isoOtherSkill45.transactionId !== iso1_45.transactionId,
+        '10.45 同 owner event 切换到另一个真实 skillId → 新 transaction，不串技能');
+    const closeCtx45 = { id: 'close_skill_45', event: {} };
+    const close0_45 = tx45.beginSkillChoiceStage(me45, closeCtx45, 'card', {});
+    ok(tx45.closeSkillChoiceTransaction(closeCtx45, me45), '10.45 transaction 可显式关闭');
+    const close1_45 = tx45.beginSkillChoiceStage(me45, closeCtx45, 'target', {});
+    ok(close1_45.transactionId !== close0_45.transactionId,
+        '10.45 已关闭 transaction 再进入新阶段 → 创建新 transaction');
+
+    /* bounded provenance：未知宿主 result 不原样传播。 */
+    const boundedOwner45 = {};
+    const boundedCtx45 = { id: 'bounded_skill_45', event: boundedOwner45 };
+    const boundedStage45 = tx45.beginSkillChoiceStage(me45, boundedCtx45, 'button', {});
+    const unknownResult45 = { privateInternalObject: { secret: 45 } };
+    ok(tx45.completeSkillChoiceStage(boundedStage45, unknownResult45),
+        '10.45 unknown result 仍可标记阶段完成');
+    eq(boundedStage45.selection, null,
+        '10.45 unknown result 不原样进入 transaction，只保留白名单 selection 摘要');
+
+    /* active skill context 规范化：子事件复制同一 skill/sourceSkill 时收敛到最外层 owner。 */
+    const oldLibSkill45 = host45.lib.skill;
+    host45.lib.skill = Object.assign({}, oldLibSkill45);
+    host45.lib.skill.ctx_same_45 = {};
+    host45.lib.skill.ctx_outer_45 = {};
+    host45.lib.skill.ctx_inner_45 = {};
+    const outerSame45 = { skill: 'ctx_same_45' };
+    const childSame45 = { sourceSkill: 'ctx_same_45', parent: outerSame45 };
+    const leafSame45 = { name: 'chooseTarget', parent: childSame45 };
+    const resolvedSame45 = ao45.resolveActiveSkillContext(me45, leafSame45);
+    eq(resolvedSame45.id, 'ctx_same_45',
+        '10.45 resolveActiveSkillContext 识别同一 skillId');
+    eq(resolvedSame45.event, outerSame45,
+        '10.45 同一 skillId 沿父链收敛到最外层 owner event');
+
+    const outerOther45 = { skill: 'ctx_outer_45' };
+    const innerOther45 = { skill: 'ctx_inner_45', parent: outerOther45 };
+    const resolvedOther45 = ao45.resolveActiveSkillContext(me45, innerOther45);
+    eq(resolvedOther45.id, 'ctx_inner_45',
+        '10.45 嵌套另一个真实技能时保留最近的 inner skill');
+    eq(resolvedOther45.event, innerOther45,
+        '10.45 遇到不同真实 skillId 即停止向外串 transaction');
+    host45.lib.skill = oldLibSkill45;
+
+    /* D. 独立 chooseCard：只做有界机会成本 tie-break。 */
+    host45.get.owner = function () { return me45; };
+    host45.get.value = function (card) { return card && card.v; };
+    const ownerCard45 = {};
+    const ctxCard45 = { id: 'skill_card_45', event: ownerCard45 };
+    const cardChoice45 = {
+        ai: function () { return 5; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    const cardStage45 = tx45.beginSkillChoiceStage(me45, ctxCard45, 'card', cardChoice45);
+    const baCard45 = { type: 'skill', id: 'skill_card_45', rule: 'aux', score: 8 };
+    ao45.bridgeSkillCardStageEvent(cardChoice45, me45, ctxCard45, 'ai', baCard45);
+    const low45 = cardChoice45.ai({ name: 'low45', v: 1 });
+    const high45 = cardChoice45.ai({ name: 'high45', v: 8 });
+    ok(low45 > high45, '10.45 独立 chooseCard：低价值牌在原生同分时略优');
+    ok(Math.abs(low45 - high45) <= 0.4, '10.45 独立 chooseCard：机会成本偏置保持有界');
+    eq(cardChoice45.__djscSkillCardStageDecision.transactionId, cardStage45.transactionId,
+        '10.45 chooseCard bridge 决策携带 transaction provenance');
+
+    const foreign45 = {};
+    host45.get.owner = function (card) { return card && card.owner; };
+    const ownedCardScore45 = cardChoice45.ai({ name: 'owned45', v: 2, owner: me45 });
+    const foreignCardScore45 = cardChoice45.ai({ name: 'foreign45', v: 2, owner: foreign45 });
+    ok(ownedCardScore45 < 5 && foreignCardScore45 === 5,
+        '10.45 独立 chooseCard 只对明确属于当前玩家的牌加机会成本；外部/未知所有者 fail-open');
+    host45.get.owner = function () { return me45; };
+
+    const noCardBridgeNative45 = function () { return 5; };
+    const noCardBridge45 = {
+        ai: noCardBridgeNative45,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    tx45.beginSkillChoiceStage(me45, ctxCard45, 'card', noCardBridge45);
+    ao45.bridgeSkillCardStageEvent(noCardBridge45, me45, ctxCard45, 'ai',
+        { type: 'skill', id: 'other_skill_45', rule: 'aux' });
+    eq(noCardBridge45.ai, noCardBridgeNative45,
+        '10.45 当前 bestAction 不是本技能 → 独立 chooseCard 完全原生');
+
+    /* E. target consumption 改为 stage-scoped：同技能两个 target stage 均可独立桥接。 */
+    host45.game.players = [me45, a45, b45];
+    const baTarget45 = {
+        type: 'skill', id: 'skill_target_45',
+        targetObj: a45, target: 'a45',
+        skillTargetResolved: true, skillTargetSingle: true,
+        purpose: 'support', rule: 'aux', score: 8,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+    };
+    const ownerTarget45 = {};
+    const ctxTarget45 = { id: 'skill_target_45', event: ownerTarget45 };
+    const te0_45 = {
+        ai: function () { return 0; },
+        selectTarget: [1, 1],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    const ts0_45 = tx45.beginSkillChoiceStage(me45, ctxTarget45, 'target', te0_45);
+    ao45.bridgeSkillTargetChoiceOnce(te0_45, me45, ctxTarget45, 'ai', baTarget45);
+    ok(te0_45.ai(a45) >= 12, '10.45 target stage0 可桥接');
+    ok(ts0_45.targetBridgeConsumed === true, '10.45 target stage0 仅在本 stage 标记 consumed');
+
+    te0_45.result = { bool: true, targets: [a45] };
+    const te1_45 = {
+        ai: function () { return 0; },
+        selectTarget: [1, 1],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    const ts1_45 = tx45.beginSkillChoiceStage(me45, ctxTarget45, 'target', te1_45);
+    ao45.bridgeSkillTargetChoiceOnce(te1_45, me45, ctxTarget45, 'ai', baTarget45);
+    ok(te1_45.ai(a45) >= 12, '10.45 同技能后续 target stage 可重新评估并独立桥接');
+    eq(ts1_45.ordinal, 1, '10.45 第二 target stage 使用新的 ordinal，不复用 stage0');
+
+    /* C. button/control 只有 provenance，不因 transaction 自动产生语义。 */
+    const ownerNoSemantic45 = {};
+    const ctxNoSemantic45 = { id: 'skill_nosem_45', event: ownerNoSemantic45 };
+    const btnNative45 = function () { return 3; };
+    const btnNoSem45 = { ai: btnNative45, set: function (k, v) { this[k] = v; return this; } };
+    tx45.beginSkillChoiceStage(me45, ctxNoSemantic45, 'button', btnNoSem45);
+    ao45.bridgeSkillButtonChoiceOnce(btnNoSem45, me45, ctxNoSemantic45, 'ai',
+        { type: 'skill', id: 'skill_nosem_45', rule: 'aux' });
+    eq(btnNoSem45.ai, btnNative45,
+        '10.45 transaction button stage 无显式 buttonChoice → 不猜语义');
+
+    const ctlNative45 = function () { return 2; };
+    const ctlNoSem45 = {
+        controls: ['x45', 'cancel2'],
+        ai: ctlNative45,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    tx45.beginSkillChoiceStage(me45, ctxNoSemantic45, 'control', ctlNoSem45);
+    ao45.bridgeSkillControlChoiceOnce(ctlNoSem45, me45, ctxNoSemantic45,
+        { type: 'skill', id: 'skill_nosem_45', rule: 'aux' });
+    eq(ctlNoSem45.ai, ctlNative45,
+        '10.45 transaction control stage 无显式 controlChoice → 不猜语义');
+
+    /* F. 源码守卫：每个 stage fresh-evaluate；chooseCard hook 有 ownership-safe 生命周期。 */
+    const src45 = fs45.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js'), 'utf8');
+    const txSrc45 = fs45.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillChoiceTransaction.js'), 'utf8');
+    ok(src45.indexOf("beginSkillChoiceStage(this, skillCtx, 'card', next)") >= 0
+        && src45.indexOf("beginSkillChoiceStage(this, skillCtx, 'target', next)") >= 0
+        && src45.indexOf("beginSkillChoiceStage(this, skillCtx, 'button', next)") >= 0
+        && src45.indexOf("beginSkillChoiceStage(this, skillCtx, 'control', next)") >= 0,
+        '10.45 card/target/button/control 均进入统一 transaction');
+    ok(src45.indexOf('CACHE.delete(player)') >= 0
+        && src45.indexOf('_getFreshSkillBA(this, skillCtx.id)') >= 0,
+        '10.45 每个连续选择 stage 重新评估当前真实状态，不复用回合缓存');
+    ok(src45.indexOf('_protoBackup.chooseCard') >= 0
+        && src45.indexOf('_protoOwned.chooseCard') >= 0
+        && src45.indexOf('proto.chooseCard === _protoOwned.chooseCard') >= 0,
+        '10.45 chooseCard hook 有备份/所有权/卸载对称路径');
+    ok(txSrc45.indexOf('priorSelections') >= 0
+        && txSrc45.indexOf('__djscSkillChoiceTransaction') >= 0
+        && txSrc45.indexOf('__djscSkillChoiceStage') >= 0,
+        '10.45 transaction 显式记录 owner/stage/priorSelections provenance');
+    ok(src45.indexOf('localId === foundId') >= 0
+        && src45.indexOf('遇到另一个真实技能') >= 0,
+        '10.45 active skill context 对同技能父链规范化，遇到嵌套不同技能即截断');
+    ok(txSrc45.indexOf('stage.selection = _selectionSummary(result)') >= 0
+        && txSrc45.indexOf('|| result || null') < 0,
+        '10.45 transaction 不保留未知原始 result 对象');
+}
+
+/* ================= 10.46 通用技能选牌策略：成本/交换 vs 给牌 =================
+ * 不使用任何技能 ID 特判。验证：
+ * A. 明确 loseCard/selfDiscard/selfLose → cost；
+ * B. giveCard → give，不套弃牌策略；
+ * C. cost 模式强保留保命牌，优先低价值/冗余牌；
+ * D. unknown/give 仅保留极小机会成本；
+ * E. aiOverride 的 chooseCard wrapper 实际消费这套策略。
+ */
+{
+    const fs46 = await import('node:fs');
+    const sc46 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillCardChoiceBrain.js')).href);
+    const ao46 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js')).href);
+    const host46 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'host.js')).href);
+
+    const costProf46 = { tags: { loseCard: 1.8, draw: 1.2 } };
+    const costProfSelf46 = { tags: { selfDiscard: -1.2 } };
+    const giveProf46 = { tags: { giveCard: 1.5, aux: 1.0, loseCard: 0.8 } };
+    const unknownProf46 = { tags: { aux: 1.0 } };
+
+    eq(sc46.classifySkillCardSelection(costProf46), 'cost',
+        '10.46 loseCard 语义 → 通用成本/交换选牌');
+    eq(sc46.classifySkillCardSelection(costProfSelf46), 'cost',
+        '10.46 selfDiscard 语义 → 通用成本/交换选牌');
+    eq(sc46.classifySkillCardSelection(giveProf46), 'give',
+        '10.46 giveCard 是强语义，即使同时有 loseCard 也不能套弃牌策略');
+    eq(sc46.classifySkillCardSelection(unknownProf46), 'unknown',
+        '10.46 无成本/给牌证据 → 语义未知，保持保守');
+    eq(sc46.classifySkillCardSelection(unknownProf46, {
+        skillInfo: { filterCard: true },
+    }), 'cost',
+        '10.46 宿主 filterCard 且默认丢失/弃置 → declarative 成本选牌');
+    eq(sc46.classifySkillCardSelection(unknownProf46, {
+        skillInfo: { filterCard: true, discard: false, lose: false },
+    }), 'unknown',
+        '10.46 宿主明确 discard:false/lose:false → 不擅自当成本');
+    eq(sc46.classifySkillCardSelection(giveProf46, {
+        skillInfo: { filterCard: true, discard: false, lose: false },
+    }), 'give',
+        '10.46 giveCard + 非弃置宿主契约 → 保持给牌语义');
+
+    const lowHpCtx46 = {
+        me: {
+            hp: 1, maxHp: 4,
+            shaCount: 3, shanCount: 2, wuxieCount: 1, jiuCount: 1,
+            hasZhuge: false, hasPaoxiao: false,
+        },
+    };
+    const taoCost46 = sc46.skillCardSelectionAdjustment('tao', costProf46,
+        Object.assign({ cardValue: 8 }, lowHpCtx46));
+    const wxCost46 = sc46.skillCardSelectionAdjustment('wuxie', costProf46,
+        Object.assign({ cardValue: 8 }, lowHpCtx46));
+    const jiuCost46 = sc46.skillCardSelectionAdjustment('jiu', costProf46,
+        Object.assign({ cardValue: 6 }, lowHpCtx46));
+    const shaCost46 = sc46.skillCardSelectionAdjustment('sha', costProf46,
+        Object.assign({ cardValue: 3 }, lowHpCtx46));
+    ok(taoCost46.veto && taoCost46.adjustment <= -6,
+        '10.46 低血成本选牌：桃强保留，不能拿去换牌');
+    ok(wxCost46.veto && wxCost46.adjustment <= -6,
+        '10.46 唯一无懈在成本选牌中强保留');
+    ok(jiuCost46.veto && jiuCost46.adjustment <= -6,
+        '10.46 濒死酒在成本选牌中强保留');
+    ok(shaCost46.adjustment > taoCost46.adjustment,
+        '10.46 三张杀的冗余杀明显优先于保命桃作为成本');
+
+    const oneSha46 = sc46.skillCardSelectionAdjustment('sha', costProf46, {
+        me: { hp: 4, maxHp: 4, shaCount: 1, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
+        cardValue: 3,
+    });
+    const threeSha46 = sc46.skillCardSelectionAdjustment('sha', costProf46, {
+        me: { hp: 4, maxHp: 4, shaCount: 3, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
+        cardValue: 3,
+    });
+    ok(threeSha46.adjustment > oneSha46.adjustment,
+        '10.46 同样是杀：3张时比唯一1张更适合作为技能成本');
+
+    const junk46 = sc46.skillCardSelectionAdjustment('generic_junk_46', costProf46, {
+        me: { hp: 4, maxHp: 4, shaCount: 1, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
+        cardValue: 1,
+    });
+    const useful46 = sc46.skillCardSelectionAdjustment('wuzhong', costProf46, {
+        me: { hp: 4, maxHp: 4, shaCount: 1, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
+        cardValue: 8,
+    });
+    ok(junk46.adjustment > useful46.adjustment,
+        '10.46 普通低价值牌比高宿主价值锦囊更适合作为交换成本');
+
+    const giveTao46 = sc46.skillCardSelectionAdjustment('tao', giveProf46, {
+        me: { hp: 1, maxHp: 4 }, cardValue: 8,
+    });
+    const giveJunk46 = sc46.skillCardSelectionAdjustment('generic_junk_46', giveProf46, {
+        me: { hp: 1, maxHp: 4 }, cardValue: 1,
+    });
+    ok(!giveTao46.veto && Math.abs(giveTao46.adjustment) <= 0.2
+        && Math.abs(giveJunk46.adjustment) <= 0.2,
+        '10.46 giveCard 不使用弃牌硬保留/强排序，只保留极小机会成本');
+
+    const unknown46 = sc46.skillCardSelectionAdjustment('tao', unknownProf46, {
+        me: { hp: 1, maxHp: 4 }, cardValue: 8,
+    });
+    ok(!unknown46.veto && Math.abs(unknown46.adjustment) <= 0.2,
+        '10.46 选牌语义未知时不擅自套成本策略');
+
+    /* aiOverride 集成：同样原生分数下，cost profile 应明显选低价值牌而避开低血桃。 */
+    const me46 = {
+        name: 'me46', name1: 'me46', playerid: 'me46',
+        hp: 1, maxHp: 4,
+        getCards: function (zone) {
+            if (zone === 'h') {
+                return [
+                    { name: 'tao', owner: this, v: 8 },
+                    { name: 'sha', owner: this, v: 3 },
+                    { name: 'sha', owner: this, v: 3 },
+                    { name: 'sha', owner: this, v: 3 },
+                    { name: 'generic_junk_46', owner: this, v: 1 },
+                ];
+            }
+            return [];
+        },
+        hasSkill: function () { return false; },
+    };
+    const oldOwner46 = host46.get.owner;
+    const oldValue46 = host46.get.value;
+    host46.get.owner = function (card) { return card && card.owner; };
+    host46.get.value = function (card) { return card && card.v; };
+
+    const stage46 = { skillId: 'generic_cost_skill_46', transactionId: 'tx46', ordinal: 0 };
+    const wrapped46 = ao46.wrapSkillCardOpportunityAI(function () { return 5; }, me46, stage46, costProf46);
+    const scoreTao46 = wrapped46({ name: 'tao', owner: me46, v: 8 });
+    const scoreJunk46 = wrapped46({ name: 'generic_junk_46', owner: me46, v: 1 });
+    const scoreSha46 = wrapped46({ name: 'sha', owner: me46, v: 3 });
+    ok(scoreJunk46 > scoreSha46 && scoreSha46 > scoreTao46,
+        '10.46 chooseCard 集成：垃圾牌 > 冗余杀 > 低血桃 的成本选择顺序');
+
+    const foreign46 = { name: 'other46' };
+    eq(wrapped46({ name: 'generic_junk_46', owner: foreign46, v: 1 }), 5,
+        '10.46 非当前玩家持有的牌不参与技能成本重排');
+
+    /* declarative 技能：直接 filterCard/check(card)，不调用 chooseCard()，通过 aiValue 接入。 */
+    const oldSkillRegistry46 = host46.lib.skill;
+    host46.lib.skill = Object.assign({}, oldSkillRegistry46);
+    host46.lib.skill.generic_decl_cost_46 = {
+        enable: 'phaseUse',
+        filterCard: true,
+        selectCard: [1, Infinity],
+        check: function (card) { return 6 - card.v; },
+    };
+    host46.lib.skill.generic_decl_give_46 = {
+        enable: 'phaseUse',
+        filterCard: true,
+        discard: false,
+        lose: false,
+        selectCard: [1, Infinity],
+    };
+    const declCostEvt46 = { skill: 'generic_decl_cost_46' };
+    const declCostBA46 = { type: 'skill', id: 'generic_decl_cost_46', rule: 'aux' };
+    const declTaoValue46 = ao46.skillCardAIValueModifier(
+        me46, { name: 'tao', owner: me46 }, 8, declCostBA46, declCostEvt46);
+    const declJunkValue46 = ao46.skillCardAIValueModifier(
+        me46, { name: 'generic_junk_46', owner: me46 }, 1, declCostBA46, declCostEvt46);
+    ok(declTaoValue46 > 8 && declJunkValue46 < 1,
+        '10.46 declarative 成本技能：关键牌提高 aiValue、垃圾牌降低 aiValue，使原生 C-get.value 自然选垃圾');
+
+    const declGiveEvt46 = { skill: 'generic_decl_give_46' };
+    const declGiveBA46 = { type: 'skill', id: 'generic_decl_give_46', rule: 'aux' };
+    eq(ao46.skillCardAIValueModifier(
+        me46, { name: 'generic_junk_46', owner: me46 }, 1, declGiveBA46, declGiveEvt46), 1,
+        '10.46 declarative 非弃置/给牌技能不通过 aiValue 套成本策略');
+    eq(ao46.skillCardAIValueModifier(
+        me46, { name: 'generic_junk_46', owner: me46 }, 1,
+        { type: 'skill', id: 'other_decl_46', rule: 'aux' }, declCostEvt46), 1,
+        '10.46 当前真实 skill 与 bestAction 不一致 → aiValue 不跨技能污染');
+    host46.lib.skill = oldSkillRegistry46;
+
+    host46.get.owner = oldOwner46;
+    host46.get.value = oldValue46;
+
+    /* 结构守卫：策略模块本身不允许出现真实技能 ID。 */
+    const choiceSrc46 = fs46.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillCardChoiceBrain.js'), 'utf8');
+    ok(choiceSrc46.indexOf("skillId === 'zhiheng'") < 0
+        && choiceSrc46.indexOf("skillId === 'rende'") < 0
+        && choiceSrc46.indexOf("skillId === 'lijian'") < 0,
+        '10.46 技能选牌策略无真实技能 ID 特判');
+    ok(choiceSrc46.indexOf("return 'cost'") >= 0
+        && choiceSrc46.indexOf("return 'give'") >= 0
+        && choiceSrc46.indexOf("return 'unknown'") >= 0,
+        '10.46 选牌策略按通用语义 cost/give/unknown 分流');
 }
 
 /* ---------- 汇总 ---------- */
