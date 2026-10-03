@@ -2780,6 +2780,35 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             '10.38 基础行为 belief 不再混入匿名 identityOf(other)');
         ok(idSrc38.indexOf('const otherId = _publicRoleOf(other)') >= 0,
             '10.38 二阶行为证据只使用公开身份');
+
+        /* 身份相关决策/学习链不得绕过 relations 重新调用宿主 get.attitude。 */
+        const fairRelationFiles38 = [
+            'score/decision/analysis/postCheck.js',
+            'score/decision/safety/rescuePolicy.js',
+            'score/cognition/metaCognition.js',
+            'score/cognition/situationEval.js',
+            'score/perception/discover/autoDiscover.js',
+            'score/perception/feedback/elementFeedback.js',
+            'score/perception/knowledge/sharedKnowledge.js',
+            'score/model/calibrate/decisionCalibrator.js',
+            'score/model/features/features.js',
+            'score/model/net/deepValue.js',
+            'score/model/net/modelGuard.js',
+        ];
+        for (const relPath38 of fairRelationFiles38) {
+            const src38 = fs38.readFileSync(join(_pkg, ...relPath38.split('/')), 'utf8');
+            eq(/get\.attitude\s*\(/.test(src38), false,
+                '10.38 ' + relPath38 + ' 不得直接调用宿主 get.attitude');
+        }
+        const modeSrc38 = fs38.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'modeStrategy.js'), 'utf8');
+        const genericEnemy38 = modeSrc38.slice(
+            modeSrc38.indexOf('export function isEnemy(a, b)'),
+            modeSrc38.indexOf('/* 快捷：应用模式加成 */')
+        );
+        ok(genericEnemy38.indexOf("return isLikelyEnemy(a, b);") >= 0 &&
+            genericEnemy38.indexOf("const att = get.attitude(a, b);") >
+            genericEnemy38.indexOf("return isLikelyEnemy(a, b);"),
+            '10.38 modeStrategy.isEnemy 身份模式先走公平推断，再允许非身份模式 attitude fallback');
     } finally {
         host38.get.identityList = oldIdentityList38;
         host38.get.attitude = oldAtt38;
