@@ -138,7 +138,9 @@ export function beginSkillChoiceStage(player, skillContext, choiceType, nextEven
 export function completeSkillChoiceStage(stage, result) {
 	try {
 		if (!stage) return false;
-		stage.selection = _selectionSummary(result) || result || null;
+		/* provenance 只保存白名单摘要；未知宿主 result 不原样塞进 transaction，
+		 * 避免内部对象/循环引用/非当前决策所需信息跨阶段传播。 */
+		stage.selection = _selectionSummary(result);
 		stage.completed = true;
 		return true;
 	} catch (e) { return false; }
