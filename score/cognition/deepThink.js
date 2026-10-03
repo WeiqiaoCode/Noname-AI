@@ -21,12 +21,13 @@
 /* ★ 特征维度单一来源：直接引用 features.js 导出的 FEATURE_DIM，杜绝散落硬编码导致漂移 */
 import { FEATURE_DIM } from '../model/features/features.js';
 import { isReady as weightsReady } from '../model/weights/weights.js';
+import { normalizedMargin, candidateSpread, DECISION_MARGIN } from '../decision/state/decisionMargin.js';
 
-const GAP_THRESHOLD = 6;   /* top 候选分差 <= 该值 → 判定"分歧大，需深度辨析" */
 const TOP_N = 3;           /* 深度辨析的候选数量上限（防放大算力开销） */
-const MODEL_W = 28;        /* 模型置信(moxt 0..1) 折算为分数单位的权重 */
+const MODEL_SPREAD_SHARE = 0.35;  /* 模型证据最多只占当前候选 spread 的一部分 */
+const RISK_SPREAD_SHARE = 0.15;   /* 风险项同样按候选 spread 缩放，避免固定分值污染 */
 
-const _stats = { runs: 0, deepChecks: 0, replaced: 0, skippedNotReady: 0, lastGap: 0, mode: '深度思考' };
+const _stats = { runs: 0, deepChecks: 0, replaced: 0, skippedNotReady: 0, lastGap: 0, lastMargin: 0, mode: '深度思考' };
 
 function _num(x) { return (typeof x === 'number' && !isNaN(x)) ? x : 0; }
 
@@ -96,20 +97,19 @@ export function criticBest(me, acts, best, ctx) {
 		}
 
 		const gap = _num(best.score) - _num(sorted[0].score);
+		const margin = normalizedMargin(best.score, sorted[0].score);
 		_stats.lastGap = gap;
-		const championHeld = /冠军:/.test(String(best.reason || ''));
-		const stronglyChampioned = championHeld && _num(best.score) >= 20;
+		_stats.lastMargin = margin;
 
-		/* 结果已明确：分差大（best 遥遥领先）或已被冠军子代理强锁定 → 浅思考通过 */
-		if (gap > GAP_THRESHOLD || stronglyChampioned) {
-			out.thinking.push('浅思考通过：best 领先 gap=' + gap.toFixed(1) +
-				(championHeld ? ' 且已被冠军锁定' : ''), '，无需深度辨析');
+		/* 是否需要复核只看相对决策边际，不依赖 runtime utility 的绝对量纲。 */
+		if (margin > DECISION_MARGIN.CLOSE) {
+			out.thinking.push('浅思考通过：相对边际=' + margin.toFixed(3) + '，当前结论清晰，无需深度辨析');
 			return out;
 		}
 
 		/* 进入深度思考 */
 		_stats.deepChecks++;
-		out.thinking.push('进入深度思考：best 与次优分差仅 gap=' + gap.toFixed(1) + '，需多源复盘');
+		out.thinking.push('进入深度思考：best 与次优相对边际=' + margin.toFixed(3) + '，需多源复盘');
 		const cands = [best].concat(sorted.slice(0, TOP_N - 1));
 		return _deepEvaluate(me, cands, best, out, ctx);
 	} catch (e) {
@@ -121,34 +121,54 @@ export function criticBest(me, acts, best, ctx) {
 /* 多源聚合打分（规则 + 模型置信 − 风险），批判性重新排序 */
 function _deepEvaluate(me, cands, best, out, ctx) {
 	try {
+		const spread = candidateSpread(cands);
+		const modelBudget = spread.absolute * MODEL_SPREAD_SHARE;
+		const riskBudget = spread.absolute * RISK_SPREAD_SHARE;
+
 		const scored = cands.map(function (a) {
 			const rule = _num(a.score);
 			const modelP = _modelConfidenceOf(a._feat) || (a === best ? _num(ctx && ctx.modelP) : 0);
-			const risk = _riskPenalty(me, a);
-			return { a: a, rule: rule, modelP: modelP, risk: risk, deep: rule + modelP * MODEL_W - risk };
+			const modelEvidence = modelP > 0 ? Math.max(-1, Math.min(1, (modelP - 0.5) * 2)) : 0;
+			const modelAdj = modelEvidence * modelBudget;
+			const riskSeverity = Math.max(0, Math.min(1, _riskPenalty(me, a)));
+			const riskAdj = riskSeverity * riskBudget;
+			return {
+				a: a,
+				rule: rule,
+				modelP: modelP,
+				modelAdj: modelAdj,
+				riskAdj: riskAdj,
+				deep: rule + modelAdj - riskAdj,
+			};
 		}).sort(function (x, y) { return y.deep - x.deep; });
 
 		for (let i = 0; i < scored.length; i++) {
-			const s = scored[i];
-			out.thinking.push('  候选' + (i + 1) + ' ' + (s.a.type || '?') + ':' + (s.a.id || '?') +
-				'  规则' + s.rule.toFixed(0) + ' 模型' + s.modelP.toFixed(2) + ' 风险-' + s.risk.toFixed(2) +
-				' → 深度' + s.deep.toFixed(1));
+			const row = scored[i];
+			out.thinking.push('  候选' + (i + 1) + ' ' + (row.a.type || '?') + ':' + (row.a.id || '?') +
+				'  规则' + row.rule.toFixed(2) + ' 模型调整' + row.modelAdj.toFixed(2) +
+				' 风险-' + row.riskAdj.toFixed(2) + ' → 深度' + row.deep.toFixed(2));
 		}
 
 		const winner = scored[0];
+		const original = scored.find(function (row) { return row.a === best; });
 		if (winner && winner.a !== best) {
-			/* 深度思考推翻了单一规则结论：采纳多源最优（模型思考层建议，非越权接管） */
 			out.replaced = true;
 			out.best = winner.a;
-			const why = winner.modelP > _stats.lastGap ? '模型置信显著更高' : '规则/风险权衡下更稳健';
-			out.reason = '深度思考裁定改打 ' + (winner.a.id || '?') + '（gap=' + _stats.lastGap.toFixed(1) + '·' + why + '）';
+			const modelGain = original ? (winner.modelAdj - original.modelAdj) : winner.modelAdj;
+			const riskGain = original ? (original.riskAdj - winner.riskAdj) : -winner.riskAdj;
+			const why = modelGain > riskGain ? '模型证据改善' : '风险收益更优';
+			out.reason = '深度思考裁定改打 ' + (winner.a.id || '?') +
+				'（margin=' + _stats.lastMargin.toFixed(3) + '·' + why + '）';
 			_stats.replaced++;
 			out.thinking.push('结论：应以 ' + (winner.a.id || '?') + ' 替代当前，原因：' + why);
 		} else {
 			out.thinking.push('结论：维持当前 ' + (best.id || '?') + ' 最优');
 		}
 		return out;
-	} catch (e) { return out; }
+	} catch (e) {
+		out.thinking.push('深度评估异常: ' + String(e).slice(0, 40));
+		return out;
+	}
 }
 
 export function thinkingStats() {
