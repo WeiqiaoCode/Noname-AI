@@ -4628,10 +4628,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         hasSkill: function () { return false; },
     };
     const oldOwner46 = host46.get.owner;
-    const oldName46 = host46.get.name;
     const oldValue46 = host46.get.value;
     host46.get.owner = function (card) { return card && card.owner; };
-    host46.get.name = function (card) { return card && card.name; };
     host46.get.value = function (card) { return card && card.v; };
 
     const stage46 = { skillId: 'generic_cost_skill_46', transactionId: 'tx46', ordinal: 0 };
@@ -4647,7 +4645,6 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.46 非当前玩家持有的牌不参与技能成本重排');
 
     host46.get.owner = oldOwner46;
-    host46.get.name = oldName46;
     host46.get.value = oldValue46;
 
     /* 结构守卫：策略模块本身不允许出现真实技能 ID。 */
