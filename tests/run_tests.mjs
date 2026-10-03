@@ -4983,6 +4983,102 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.50 Guard fallback 后禁止按相同 id 改写到另一个目标');
 }
 
+
+/* ================= 10.51 手牌保留方向与 play feedback 语义 ================= */
+{
+    const fs51 = await import('node:fs');
+    const keep51 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'cardplay', 'keepStrategyOpt.js')).href + '?pr21-retention');
+
+    hostStub.game.players = [];
+    function me51(opts) {
+        opts = opts || {};
+        return {
+            hp: opts.hp == null ? 4 : opts.hp,
+            maxHp: opts.maxHp == null ? 4 : opts.maxHp,
+            countCards: function (zone, filter) {
+                if (typeof filter === 'function') return 0;
+                return opts.handCount == null ? 3 : opts.handCount;
+            },
+            getHandcardLimit: function () { return opts.handLimit == null ? 5 : opts.handLimit; },
+            getEquip: function () { return null; },
+        };
+    }
+
+    const healthy = me51({ hp:4, maxHp:4, handCount:3, handLimit:5 });
+    const taoEarly = keep51.keepBonus(healthy, { card:{ name:'tao' }, stage:'early' });
+    const nanmanEarly = keep51.keepBonus(healthy, { card:{ name:'nanman' }, stage:'early' });
+    ok(taoEarly < 1 && taoEarly >= 0.65,
+        '10.51 高保留价值牌只能降低当前出牌吸引力');
+    eq(nanmanEarly, 1,
+        '10.51 低保留价值牌不会仅因“不值得留”而获得正向出牌加成');
+
+    const lowHpEarly = keep51.keepBonus(
+        me51({ hp:1, maxHp:4, handCount:3, handLimit:5 }),
+        { card:{ name:'tao' }, stage:'early' }
+    );
+    ok(lowHpEarly < taoEarly,
+        '10.51 低血量+早期提高 retention pressure，桃的当前消耗机会成本更高');
+
+    const spendNow = keep51.keepBonus(
+        me51({ hp:4, maxHp:4, handCount:7, handLimit:5 }),
+        { card:{ name:'tao' }, stage:'endgame' }
+    );
+    ok(spendNow > taoEarly && spendNow <= 1,
+        '10.51 残局/溢出只解除保留抑制，不允许 retention 层把动作放大到 1 以上');
+
+    const pEarly = keep51.retentionPressure(healthy, { stage:'early' });
+    const pOverflow = keep51.retentionPressure(
+        me51({ hp:4, maxHp:4, handCount:7, handLimit:5 }),
+        { stage:'endgame' }
+    );
+    ok(pEarly > 0 && pOverflow < 0,
+        '10.51 retentionPressure 单一方向：正值保留，负值释放资源');
+
+    const eng51 = fs51.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    eq(eng51.indexOf('handKeepBias') >= 0, false,
+        '10.51 engine 删除第二套 handKeepBias，避免双重且反向调分');
+    ok(eng51.indexOf("keepBonus(me, { id: id, card: { name: id }, stage: stageLabel })") >= 0,
+        '10.51 engine 将阶段上下文交给统一 retention 入口');
+    eq(eng51.indexOf("getDecisionBonus('keep', id)") >= 0, false,
+        '10.51 used-card 结果不再从 keep feedback 读取');
+    ok(eng51.indexOf("getDecisionBonus('play', id)") >= 0,
+        '10.51 实际出牌候选读取 play feedback');
+    eq(eng51.indexOf('recordKeepOutcome(k, win)') >= 0, false,
+        '10.51 REC.cards 不再写入伪 keep outcome');
+    ok(eng51.indexOf('recordPlayOutcome(k, win)') >= 0,
+        '10.51 REC.cards 明确写入 play outcome');
+
+    const fbKey51 = '无名AI_decisionFeedback';
+    _mem.set(fbKey51, JSON.stringify({
+        v: 1,
+        target: {},
+        tempo: {},
+        keep: {
+            sha: { ratio: 1.4, samples: 8, lastUpdate: 1 }
+        }
+    }));
+    const fb51 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'feedback', 'decisionFeedback.js')).href + '?pr21-migration');
+    eq(fb51.getDecisionBonus('play', 'sha'), 1.4,
+        '10.51 v1 keep 历史数据按真实来源迁移到 v2 play');
+    eq(fb51.getDecisionBonus('keep', 'sha'), 1.0,
+        '10.51 v2 keep 不继承 used-card 数据，未采集真实保留行为前保持中性');
+
+    const migrated51 = JSON.parse(_mem.get(fbKey51));
+    eq(migrated51.v, 2, '10.51 feedback 存储升级到 v2');
+    ok(migrated51.play && migrated51.play.sha && migrated51.keep &&
+       Object.keys(migrated51.keep).length === 0,
+        '10.51 v1 keep -> v2 play 迁移落盘，keep 命名空间清空');
+
+    for (let i = 0; i < 5; i++) fb51.recordPlayOutcome('tao', true);
+    fb51.flushDecisionFeedback();
+    eq(fb51.getDecisionBonus('play', 'tao'), 1.4,
+        '10.51 新的 play outcome 达到样本门槛后可独立生效');
+    eq(fb51.getDecisionBonus('keep', 'tao'), 1.0,
+        '10.51 play 学习不会污染 keep 维度');
+
+    fb51.resetDecisionFeedback();
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
