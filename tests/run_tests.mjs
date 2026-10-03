@@ -2407,12 +2407,15 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     host36.get.mode = function () { return 'identity'; };
     host36.get.attitude = function (me, t) { return t && typeof t.rel === 'number' ? t.rel : 0; };
 
-    /* A. 真实身份场流程：未明目标先按现有态度被视为敌；
-     * 同一 round 身份公开为忠臣后，即使旧 attitude 仍为负，也必须立即作废旧敌人缓存。 */
+    /* A. 真实身份场流程：未明目标先由合法行为证据被推成敌；
+     * 同一 round 身份公开为忠臣后，必须立即作废旧敌人缓存。
+     * 注意：不能再靠宿主 get.attitude 证明“敌对”，因为它可能读 hidden identity。 */
     th36.clearThreatCache();
+    obs36.resetObs();
     id36.resetBelief();
+    obs36.observeAttack(p36, me36, 10);
     const rk1 = rel36.relationStateKey(me36);
-    ok(th36.enemiesOf(me36).indexOf(p36) >= 0, '10.36 未明身份 + 当前敌对态度 → enemiesOf 暂含目标');
+    ok(th36.enemiesOf(me36).indexOf(p36) >= 0, '10.36 未明身份 + 强公开攻击证据 → enemiesOf 暂含目标');
     p36.identity = 'zhong';
     p36.identityShown = true;
     const rk2 = rel36.relationStateKey(me36);
@@ -2564,16 +2567,21 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         eq(id37.identityOfFor(me37, x37), 'zhong',
             '10.37 hard identity 后即使出现反常行为也不改身份，只影响后续策略评估');
 
-        /* 内奸：自己身份固定，但当前 stance 仍允许动态变化。 */
+        /* 内奸：identity 固定；stance 由公平可见的阵营强弱变化，不再跟宿主 attitude 走。 */
         const spy37 = y37;
         spy37.identityShown = false;
         eq(id37.identityOfFor(spy37, spy37), 'nei', '10.37 内奸知道自己的固定身份');
-        x37.rel = -1;
-        const stanceEnemy37 = rel37.dispositionOf(spy37, x37);
-        x37.rel = 1;
-        const stanceAlly37 = rel37.dispositionOf(spy37, x37);
-        eq(stanceEnemy37, -1, '10.37 内奸 stance 可按当前局势对目标敌对');
-        eq(stanceAlly37, 1, '10.37 内奸 identity 不变但 stance 可转为合作');
+        const stanceRebelStrong37 = rel37.dispositionOf(spy37, x37);
+        eq(stanceRebelStrong37, 1, '10.37 反方更强 → 内奸可暂时与确定忠臣合作');
+        f3.alive = false;
+        f4.alive = false;
+        host37.game.alivePlayers = host37.game.players.filter(function (p) { return p.alive !== false; });
+        const stanceLoyalStrong37 = rel37.dispositionOf(spy37, x37);
+        eq(stanceLoyalStrong37, -1, '10.37 主忠更强 → 内奸转而压制忠臣');
+        eq(id37.identityOfFor(spy37, spy37), 'nei', '10.37 stance 翻转不改变内奸身份');
+        f3.alive = true;
+        f4.alive = true;
+        host37.game.alivePlayers = host37.game.players.filter(function (p) { return p.alive !== false; });
 
         /* 源码守卫：不允许回退到“读取未公开真实身份统计人数”的实现。 */
         const idSrc37 = fs37.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
