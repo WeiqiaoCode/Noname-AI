@@ -431,7 +431,7 @@ function _computeBelief(p) {
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
-		/* ★ 扩展信号：距离 + 出牌偏好 + 被攻击记录 + 回合权重 */
+		/* ★ 扩展信号：距离 + 出牌偏好 + 被攻击记录 */
 		try {
 			/* 1. 距离信号：与主公距离近 → 反贼概率略升（先手压制） */
 			if (zhu && p) {
@@ -490,16 +490,7 @@ function _computeBelief(p) {
 				}
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
-			/* 4. 回合权重：越靠后的行为越可信 */
-			try {
-				const round = (_status && _status.roundNumber) || 0;
-				const weight = Math.min(1.5, 1 + round * 0.1);
-				b.fan *= weight;
-				b.zhong *= weight;
-				b.nei *= weight;
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-			/* 5. 内奸特征：对所有人攻击/援助均衡 */
+			/* 4. 内奸特征：对所有人攻击/援助均衡 */
 			try {
 				const obs = getObs ? getObs() : null;
 				if (obs && obs[keyOf(p)]) {
@@ -688,7 +679,8 @@ export function confidenceOfFor(observer, p) {
 		if (hardIdentityOf(observer, p).role) return 1;
 		const b = beliefOfFor(observer, p);
 		if (!b) return 0;
-		return Math.round(Math.max(b.fan || 0, b.zhong || 0, b.nei || 0) * 100) / 100;
+		/* 决策层保留完整精度；仅 explain/debug 输出允许四舍五入。 */
+		return Math.max(b.fan || 0, b.zhong || 0, b.nei || 0);
 	} catch (e) { return 0; }
 }
 
