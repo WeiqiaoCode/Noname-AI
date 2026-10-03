@@ -2223,6 +2223,26 @@ function _canConfirmSelfSkillTarget(sid, me, prof) {
 	} catch (e) { return false; }
 }
 
+function _skillTargetRange(sid) {
+	try {
+		const sk = lib.skill && lib.skill[sid];
+		if (!sk) return null;
+		const st = sk.selectTarget;
+		if (typeof st === 'number') return [st, st];
+		if (Array.isArray(st) && st.length >= 2) {
+			const min = Number(st[0]);
+			const max = st[1] === Infinity ? Infinity : Number(st[1]);
+			if (Number.isFinite(min) && (max === Infinity || Number.isFinite(max))) {
+				return [Math.max(0, min), max === Infinity ? Infinity : Math.max(min, max)];
+			}
+		}
+		/* 有 filterTarget 而无 selectTarget 时，宿主默认单目标。 */
+		if (typeof sk.filterTarget === 'function' && st == null) return [1, 1];
+		/* 动态函数依赖实时事件/已选对象，不在预规划阶段猜。 */
+		return null;
+	} catch (e) { return null; }
+}
+
 function _skillPurposeFromIntent(intent, category, confidence) {
 	const c = (confidence === undefined || confidence === null) ? 1 : Number(confidence || 0);
 	if (intent === 'offense') return c >= 0.55 ? 'attack' : null;
@@ -2304,7 +2324,10 @@ function applyBasicSkillRules(me, acts) {
 					maxHp: (me.maxHp || 3), threat: 0, handCount: 0,
 				});
 			}
-			const skillCtx = Object.assign({}, ctx, { targets: skillTargets });
+			const skillCtx = Object.assign({}, ctx, {
+				targets: skillTargets,
+				selectTargetRange: _skillTargetRange(sid),
+			});
 			const d = decideSkill(sid, prof, skillCtx);
 
 			/* 高置信单方向技能没有合法/合理目标时，直接压制本轮发动；
@@ -5379,7 +5402,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _skillTargetRange };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
