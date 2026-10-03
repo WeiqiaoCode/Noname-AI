@@ -2956,6 +2956,109 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+
+/* ================= 10.40 Identity boundary completion：engine / ordering / revision / precision =================
+ * 补齐 PR #10 审计剩余项：
+ * A. 相同公开信息下，game.players 遍历顺序不得改变 posterior；
+ * B. engine 决策/学习/历史记录不得读取未公开 target.identity；
+ * C. 一次 card event 只推进一次 observation revision；
+ * D. 决策置信度保留完整精度，禁止两位小数跨阈值。
+ */
+{
+    const fs40 = await import('node:fs');
+    const host40 = await import(pathToFileURL(_hostPath).href);
+    const obs40 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'observer.js')).href);
+    const id40 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+
+    function P40(name, identity, shown) {
+        return {
+            name: name, name1: name, playerid: name, alive: true, hp: 4, maxHp: 4,
+            identity: identity || '', identityShown: !!shown,
+            _h: [], _e: [], _j: [],
+            countCards: function () { return 0; },
+            getCards: function () { return []; },
+        };
+    }
+
+    const oldMode40 = host40.get.mode;
+    const oldIdentityList40 = host40.get.identityList;
+    const oldStatusMode40 = host40._status.mode;
+    try {
+        const zhu = P40('zhu40', 'zhu', true);
+        const me = P40('me40', 'zhong', false);
+        const shownFan = P40('shownFan40', 'fan', true);
+        const x = P40('x40', 'fan', false);
+        const n = P40('n40', 'nei', false);
+
+        host40.game.me = me;
+        host40.game.zhu = zhu;
+        host40.game.dead = [];
+        host40.game.players = [zhu, me, shownFan, x, n];
+        host40.game.alivePlayers = host40.game.players.slice();
+        host40._status.currentPhase = me;
+        host40._status.roundNumber = 4;
+        host40._status.mode = 'normal';
+        host40.get.mode = function () { return 'identity'; };
+        host40.get.identityList = function (count) {
+            if (count === 5) return ['zhu', 'zhong', 'fan', 'fan', 'nei'];
+            return [];
+        };
+
+        obs40.resetObs();
+        id40.resetBelief();
+        obs40.observeAttack(shownFan, x, 1);
+        const bOrder1 = id40.beliefOfFor(me, x);
+
+        host40.game.players = [n, x, shownFan, me, zhu];
+        host40.game.alivePlayers = host40.game.players.slice();
+        id40.resetBelief();
+        const bOrder2 = id40.beliefOfFor(me, x);
+        eq(JSON.stringify(bOrder2), JSON.stringify(bOrder1),
+            '10.40 相同公开事实仅改变 game.players 顺序 → posterior 完全不变');
+
+        /* 一张带直接统计 + attack/aid 委托的牌，只能推进一次 revision。 */
+        obs40.resetObs();
+        const rev0 = obs40.getObservationRevision();
+        obs40.observeCardUse(me, { name: 'tao' }, x);
+        const rev1 = obs40.getObservationRevision();
+        eq(rev1 - rev0, 1, '10.40 桃 card event → observation revision 只递增一次');
+        obs40.observeCardUse(me, { name: 'guohe' }, x);
+        const rev2 = obs40.getObservationRevision();
+        eq(rev2 - rev1, 1, '10.40 过河拆桥 card event → observation revision 只递增一次');
+
+        const engSrc40 = fs40.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+        const idSrc40 = fs40.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
+
+        eq(engSrc40.indexOf('const tid = dyingAlly.identity') < 0, true,
+            '10.40 桃救援价值不直接读取 dyingAlly.identity');
+        eq(/tgtIdentity:\s*bestT\s*&&\s*bestT\.identity/.test(engSrc40), false,
+            '10.40 autoFeature 不把 hidden target.identity 写入学习特征');
+        eq(/real:\s*p\.identity/.test(engSrc40), false,
+            '10.40 身份历史快照不再持久化 hidden real identity');
+        ok(engSrc40.indexOf('public: publicIdentity') >= 0 &&
+            engSrc40.indexOf('_beliefOfFor(observer, p)') >= 0,
+            '10.40 历史身份快照只保存 public identity + observer-specific posterior');
+        ok(engSrc40.indexOf("expose = (p === game.zhu) || !!p.identityShown || p.identity === 'mingzhong';") >= 0,
+            '10.40 identity hidden-reward 只把公开身份目标视为已暴露');
+        ok(/if \(mode === 'identity'\)[\s\S]{0,900}return 'unknown';[\s\S]{0,250}return \(player && player\.identity\) \|\| 'unknown';/.test(engSrc40),
+            '10.40 _campOf 在 identity 模式先返回 unknown，非身份模式才允许宿主 identity fallback');
+
+        const confStart40 = idSrc40.indexOf('export function confidenceOfFor');
+        const confEnd40 = idSrc40.indexOf('export function identityOf(p)', confStart40);
+        const confBlock40 = idSrc40.slice(confStart40, confEnd40);
+        eq(confBlock40.indexOf('Math.round') < 0, true,
+            '10.40 confidenceOfFor 决策值保留完整精度，不因四舍五入跨阈值');
+        eq(idSrc40.indexOf('b.fan *= weight') < 0 &&
+            idSrc40.indexOf('b.zhong *= weight') < 0 &&
+            idSrc40.indexOf('b.nei *= weight') < 0, true,
+            '10.40 移除归一化前等比例放大的伪“回合权重”');
+    } finally {
+        host40.get.mode = oldMode40;
+        host40.get.identityList = oldIdentityList40;
+        host40._status.mode = oldStatusMode40;
+    }
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
