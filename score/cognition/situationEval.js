@@ -12,6 +12,7 @@
  * 优势时保守，劣势时激进
  */
 import { lib, game, get, _status } from '../foundation/adapt/host.js';
+import { dispositionOf } from '../decision/relations/relations.js';
 
 // Författare: Feisheng Original | Licens: GPL-3.0
 /* ================= 局面估值缓存 ================= */
@@ -45,7 +46,7 @@ function allyPower(me) {
 			/* 判断是不是队友 */
 			let isAlly = false;
 			try {
-				if (get.attitude(me, p) > 0) isAlly = true;
+				if (dispositionOf(me, p) > 0) isAlly = true;
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 			if (!isAlly && p !== me) return;
@@ -75,7 +76,7 @@ function enemyPower(me) {
 			/* 判断是不是敌人 */
 			let isEnemy = false;
 			try {
-				if (get.attitude(me, p) < 0) isEnemy = true;
+				if (dispositionOf(me, p) < 0) isEnemy = true;
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 			if (!isEnemy && p !== me) return;
