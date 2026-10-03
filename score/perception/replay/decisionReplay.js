@@ -73,6 +73,14 @@ export function replayRecord(entry) {
                     type: c.type, id: c.id, target: c.target || null,
                     score: Math.round((c.score || 0) * 10) / 10,
                     reason: (c.reason || '').slice(0, 60),
+                    policy: c.policy ? {
+                        eligible: c.policy.eligible !== false,
+                        veto: c.policy.veto === true,
+                        vetoReason: (c.policy.vetoReason || '').slice(0, 80),
+                        priorityTier: c.policy.priorityTier || 'normal',
+                        priorityValue: Number(c.policy.priorityValue || 0),
+                        priorityReason: (c.policy.priorityReason || '').slice(0, 80),
+                    } : null,
                 };
             }),
             rule: entry.rule ? {
@@ -80,6 +88,7 @@ export function replayRecord(entry) {
                 score: Math.round((entry.rule.score || 0) * 10) / 10,
                 target: entry.rule.target || null,
                 reason: (entry.rule.reason || '').slice(0, 180),
+                policy: entry.rule.policy || null,
             } : null,
             model: entry.model ? {
                 label: entry.model.label,
@@ -110,6 +119,7 @@ export function replayRecord(entry) {
                 score: Math.round((entry.final.score || 0) * 10) / 10,
                 target: entry.final.target || null,
                 reason: (entry.final.reason || '').slice(0, 180),
+                policy: entry.final.policy || null,
             } : null,
             outcome: null,
         };
