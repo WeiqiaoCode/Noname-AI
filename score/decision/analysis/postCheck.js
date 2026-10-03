@@ -18,20 +18,17 @@
  */
 import { log } from '../../foundation/diag/logger.js';
 import { isSameCamp } from '../strategy/modeStrategy.js';   /* ★ 架构阵营判定：同阵营判定 */
+import { dispositionOf } from '../relations/relations.js';
 import { VAL_CARD } from '../../knowledge/tables/value-tables.js';      /* ★ 装备按真实价值加权（替代按件数） */
 
-/* ★ 结算后检测的阵营感知（用于实际收益正负判定）。
- * 优先用上层传入的 targetIsEnemy；缺省回退 attitude（永不抛错）。 */
+/* ★ 结算后检测的关系感知（用于实际收益正负判定）。
+ * 优先用上层 targetIsEnemy；缺省统一走 relations.dispositionOf，避免身份模式态度透视。 */
 function _resolveIsEnemy(me, target, hint) {
 	try {
 		if (typeof hint === 'boolean') return hint;
 		if (!me || !target || target === me) return false;
-		if (typeof get === 'object' && get && (typeof get.attitude === 'function')) {
-			const att = get.attitude(me, target);
-			if (att !== 0) return att < 0;
-		}
-		return false;
-	} catch (e) { return true; }
+		return dispositionOf(me, target) < 0;
+	} catch (e) { return false; }
 }
 
 /* ★ 阵营判定（容错包装）：返回 1=我方 / -1=敌方 / 0=无法判定 */
