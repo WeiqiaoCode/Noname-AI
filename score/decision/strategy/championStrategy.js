@@ -299,7 +299,7 @@ export function findSimilar(action, id, heroId, refEmb) {
  *  R1 启用判定：boost>0 且已固化嵌入条。
  *  R2 英雄锚定：只对当前英雄 heroId 的嵌入条生效。
  *  R3 决策点命中：候选 acts 中存在 id 与嵌入 id 完全一致的动作（精确命中）。
- *  R4 模糊判定：原最优 best 与次优分差 gap ≤ 阈值才允许替换。
+ *  R4 模糊判定：原最优 best 与次优的 normalized margin 足够接近时才允许替换。
  *  R5 价值校验：该决策点平均价值必须为正（value>0）。
  *  R6 提权：对命中的动作加 boost ×（0.5 + value）。
  *  R7 候选替换：强化后该动作成为最优且 gap 达标 → 替换 best。
@@ -311,7 +311,7 @@ export function findSimilar(action, id, heroId, refEmb) {
  *  G3 阈值：sim ≥ SIM_THRESHOLD 才允许复用。
  *  G4 价值筛选：value>0。
  *  G5 线性加权：score += boost ×（0.35 + 0.65×sim）×（0.5 + value）。
- *  G6 替换判定：同 R4/R7，gap 达标才替换。
+ *  G6 替换判定：同 R4/R7，仅在相对边际接近时才替换。
  *  G7 兜底：无 ≥阈值邻居则不放权。
  */
 export function applyChampionRule(acts, best, boost, ctx) {
