@@ -8,14 +8,14 @@ export const AUDIT = {
 	"files": 217,
 	"cleanFiles": 91,
 	"legacyFiles": 126,
-	"hits": 3458,
+	"hits": 3453,
 	"cleanRate": 42,
 	"byDomain": {
 		"cognition": 120,
 		"decision": 1870,
 		"foundation": 54,
 		"knowledge": 218,
-		"model": 285,
+		"model": 280,
 		"perception": 786,
 		"verification": 6,
 		"view": 119
