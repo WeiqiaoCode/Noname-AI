@@ -3059,6 +3059,144 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+
+/* ================= 10.41 Strategic Transition Ledger V2 =================
+ * A. create-state 只有真实落区才确认；被无懈/未生效不得留下假 commitment；
+ * B. remove-target-card 只有真实移除战略状态才写 REMOVE；
+ * C. CREATE→REMOVE 与 REMOVE→CREATE 都是 soft penalty；
+ * D. actor / target / turn epoch 隔离；同角色额外回合也清空；
+ * E. engine 候选评分只消费通用 strategic operation，不靠具体牌名单触发。
+ */
+{
+    const fs41 = await import('node:fs');
+    const host41 = await import(pathToFileURL(_hostPath).href);
+    const tss41 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js')).href);
+    const terms41 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'terms.js')).href);
+
+    function C41(id) { return { name: id }; }
+    function P41(name, rel, o) {
+        o = o || {};
+        return {
+            name: name, name1: name, playerid: name, rel: rel, alive: true, hp: 4, maxHp: 4,
+            _h: o.h || [], _e: o.e || [], _j: o.j || [],
+            countCards: function (z) {
+                if (z === 'h') return this._h.length;
+                if (z === 'e') return this._e.length;
+                if (z === 'j') return this._j.length;
+                return 0;
+            },
+            getCards: function (z) {
+                if (z === 'h') return this._h;
+                if (z === 'e') return this._e;
+                if (z === 'j') return this._j;
+                return [];
+            },
+        };
+    }
+
+    const me = P41('me41', 1);
+    const other = P41('other41', 1);
+    const enemy = P41('enemy41', -1);
+    const enemy2 = P41('enemy42', -1);
+    const rctx = { relationOf: function (_me, t) { return t.rel; } };
+
+    host41.game.me = me;
+    host41.game.players = [me, other, enemy, enemy2];
+    host41.game.alivePlayers = host41.game.players.slice();
+    host41._status.currentPhase = me;
+
+    eq(terms41.strategicEffectOf('lebu').operation, 'create-state',
+        '10.41 乐由 profile 映射为 create-state');
+    eq(terms41.strategicEffectOf('shunshou').operation, 'remove-target-card',
+        '10.41 顺由 profile 映射为 remove-target-card');
+
+    /* A1. 被无懈/未落区：pending 结案但不得制造 CREATE。 */
+    tss41.beginStrategicTurn(me);
+    tss41.beginStrategicAction(me, 'lebu', enemy, rctx);
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 useCard 时只记录 pending，不提前宣称 CREATE');
+    eq(tss41.getPendingStrategicActions().length, 1,
+        '10.41 create-state 动作前快照进入 pending');
+    tss41.reconcileStrategicTransitions(me, rctx);
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 乐未进入判定区（如被无懈）→ 不产生假 commitment');
+
+    /* A2. 真实落区：下一决策 reconcile 后确认 CREATE。 */
+    tss41.beginStrategicAction(me, 'lebu', enemy, rctx);
+    enemy._j.push(C41('lebu'));
+    const made = tss41.reconcileStrategicTransitions(me, rctx);
+    ok(made.some(function (x) { return x.operation === 'create-state'; }),
+        '10.41 乐真实落区 → 确认 CREATE');
+    const destroyAfterCreate = tss41.evaluateDestroyPenalty(me, enemy, rctx);
+    eq(destroyAfterCreate.selfCreated, true,
+        '10.41 已确认 CREATE 后，同 actor 识别 self-created');
+    ok(destroyAfterCreate.effectivePenalty > 0,
+        '10.41 CREATE→REMOVE 敌方有利状态存在 soft opportunity cost');
+
+    /* actor 隔离：另一角色不能把我的 CREATE 当成自己的 commitment。 */
+    eq(tss41.evaluateRemovalChoice(other, enemy, enemy._j[0], rctx).selfCreated, false,
+        '10.41 self-created 必须匹配 actor，不跨角色串账');
+
+    /* B1. 顺/拆若拿走装备而非状态，不得写 REMOVE-state。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('lebu')];
+    enemy._e = [C41('weapon41')];
+    tss41.beginStrategicAction(me, 'guohe', enemy, rctx);
+    enemy._e.length = 0;
+    tss41.reconcileStrategicTransitions(me, rctx);
+    eq(tss41.getStrategicRecords().filter(function (x) { return x.operation === 'remove-state'; }).length, 0,
+        '10.41 过河只拆装备、判定状态仍在 → 不误记 REMOVE-state');
+
+    /* B2/C. 真正移除兵粮后，再给同目标兵粮应识别 REMOVE→CREATE reversal。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('bingliang')];
+    tss41.beginStrategicAction(me, 'shunshou', enemy, rctx);
+    enemy._j.length = 0;
+    const removed = tss41.reconcileStrategicTransitions(me, rctx);
+    ok(removed.some(function (x) { return x.operation === 'remove-state'; }),
+        '10.41 顺手真实拿走兵粮 → 写 REMOVE-state');
+    const recreate = tss41.evaluateCreateConsistency(me, enemy, 'bingliang', rctx);
+    ok(recreate.penalty > 0 && Number.isFinite(recreate.penalty),
+        '10.41 REMOVE→同目标CREATE → 有限 reversal penalty');
+    eq(tss41.evaluateCreateConsistency(me, enemy2, 'bingliang', rctx).penalty, 0,
+        '10.41 REMOVE 后换目标 CREATE → 不视为反转');
+
+    /* D. 同一个角色获得额外回合：显式 phaseBegin epoch 也必须清空旧 ledger。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('lebu')];
+    tss41.recordStateCreation(me, enemy, 'lebu', rctx);
+    const epoch1 = tss41.getStrategicTurnEpoch();
+    eq(tss41.getStrategicRecords().length, 1, '10.41 当前回合存在 confirmed ledger');
+    const epoch2 = tss41.beginStrategicTurn(me);
+    ok(epoch2 > epoch1, '10.41 同角色额外回合也创建新 turn epoch');
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 同角色额外回合清空上一回合 strategic ledger');
+
+    /* E. 源码守卫：engine 不再在 useCard 时按乐/兵硬编码记 commitment；
+     * transition evaluator 独立于“拆牌/延时类打敌”具体牌列表。 */
+    const eng41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const tssSrc41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js'), 'utf8');
+    const opt41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'optimization.js'), 'utf8');
+
+    ok(eng41.indexOf('beginStrategicAction(me, _cid, _target') >= 0,
+        '10.41 engine useCard 对任意 strategic operation 只建 pending');
+    eq(eng41.indexOf("if (_cid === 'lebu' || _cid === 'bingliang')") < 0, true,
+        '10.41 engine 不再按乐/兵具体牌名记录 commitment');
+    ok(eng41.indexOf('reconcileStrategicTransitions(_stMe') >= 0,
+        '10.41 每次 bestAction 前先按真实状态 reconcile pending');
+    ok(eng41.indexOf('const tp = evaluateActionTransitionPenalty(me, bestT, id') >= 0,
+        '10.41 候选统一进入通用 transition evaluator');
+    ok(tssSrc41.indexOf("operation === 'remove-state'") >= 0 &&
+       tssSrc41.indexOf("operation === 'create-state'") >= 0,
+        '10.41 ledger 同时表达 CREATE 与 confirmed REMOVE');
+    eq(/const\s+(DELAYED_CONTROL_IDS|PROVENANCE_IDS)\s*=/.test(tssSrc41), false,
+        '10.41 核心 ledger 不维护乐/兵专用名单');
+    ok(opt41.indexOf("idsWithStrategicOperation('remove-target-card')") >= 0,
+        '10.41 button hook 按 profile operation 自动枚举');
+    ok(opt41.indexOf('uninstallButtonHooks();') >= 0,
+        '10.41 generic button hook 有对称卸载路径');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
