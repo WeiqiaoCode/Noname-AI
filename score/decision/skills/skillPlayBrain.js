@@ -161,7 +161,8 @@ export function skillTarget(sid, profile, ctx) {
 	const catsArr = Array.isArray(cats) ? cats : [];
 	const isMulti = catsArr.indexOf('all') >= 0
 		|| catsArr.indexOf('multi') >= 0
-		|| (catsArr.length >= 2 && catsArr.indexOf('self') < 0);
+		|| (catsArr.length >= 2 && catsArr.indexOf('self') < 0)
+		|| (declaredMax !== null && declaredMax > 1);
 	if (isMulti) {
 		const intent = profile && profile.targets && profile.targets.intent;
 		/* mixed 多目标技能通常包含不同角色/不同效果槽位，不能把所有目标按一个方向全选。 */
@@ -171,12 +172,21 @@ export function skillTarget(sid, profile, ctx) {
 			|| (intent !== 'support' && (cat === 'attack' || cat === 'control'
 				|| (cats && cats.indexOf('enemy') >= 0 && cats.indexOf('ally') < 0)));
 		const ranked = [];
+		const tags = (profile && profile.tags) || {};
+		const giveWeight = Math.max(0, Number(tags.giveCard || 0));
 		targets.forEach(function (t, i) {
 			const ok = offensive ? (t.isEnemy === true) : (t.isAlly === true);
 			if (!ok) return;
 			const dying = (t.hp !== undefined && t.hp <= 0) ? 6 : 0;
 			const low = (t.hp !== undefined && t.hp <= 1) ? 3 : 0;
 			let score = offensive ? ((t.threat || 0) + low) : (dying + low + (t.threat || 0) * 0.3);
+			if (!offensive && giveWeight > 0) {
+				const hc = Number(t.handCount);
+				if (Number.isFinite(hc)) {
+					const shortage = Math.max(0, 4 - hc);
+					score += Math.min(4, shortage * Math.min(1.5, giveWeight));
+				}
+			}
 			if (ctx.hi && typeof ctx.hi.identityBiasOf === 'function') {
 				score += ctx.hi.identityBiasOf(ctx.me, t.pp, 0.6);
 			}
@@ -236,18 +246,27 @@ export function skillTarget(sid, profile, ctx) {
 		if (bi < 0) return { index: -1, reason: '没有敌方目标' };
 		return { index: bi, reason: '敌方威胁/低血最高' };
 	}
-	// 己方技：优先主公/濒死
+	// 己方技：优先高生存需求；给牌类同时考虑资源短缺
 	if (cat === 'defense' || cat === 'aux') {
 		let bi = -1, bs = -Infinity;
+		const tags = (profile && profile.tags) || {};
+		const giveWeight = Math.max(0, Number(tags.giveCard || 0));
 		targets.forEach(function (t, i) {
 			if (!t.isAlly) return;
 			const dying = (t.hp !== undefined && t.hp <= 0) ? 5 : 0;
 			const low = (t.hp !== undefined && t.hp <= 1) ? 3 : 0;
-			const s = dying + low + ((t.threat || 0) * 0.3);
-			if (s > bs) { bs = s; bi = i; }
+			let score = dying + low + ((t.threat || 0) * 0.3);
+			if (giveWeight > 0) {
+				const hc = Number(t.handCount);
+				if (Number.isFinite(hc)) {
+					const shortage = Math.max(0, 4 - hc);
+					score += Math.min(4, shortage * Math.min(1.5, giveWeight));
+				}
+			}
+			if (score > bs) { bs = score; bi = i; }
 		});
-		if (bi < 0) return { index: -1, reason: '没有已方目标' };
-		return { index: bi, reason: '优先主公/濒死队友' };
+		if (bi < 0) return { index: -1, reason: '没有己方目标' };
+		return { index: bi, reason: giveWeight > 0 ? '优先资源短缺/高生存需求队友' : '优先濒死/低血队友' };
 	}
 	return { index: -1, reason: '灵活' };
 }
