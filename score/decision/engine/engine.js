@@ -2355,13 +2355,15 @@ function applyBasicSkillRules(me, acts) {
 			a.targetInferred = inferredTargetIntent;
 			const directional = (ti === 'support' || ti === 'offense') && tc >= 0.55
 				&& _skillNeedsExternalTarget(sid, prof);
-			if (!d.veto && directional && d.targetIndex < 0 && skillTargets.length > 0) {
+			if (!d.veto && directional && d.targetRequired !== false
+				&& d.targetDecisionResolved !== false && d.targetIndex < 0 && skillTargets.length > 0) {
 				a.score = Math.min(a.score, -6);
 				a.reason = (a.reason || '') + '（[技能目标否决] 无合法' + (ti === 'support' ? '友方' : '敌方') + '目标）';
 				a.rule = 'veto-target';
 				return;
 			}
-			if (!d.veto && directional && skillTargets.length === 0) {
+			if (!d.veto && directional && d.targetRequired !== false
+				&& d.targetDecisionResolved !== false && skillTargets.length === 0) {
 				a.score = Math.min(a.score, -6);
 				a.reason = (a.reason || '') + '（[技能目标否决] 无合法目标）';
 				a.rule = 'veto-target';
@@ -2401,6 +2403,8 @@ function applyBasicSkillRules(me, acts) {
 				 *   供收益方向守卫逐目标判定整体方向，避免只判主目标漏判。 */
 				if (Array.isArray(d.targetIndexes)) {
 					a.targetRangeResolved = d.targetRangeResolved !== false;
+					a.targetDecisionResolved = d.targetDecisionResolved !== false;
+					a.targetRequired = d.targetRequired !== false;
 					const list = [];
 					d.targetIndexes.forEach(function (ti) {
 						const tt = skillTargets[ti];
