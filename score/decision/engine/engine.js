@@ -2223,9 +2223,10 @@ function _canConfirmSelfSkillTarget(sid, me, prof) {
 	} catch (e) { return false; }
 }
 
-function _skillPurposeFromIntent(intent, category) {
-	if (intent === 'offense') return 'attack';
-	if (intent === 'support') return 'support';
+function _skillPurposeFromIntent(intent, category, confidence) {
+	const c = (confidence === undefined || confidence === null) ? 1 : Number(confidence || 0);
+	if (intent === 'offense') return c >= 0.55 ? 'attack' : null;
+	if (intent === 'support') return c >= 0.55 ? 'support' : null;
 	if (intent === 'mixed') return null;
 	if (category === 'attack' || category === 'control') return 'attack';
 	if (category === 'defense' || category === 'aux') return 'support';
@@ -2350,7 +2351,7 @@ function applyBasicSkillRules(me, acts) {
 						const _cat = d.category || d.rule || '';
 						/* 目标 intent 高于技能大类：target.draw() 可能是辅助技，不能因 category=draw
 						 * 又被翻译成 attack。mixed 则刻意不设 purpose，交回原生/专属策略。 */
-						const _purpose = _skillPurposeFromIntent(ti, _cat);
+						const _purpose = _skillPurposeFromIntent(ti, _cat, tc);
 						if (_purpose) a.purpose = _purpose;
 					}
 				}
