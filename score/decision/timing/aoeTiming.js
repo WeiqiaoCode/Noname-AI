@@ -8,106 +8,151 @@
  */
 
 /* ================= 决策积分引擎 · AOE 时机优化 =================
- * 优化南蛮入侵/万箭齐发的使用时机
+ * 南蛮/万箭的唯一动作级评估入口。
+ * 只使用公开手牌数量、公开装备、牌堆记忆与行为概率，不读取对手具体隐藏手牌。
  */
 import { game } from '../../foundation/adapt/host.js';
-import { isAllyOf, isEnemyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
+import { isAllyOf, isEnemyOf } from '../relations/relations.js';
+import { probHasShan, probHasBagua } from '../threat/threat.js';
+import { cardRemaining } from '../../perception/memory/deckMemory.js';
 
-/* ★ 计算 AOE 收益 */
-export function aoeValue(me, cardId) {
+function _clamp01(v) {
+	return Math.max(0, Math.min(1, Number(v) || 0));
+}
+
+function _publicHandCount(player) {
 	try {
-		let enemyHit = 0, allyHit = 0;
-		let totalDamage = 0;
-
-		const players = game.players || [];
-		players.forEach(function (p) {
-			if (!p || p.alive === false || p === me) return;
-
-			const enemy = isEnemyOf(me, p);
-			const ally = isAllyOf(me, p);
-			const handCount = p.countCards('h');
-
-			/* 南蛮：需要出杀 */
-			if (cardId === 'nanman') {
-				/* 假设每个玩家 30% 概率没杀 */
-				const noShaProb = Math.max(0.1, 1 - handCount * 0.1);
-				if (enemy) {
-					enemyHit += noShaProb;
-					totalDamage += noShaProb;
-				} else if (ally) {
-					allyHit += noShaProb;
-				}
-			}
-
-			/* 万箭：需要出闪 */
-			if (cardId === 'wanjian') {
-				/* 假设每个玩家 30% 概率没闪 */
-				const noShanProb = Math.max(0.1, 1 - handCount * 0.1);
-				if (enemy) {
-					enemyHit += noShanProb;
-					totalDamage += noShanProb;
-				} else if (ally) {
-					allyHit += noShanProb;
-				}
-			}
-		});
-
-		return {
-			enemyHit: enemyHit,
-			allyHit: allyHit,
-			netDamage: totalDamage - allyHit,
-			worth: totalDamage > allyHit,
-		};
+		return player && player.countCards ? Math.max(0, Number(player.countCards('h')) || 0) : 0;
 	} catch (e) {
-		return { enemyHit: 0, allyHit: 0, netDamage: 0, worth: false };
+		return 0;
 	}
 }
 
-/* ★ AOE 时机建议 */
+/* 南蛮所需“杀”没有单独的隐藏牌读取器：只由公开手牌数估计基础概率。 */
+function _probHasShaFromPublicState(player) {
+	const hand = _publicHandCount(player);
+	if (hand <= 0) return 0.05;
+	return _clamp01(Math.min(0.82, 0.12 + hand * 0.11));
+}
+
+function _deckScarcityAdjusted(probability, responseCard) {
+	try {
+		const remain = cardRemaining(responseCard);
+		if (!Number.isFinite(remain) || remain < 0) return _clamp01(probability);
+		if (remain <= 3) return _clamp01(probability * 0.80);
+		if (remain <= 6) return _clamp01(probability * 0.90);
+	} catch (e) {}
+	return _clamp01(probability);
+}
+
+export function aoeResponseProbability(player, cardId) {
+	try {
+		if (!player) return 0.5;
+
+		if (cardId === 'wanjian') {
+			let p = probHasShan(player);
+			/* 八卦是公开装备，可以合法提高“能响应万箭”的概率。 */
+			if (probHasBagua(player)) p = 1 - (1 - p) * 0.5;
+			return _deckScarcityAdjusted(p, 'shan');
+		}
+
+		if (cardId === 'nanman') {
+			return _deckScarcityAdjusted(_probHasShaFromPublicState(player), 'sha');
+		}
+
+		return 0.5;
+	} catch (e) {
+		return 0.5;
+	}
+}
+
+function _impactWeight(player) {
+	try {
+		const hp = Number(player && player.hp);
+		if (hp <= 1) return 1.6;
+		if (hp <= 2) return 1.25;
+	} catch (e) {}
+	return 1.0;
+}
+
+/* ★ 计算 AOE 期望收益。
+ * enemyHit / allyHit 是预计无法响应的人数期望；
+ * netImpact 额外考虑公开血线，但不包含任何“残局就该进攻”的阶段加成。 */
+export function aoeValue(me, cardId) {
+	try {
+		let enemyHit = 0, allyHit = 0;
+		let enemyImpact = 0, allyImpact = 0;
+		let enemyCount = 0, allyCount = 0;
+
+		for (const p of (game.players || [])) {
+			if (!p || p.alive === false || p === me) continue;
+
+			const enemy = isEnemyOf(me, p);
+			const ally = isAllyOf(me, p);
+			if (!enemy && !ally) continue;
+
+			const responseProb = aoeResponseProbability(p, cardId);
+			const hitProb = _clamp01(1 - responseProb);
+			const impact = hitProb * _impactWeight(p);
+
+			if (enemy) {
+				enemyCount++;
+				enemyHit += hitProb;
+				enemyImpact += impact;
+			} else if (ally) {
+				allyCount++;
+				allyHit += hitProb;
+				allyImpact += impact;
+			}
+		}
+
+		const netDamage = enemyHit - allyHit;
+		const netImpact = enemyImpact - allyImpact;
+		return {
+			enemyHit: enemyHit,
+			allyHit: allyHit,
+			enemyImpact: enemyImpact,
+			allyImpact: allyImpact,
+			enemyCount: enemyCount,
+			allyCount: allyCount,
+			netDamage: netDamage,
+			netImpact: netImpact,
+			worth: netImpact > 0,
+		};
+	} catch (e) {
+		return {
+			enemyHit: 0, allyHit: 0,
+			enemyImpact: 0, allyImpact: 0,
+			enemyCount: 0, allyCount: 0,
+			netDamage: 0, netImpact: 0, worth: false,
+		};
+	}
+}
+
+/* ★ AOE 时机建议：只看该 AOE 自身的期望交换，不重复消费 game phase。 */
 export function aoeTiming(me, cardId) {
 	try {
 		const value = aoeValue(me, cardId);
 
-		/* 1. 净伤害 > 0 → 用 */
-		if (value.netDamage >= 1) {
-			return { use: true, reason: '净伤害 ' + value.netDamage.toFixed(1) + '，值' };
+		if (value.netImpact >= 0.6) {
+			return { use: true, reason: 'AOE期望净收益 ' + value.netImpact.toFixed(2), value: value };
 		}
 
-		/* 2. 残局 → 用 */
-		const alive = (game.players || []).filter(function (p) {
-			return p && p.alive !== false;
-		}).length;
-		if (alive <= 3 && value.enemyHit > 0) {
-			return { use: true, reason: '残局，AOE 收人头' };
+		if (value.netImpact > 0 && value.enemyHit >= value.allyHit + 0.5) {
+			return { use: true, reason: '敌方预计受击明显更多', value: value };
 		}
 
-		/* 3. 队友少 → 用 */
-		let allyCount = 0, enemyCount = 0;
-		(game.players || []).forEach(function (p) {
-			if (!p || p.alive === false || p === me) return;
-			if (isAllyOf(me, p)) allyCount++;
-			else if (isEnemyOf(me, p)) enemyCount++;
-		});
-		if (enemyCount > allyCount + 1) {
-			return { use: true, reason: '敌人多，AOE 赚' };
-		}
-
-		/* 4. 默认不用 */
-		return { use: false, reason: '净伤害不够，不用 AOE' };
+		return { use: false, reason: 'AOE期望交换不足', value: value };
 	} catch (e) {
-		return { use: false, reason: '出错了' };
+		return { use: false, reason: 'AOE评估失败', value: null };
 	}
 }
 
-/* ★ AOE 评分加成 */
+/* ★ AOE 评分倍率。阶段/残局本身不在这里重复加权。 */
 export function aoeBonus(me, act) {
 	try {
 		if (!act || (act.id !== 'nanman' && act.id !== 'wanjian')) return 1.0;
-
-		const timing = aoeTiming(me, act.id);
-		if (timing.use) return 1.5;
-
-		return 0.5;
+		return aoeTiming(me, act.id).use ? 1.5 : 0.5;
 	} catch (e) {
 		return 1.0;
 	}
