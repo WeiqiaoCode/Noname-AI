@@ -20,6 +20,7 @@ import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
 import { skillProfileOf } from '../skills/skills.js';
 import { beginSkillChoiceStage } from '../skills/skillChoiceTransaction.js';
+import { skillCardSelectionAdjustment } from '../skills/skillCardChoiceBrain.js';
 import { cfg } from '../../foundation/config/util.js';
 import { isAllyOf, dispositionOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 
@@ -469,10 +470,41 @@ export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 	} catch (e) { return next; }
 }
 
-export function wrapSkillCardOpportunityAI(original, player, stage) {
+function _ownSkillCardContext(player) {
+	const out = {
+		hp: (player && player.hp !== undefined) ? player.hp : 3,
+		maxHp: (player && player.maxHp) || 3,
+		shaCount: 0, shanCount: 0, wuxieCount: 0, jiuCount: 0,
+		hasZhuge: false, hasPaoxiao: false,
+	};
+	try {
+		const hand = player && typeof player.getCards === 'function' ? (player.getCards('h') || []) : [];
+		for (const c of hand) {
+			let id = '';
+			try { id = (typeof get.name === 'function' && get.name(c, player)) || (c && c.name) || ''; } catch (e) { id = (c && c.name) || ''; }
+			if (id === 'sha') out.shaCount++;
+			else if (id === 'shan') out.shanCount++;
+			else if (id === 'wuxie') out.wuxieCount++;
+			else if (id === 'jiu') out.jiuCount++;
+		}
+		try {
+			const equips = player && typeof player.getCards === 'function' ? (player.getCards('e') || []) : [];
+			for (const c of equips) {
+				let id = '';
+				try { id = (typeof get.name === 'function' && get.name(c, player)) || (c && c.name) || ''; } catch (e) { id = (c && c.name) || ''; }
+				if (id === 'zhuge') out.hasZhuge = true;
+			}
+		} catch (e) {}
+		try { if (player && typeof player.hasSkill === 'function' && player.hasSkill('paoxiao')) out.hasPaoxiao = true; } catch (e) {}
+	} catch (e) {}
+	return out;
+}
+
+export function wrapSkillCardOpportunityAI(original, player, stage, profile) {
 	if (!player || !stage) return original;
 	const tag = stage.skillId + '|' + stage.transactionId + '|' + stage.ordinal;
 	if (original && original.__djscSkillCardStageBridge === tag) return original;
+	const meCardCtx = _ownSkillCardContext(player);
 	const wrapped = function (card) {
 		let nativeScore = 0;
 		try {
@@ -482,19 +514,25 @@ export function wrapSkillCardOpportunityAI(original, player, stage) {
 			}
 		} catch (e) {}
 		try {
-			/* 独立 chooseCard 阶段不猜卡牌后续语义，只在原生 AI 基本同分时
-			 * 加一个有界的机会成本 tie-break：低价值自有牌略优。 */
 			let owner = null;
 			try {
 				if (typeof get.owner !== 'function') return nativeScore;
 				owner = get.owner(card);
 			} catch (e) { return nativeScore; }
-			/* 独立 chooseCard 只评价明确属于当前玩家的牌；来源/所有者不明则 fail-open。 */
+			/* 只评价明确属于当前玩家的牌；未知/外部来源完全沿用原生 AI。 */
 			if (owner !== player) return nativeScore;
-			const v = Number(get.value(card, player));
-			if (!Number.isFinite(v)) return nativeScore;
-			const tie = Math.max(-0.2, Math.min(0.2, -v * 0.02));
-			return nativeScore + tie;
+
+			let id = '';
+			try { id = (typeof get.name === 'function' && get.name(card, player)) || (card && card.name) || ''; } catch (e) { id = (card && card.name) || ''; }
+			if (!id) return nativeScore;
+			let value = NaN;
+			try { value = Number(get.value(card, player)); } catch (e) {}
+
+			const d = skillCardSelectionAdjustment(id, profile, {
+				me: meCardCtx,
+				cardValue: value,
+			});
+			return nativeScore + Number(d && d.adjustment || 0);
 		} catch (e) { return nativeScore; }
 	};
 	try { Object.defineProperty(wrapped, '__djscSkillCardStageBridge', { value: tag, configurable: true }); } catch (e) {}
@@ -509,15 +547,16 @@ export function bridgeSkillCardStageEvent(next, player, skillContext, field, baO
 		const ba = baOverride || _getBA(player);
 		if (!ba || ba.type !== 'skill' || ba.id !== skillContext.id) return next;
 		if (ba.rule === 'veto' || ba.rule === 'veto-target') return next;
+		const profile = skillProfileOf(skillContext.id);
 
 		if (typeof next[field] === 'function') {
-			next[field] = wrapSkillCardOpportunityAI(next[field], player, stage);
+			next[field] = wrapSkillCardOpportunityAI(next[field], player, stage, profile);
 		}
 		if (typeof next.set === 'function' && !next.__djscSkillCardStageSetBridge) {
 			const origSet = next.set;
 			next.set = function (key, value) {
 				if (key === field && typeof value === 'function') {
-					value = wrapSkillCardOpportunityAI(value, player, stage);
+					value = wrapSkillCardOpportunityAI(value, player, stage, profile);
 				}
 				return origSet.call(this, key, value);
 			};
