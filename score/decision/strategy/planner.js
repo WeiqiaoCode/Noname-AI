@@ -22,6 +22,7 @@ import { isEnemyOf, probHasShan, seatPressure, threatOf } from '../threat/threat
 import { isAllyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 import { baseEquipValue } from '../basic/equipBrain.js';
 import { signedNormalizedImprovement, DECISION_MARGIN } from '../state/decisionMargin.js';
+import { targetKey } from '../state/actionCandidate.js';
 
 const PLAN_TIMEOUT = 350;
 const LOOKAHEAD_DISCOUNT = 0.7;
@@ -569,9 +570,11 @@ export function refineBestWithPlan(me, best, bestT) {
 		const liveCandidates = (_status.djsc_lastCandidates || []);
 		function canonicalOf(action) {
 			if (!action) return null;
+			const actionType = action.type === 'equip' ? 'equip'
+				: (action.type === 'skill' ? 'skill' : 'card');
 			return liveCandidates.find(function (c) {
 				if (!c || c.id !== action.id) return false;
-				if ((c.type || 'card') !== (action.type || 'card')) return false;
+				if ((c.type || 'card') !== actionType) return false;
 				if (action.target != null && c.target != null && c.target !== action.target) return false;
 				return true;
 			}) || null;
@@ -587,7 +590,13 @@ export function refineBestWithPlan(me, best, bestT) {
 			out.reason = '★ 残局解：' + planBest.steps.map(function (s) { return s.id; }).join(' → ') +
 				'（' + planBest.steps.reduce(function (sum, x) { return sum + (x.dmg || 0); }, 0) + ' 点伤害）';
 			out.killTarget = planBest.target;
-			out.target = planBest.action.type === 'equip' ? null : planBest.target;
+			if (planBest.action.type === 'equip') {
+				out.target = null;
+				out.targetObj = null;
+			} else {
+				out.targetObj = planBest.target || out.targetObj || null;
+				out.target = targetKey(out.targetObj) || out.target || null;
+			}
 			out.isKill = true;
 			out.planned = true;
 			return out;
