@@ -3716,21 +3716,544 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 skill profile 保留目标方向置信度/来源');
     ok(engineSrc43.indexOf('_isLegalSkillTarget(sid, me, t.pp)') >= 0,
         '10.43 engine 每技能目标先过 filterTarget');
-    ok(overrideSrc43.indexOf('proto.chooseTarget = function') >= 0
-        && overrideSrc43.indexOf('proto.chooseCardTarget = function') >= 0,
+    ok(overrideSrc43.indexOf('const origChooseTarget = proto.chooseTarget') >= 0
+        && overrideSrc43.indexOf('const origChooseCardTarget = proto.chooseCardTarget') >= 0
+        && overrideSrc43.indexOf('_protoOwned.chooseTarget = proto.chooseTarget') >= 0
+        && overrideSrc43.indexOf('_protoOwned.chooseCardTarget = proto.chooseCardTarget') >= 0,
         '10.43 宿主桥覆盖 chooseTarget + chooseCardTarget');
     ok(overrideSrc43.indexOf("if (key === field && typeof value === 'function')") >= 0,
         '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
-    ok(overrideSrc43.indexOf("ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55") >= 0,
-        '10.43 宿主桥只接受 kernel 已解析的高置信单目标');
+    ok(overrideSrc43.indexOf("ba.skillTargetResolved !== true || confidence < 0.55") >= 0
+        && overrideSrc43.indexOf("ba.skillTargetSingle !== true && (!Array.isArray(ba.targetList) || !ba.targetList.length)") >= 0,
+        '10.43 宿主桥只接受 kernel 已解析的高置信单目标/显式多目标组');
     ok(overrideSrc43.indexOf("__djscSkillTargetBridgeConsumed") >= 0,
         '10.43 同次技能发动的通用目标桥只消费一次');
-    ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
-        '10.43 宿主桥再次校验当前选择事件合法目标');
+    ok(overrideSrc43.indexOf("eventAcceptsSkillTargetPlan(next, player, decision)") >= 0,
+        '10.43 宿主桥再次校验当前选择事件合法目标/目标组');
     const skillDirPos43 = overrideSrc43.indexOf('const skillDir = skillDirectionEffectModifier(card, player, target)');
     const bestActionPos43 = overrideSrc43.indexOf('const ba = _getBA(player)', skillDirPos43);
     ok(skillDirPos43 >= 0 && bestActionPos43 > skillDirPos43,
         '10.43 原生 skill effect 方向守卫先于 bestAction，避免被降权技能绕过');
+}
+
+/* ================= 10.44 Skill Decision Kernel V2 · Stage 2 =================
+ * A. 多目标技能遵守宿主 selectTarget 数量，不再“全阵营全选”；
+ * B. 动态数量 / mixed 组合 fail-open；
+ * C. chooseCardTarget = 目标计划 + 低机会成本牌轻量 tie-break；
+ * D. chooseButton 只有 planner 明确给出 buttonChoice 才接管；
+ * E. chooseControl 只有 planner 明确给出 controlChoice 才接管；
+ * F. chooseButtonTarget/chooseControl 新 hook 必须可卸载。
+ */
+{
+    const fs44 = await import('node:fs');
+    const sp44 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js')).href);
+    const eng44 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'engine', 'engine.js')).href);
+    const ao44 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js')).href);
+    const host44 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'host.js')).href);
+
+    const me44 = { name: 'me44', name1: 'me44', playerid: 'me44' };
+    const a1_44 = { name: 'a1_44', name1: 'a1_44', playerid: 'a1_44' };
+    const a2_44 = { name: 'a2_44', name1: 'a2_44', playerid: 'a2_44' };
+    const a3_44 = { name: 'a3_44', name1: 'a3_44', playerid: 'a3_44' };
+    const e1_44 = { name: 'e1_44', name1: 'e1_44', playerid: 'e1_44' };
+
+    /* A. 固定 2 目标：3 个友方候选只能规划收益最高的 2 个。 */
+    const profMulti44 = {
+        tags: { __targets: ['multi'], recover: 1 },
+        targets: { intent: 'support', confidence: 0.75, inferred: true },
+        classify: 'aux',
+        profit: { base: 2, cost: { net: 0 }, multi: { final: 2 } },
+    };
+    const ctxMulti44 = {
+        me: { hp: 4, maxHp: 4 },
+        selectTargetRange: [2, 2],
+        targets: [
+            { pp: a1_44, isAlly: true, isEnemy: false, hp: 1, maxHp: 4, threat: 1 },
+            { pp: a2_44, isAlly: true, isEnemy: false, hp: 2, maxHp: 4, threat: 4 },
+            { pp: a3_44, isAlly: true, isEnemy: false, hp: 4, maxHp: 4, threat: 0 },
+            { pp: e1_44, isAlly: false, isEnemy: true, hp: 1, maxHp: 4, threat: 5 },
+        ],
+    };
+    const dm44 = sp44.decideSkill('multi44', profMulti44, ctxMulti44);
+    eq(dm44.targetIndexes.length, 2, '10.44 selectTarget=[2,2] → 恰好规划2个目标');
+    ok(dm44.targetIndexes.includes(0) && dm44.targetIndexes.includes(1),
+        '10.44 多目标 support 按友方收益排序选前2，不把敌方/满血低价值目标塞入');
+    eq(dm44.targetRangeResolved, true, '10.44 固定目标数量标记 resolved');
+
+    const dyn44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: null,
+    }));
+    eq(dyn44.targetIndexes.length, 1, '10.44 动态 selectTarget → 只推荐主目标');
+    eq(dyn44.targetRangeResolved, false, '10.44 动态数量不猜剩余组合');
+
+    const variable44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [1, 3],
+    }));
+    eq(variable44.targetIndexes.length, 1,
+        '10.44 可变 [1,3] → 只规划最小必要1个，不通用贪满3个');
+    eq(variable44.targetRangeResolved, false,
+        '10.44 可变数量保留宿主追加目标的决策权');
+
+    const zeroOptional44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [0, 3],
+    }));
+    eq(zeroOptional44.targetIndex, -1,
+        '10.44 可选 [0,3] → 通用层不擅自至少选择1个目标');
+    eq(zeroOptional44.targetIndexes.length, 0,
+        '10.44 可选 [0,3] → 不预生成目标组合');
+    eq(zeroOptional44.targetRangeResolved, false,
+        '10.44 可选 [0,3] → 0还是更多目标的数量决策交回宿主');
+    eq(zeroOptional44.targetDecisionResolved, false,
+        '10.44 可选 [0,3] → 目标决策本身标记 unresolved');
+    eq(zeroOptional44.targetRequired, false,
+        '10.44 可选 [0,3] → 不得按缺少必选目标触发 veto-target');
+
+    const zeroFixed44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [0, 0],
+        targets: [],
+    }));
+    eq(zeroFixed44.targetIndex, -1,
+        '10.44 固定 [0,0] → 无目标是合法最终决策');
+    eq(zeroFixed44.targetRangeResolved, true,
+        '10.44 固定 [0,0] → 数量契约已完全解析');
+    eq(zeroFixed44.targetDecisionResolved, true,
+        '10.44 固定 [0,0] → 目标决策已完成，不是未知状态');
+    eq(zeroFixed44.targetRequired, false,
+        '10.44 固定 [0,0] → 明确无需外部目标');
+
+    const mixedProf44 = Object.assign({}, profMulti44, {
+        targets: { intent: 'mixed', confidence: 0.7, inferred: true },
+    });
+    const mixed44 = sp44.decideSkill('mixed44', mixedProf44, ctxMulti44);
+    eq(mixed44.targetIndex, -1, '10.44 mixed 多目标 → 不强制单方向组合');
+
+    /* A2. engine 直接读取宿主 selectTarget 契约。 */
+    host44.lib.skill.range_num_44 = { filterTarget: function () { return true; }, selectTarget: 2 };
+    host44.lib.skill.range_arr_44 = { filterTarget: function () { return true; }, selectTarget: [1, 3] };
+    host44.lib.skill.range_dyn_44 = { filterTarget: function () { return true; }, selectTarget: function () { return [1, 2]; } };
+    host44.lib.skill.range_special_44 = { filterTarget: function () { return true; }, selectTarget: -1 };
+    eq(JSON.stringify(eng44._skillTargetRange('range_num_44')), JSON.stringify([2, 2]),
+        '10.44 数字 selectTarget → 固定区间');
+    eq(JSON.stringify(eng44._skillTargetRange('range_arr_44')), JSON.stringify([1, 3]),
+        '10.44 数组 selectTarget → 保留区间');
+    host44.lib.skill.range_neg_44 = { filterTarget: function () { return true; }, selectTarget: -1 };
+    eq(eng44._skillTargetRange('range_neg_44'), null,
+        '10.44 负数 selectTarget 属宿主特殊语义 → 预规划 fail-open');
+    eq(eng44._skillTargetRange('range_dyn_44'), null,
+        '10.44 函数 selectTarget → 预规划 fail-open');
+
+    const var44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [1, 3],
+    }));
+    eq(var44.targetIndexes.length, 1,
+        '10.44 可变 [1,3] → 只规划最小必要1个目标');
+    eq(var44.targetRangeResolved, false,
+        '10.44 可变数量组合标记 unresolved，额外目标交回宿主');
+    eq(eng44._skillTargetRange('range_special_44'), null,
+        '10.44 负数 selectTarget 属宿主特殊语义 → fail-open');
+
+    /* B. 多目标 action 传入宿主 target bridge 时，整组推荐目标都可获得正分。 */
+    host44.game.players = [me44, a1_44, a2_44, a3_44, e1_44];
+    const baMulti44 = {
+        type: 'skill', id: 'stage2_skill_44',
+        targetObj: a1_44, target: 'a1_44', targetList: [a1_44, a2_44],
+        targetRangeResolved: true,
+        skillTargetResolved: true,
+        skillTargetSingle: false,
+        purpose: 'support', rule: 'aux', score: 9,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+    };
+    const decMulti44 = ao44.getSkillTargetBridgeDecision(me44, 'stage2_skill_44', baMulti44);
+    eq(decMulti44.targets.length, 2, '10.44 host target decision 保留多目标组合');
+    const targetAI44 = ao44.wrapSkillTargetAI(function () { return 0; }, me44, decMulti44);
+    ok(targetAI44(a1_44) >= 12 && targetAI44(a2_44) >= 12,
+        '10.44 规划组合中的两个目标都获得宿主正分');
+
+    /* B2. 多目标宿主桥必须和当前事件的固定选择数量一致。 */
+    const fixed2Evt44 = {
+        ai: function () { return 0; },
+        selectTarget: [2, 2],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(fixed2Evt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    ok(fixed2Evt44.ai(a1_44) >= 12 && fixed2Evt44.ai(a2_44) >= 12,
+        '10.44 当前事件同为固定2目标 → 整组计划可桥接');
+
+    const fixed1Native44 = function () { return 3; };
+    const fixed1Evt44 = {
+        ai: fixed1Native44,
+        selectTarget: [1, 1],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(fixed1Evt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(fixed1Evt44.ai, fixed1Native44,
+        '10.44 engine计划2目标但当前事件只选1个 → 不把上一阶段整组误桥过来');
+
+    const baSingle44 = {
+        type: 'skill', id: 'stage2_single_44',
+        targetObj: a1_44, target: 'a1_44',
+        skillTargetResolved: true,
+        skillTargetSingle: true,
+        purpose: 'support', rule: 'aux', score: 8,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+    };
+    const singleIntoFixed2Native44 = function () { return 4; };
+    const singleIntoFixed2Evt44 = {
+        ai: singleIntoFixed2Native44,
+        selectTarget: [2, 2],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(singleIntoFixed2Evt44, me44, 'stage2_single_44', 'ai', baSingle44);
+    eq(singleIntoFixed2Evt44.ai, singleIntoFixed2Native44,
+        '10.44 单目标计划遇到当前固定2目标事件 → stage mismatch，完全 fail-open');
+
+    const singleSelectedNative44 = function () { return 5; };
+    const singleSelectedEvt44 = {
+        ai: singleSelectedNative44,
+        selectTarget: [1, 1],
+        filterTarget: function (_card, _player, target) {
+            return !ui.selected.buttons.length || target === a1_44;
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(singleSelectedEvt44, me44, 'stage2_single_44', 'ai', baSingle44);
+    eq(singleSelectedEvt44.ai, singleSelectedNative44,
+        '10.44 单目标 filterTarget 依赖已选 button/card 等实时选择态 → 也必须 fail-open');
+
+    const selectedDepNative44 = function () { return 4; };
+    const selectedDepEvt44 = {
+        ai: selectedDepNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return !ui.selected.targets.length || target !== ui.selected.targets[0];
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(selectedDepEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(selectedDepEvt44.ai, selectedDepNative44,
+        '10.44 多目标 filterTarget 依赖 ui.selected → 组合合法性不可静态证明，完全原生');
+
+    const eventStateNative44 = function () { return 5; };
+    const eventStateEvt44 = {
+        ai: eventStateNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return !event.targets.length || target !== event.targets[0];
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(eventStateEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(eventStateEvt44.ai, eventStateNative44,
+        '10.44 多目标 filterTarget 依赖 event.targets → 保守 fail-open，不执行未定义事件态');
+
+    const thisStateNative44 = function () { return 6; };
+    const thisStateEvt44 = {
+        ai: thisStateNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return !this.selected || target !== this.selected[0];
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(thisStateEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(thisStateEvt44.ai, thisStateNative44,
+        '10.44 多目标 filterTarget 依赖 this.selected → 保守 fail-open');
+
+    const getEventNative44 = function () { return 7; };
+    const getEventEvt44 = {
+        ai: getEventNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return get.event().targets.indexOf(target) < 0;
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(getEventEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(getEventEvt44.ai, getEventNative44,
+        '10.44 多目标 filterTarget 依赖 get.event() → 保守 fail-open');
+
+    /* C. chooseCardTarget card half：原生同分时低价值牌略优，但只做很小 tie-break。 */
+    host44.get.owner = function () { return me44; };
+    host44.get.value = function (card) { return card && card.v; };
+    const costAI44 = ao44.wrapSkillCostCardAI(function () { return 5; }, me44, decMulti44);
+    const low44 = costAI44({ name: 'low44', v: 1 });
+    const high44 = costAI44({ name: 'high44', v: 8 });
+    ok(low44 > high44, '10.44 选牌成本 tie-break：低价值牌优先');
+    ok(Math.abs(low44 - high44) <= 0.4, '10.44 选牌桥偏置有限，不覆盖技能原生 ai1');
+
+    const jointEvt44 = {
+        ai1: function () { return 5; },
+        ai2: function () { return 0; },
+        selectTarget: [2, 2],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(jointEvt44, me44, 'stage2_skill_44', 'ai2', baMulti44);
+    ao44.bridgeSkillCardCostEvent(jointEvt44, me44, 'stage2_skill_44', 'ai1', baMulti44);
+    ok(jointEvt44.ai1({ name: 'jointLow44', v: 1 }) > jointEvt44.ai1({ name: 'jointHigh44', v: 8 }),
+        '10.44 同一 chooseCardTarget 目标计划已确认 → 牌成本 tie-break 生效');
+
+    const detachedNative44 = function () { return 5; };
+    const detachedEvt44 = {
+        ai1: detachedNative44,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillCardCostEvent(detachedEvt44, me44, 'stage2_skill_44', 'ai1', baMulti44);
+    eq(detachedEvt44.ai1, detachedNative44,
+        '10.44 没有同事件目标桥 provenance → card half 完全 fail-open');
+
+    const cardDepNative44 = function () { return 3; };
+    const cardDepEvt44 = {
+        ai1: cardDepNative44,
+        ai2: function () { return 0; },
+        filterTarget: function (card, player, target) { return !!card && target === a1_44; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillCardCostEvent(cardDepEvt44, me44, 'stage2_skill_44', 'ai1', baMulti44);
+    eq(cardDepEvt44.ai1, cardDepNative44,
+        '10.44 target 合法性依赖所选 card → card half 完全 fail-open');
+
+    /* D. chooseButton：玩家 link 也不猜语义；只有 planner 明确 buttonChoice 才接管。 */
+    const nativeBtn44 = function () { return 2; };
+    const buttonNoPlanEvt44 = {
+        ai: nativeBtn44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonEvent(buttonNoPlanEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(buttonNoPlanEvt44.ai, nativeBtn44,
+        '10.44 button.link 即使可能是玩家，无显式 buttonChoice 仍完全原生');
+
+    const buttonPlanEvt44 = {
+        ai: function () { return 2; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonEvent(buttonPlanEvt44, me44, 'stage2_skill_44', 'ai', Object.assign({}, baMulti44, {
+        buttonChoice: a2_44,
+    }));
+    ok(buttonPlanEvt44.ai({ link: a2_44 }) >= 12,
+        '10.44 planner 显式 buttonChoice=玩家 → 对应按钮加分');
+    eq(buttonPlanEvt44.ai({ link: { name: 'sha' } }), 2,
+        '10.44 显式玩家 buttonChoice 不影响其它非匹配按钮');
+
+    /* E. chooseControl：没有显式 controlChoice 一律原生；只有 planner 明确给出时才接管。 */
+    const nativeCtl44 = function () { return 2; };
+    const ctlNoPlan44 = {
+        controls: ['continue44', 'cancel2'],
+        ai: nativeCtl44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlEvent(ctlNoPlan44, me44, 'stage2_skill_44', baMulti44);
+    eq(ctlNoPlan44.ai, nativeCtl44,
+        '10.44 唯一有效项也不能凭结构猜继续 → 无 controlChoice 时完全原生');
+
+    const ctlPlan44 = {
+        controls: ['modeA44', 'modeB44', 'cancel2'],
+        ai: function () { return 2; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlEvent(ctlPlan44, me44, 'stage2_skill_44', Object.assign({}, baMulti44, {
+        controlChoice: 'modeB44',
+    }));
+    eq(ctlPlan44.ai(), 1,
+        '10.44 planner 显式 controlChoice=modeB44 → 宿主选择对应索引1');
+
+    const ctlBadPlan44 = {
+        controls: ['modeA44', 'modeB44', 'cancel2'],
+        ai: nativeCtl44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlEvent(ctlBadPlan44, me44, 'stage2_skill_44', Object.assign({}, baMulti44, {
+        controlChoice: 'missing44',
+    }));
+    eq(ctlBadPlan44.ai(), 2,
+        '10.44 显式 controlChoice 不存在于当前 controls → 回退原生');
+
+    /* E2. 显式 button/control provenance 只能在同一技能 owner event 消费一次。
+     * 没有更精确 stage provenance 时，后续同类选择必须 fail-open，不能复用第一次语义。 */
+    const buttonOwner44 = {};
+    const buttonCtx44 = { id: 'stage2_skill_44', event: buttonOwner44 };
+    const buttonFirst44 = {
+        ai: function () { return 2; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonChoiceOnce(buttonFirst44, me44, buttonCtx44, 'ai', Object.assign({}, baMulti44, {
+        buttonChoice: a2_44,
+    }));
+    ok(buttonFirst44.ai({ link: a2_44 }) >= 12,
+        '10.44 同一技能 owner event 的第一次显式 buttonChoice 可消费');
+    const buttonSecondNative44 = function () { return 3; };
+    const buttonSecond44 = {
+        ai: buttonSecondNative44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonChoiceOnce(buttonSecond44, me44, buttonCtx44, 'ai', Object.assign({}, baMulti44, {
+        buttonChoice: a1_44,
+    }));
+    eq(buttonSecond44.ai, buttonSecondNative44,
+        '10.44 同一技能 owner event 后续 chooseButton 无 stage provenance → fail-open，不复用显式选择');
+
+    const controlOwner44 = {};
+    const controlCtx44 = { id: 'stage2_skill_44', event: controlOwner44 };
+    const controlFirst44 = {
+        controls: ['modeA44', 'modeB44'],
+        ai: function () { return 0; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlChoiceOnce(controlFirst44, me44, controlCtx44, Object.assign({}, baMulti44, {
+        controlChoice: 'modeB44',
+    }));
+    eq(controlFirst44.ai(), 1,
+        '10.44 同一技能 owner event 的第一次显式 controlChoice 可消费');
+    const controlSecondNative44 = function () { return 0; };
+    const controlSecond44 = {
+        controls: ['modeA44', 'modeB44'],
+        ai: controlSecondNative44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlChoiceOnce(controlSecond44, me44, controlCtx44, Object.assign({}, baMulti44, {
+        controlChoice: 'modeB44',
+    }));
+    eq(controlSecond44.ai, controlSecondNative44,
+        '10.44 同一技能 owner event 后续 chooseControl 无 stage provenance → fail-open，不复用显式选择');
+
+    /* F. Hook lifecycle 行为门禁：
+     * N1(O) 被第三方 X 包裹后，卸载不能覆盖 X；N1 必须永久失效。
+     * reinstall 生成 N2(X(N1(O))) 时，只有 N2 活跃，N1 不得复活。 */
+    ao44.uninstallAIOverride();
+    const protoLife44 = host44.lib.element.Player.prototype;
+    const savedLife44 = {
+        chooseButton: protoLife44.chooseButton,
+        addSkill: protoLife44.addSkill,
+        getSkills: protoLife44.getSkills,
+        gameCheck: host44.game.check,
+        players: host44.game.players,
+        libSkill: host44.lib.skill,
+        checkHooked: host44.game.__djsc_check_hooked,
+    };
+    const nativeChooseButtonLife44 = function () { return { ai: function () { return 0; } }; };
+    const nativeAddSkillLife44 = function () { return 'native-add'; };
+    const nativeGetSkillsLife44 = function () { return []; };
+    const nativeCheckLife44 = function () { return 'native-check'; };
+    host44.game.players = [];
+    /* Node 的通用 Proxy 宿主桩会在读取 lib.skill[id] 时自动生成 truthy 函数，
+     * 会触发 installAIOverride 的“已存在”守卫；本段改用普通对象模拟真实 lib.skill。 */
+    host44.lib.skill = {};
+    protoLife44.chooseButton = nativeChooseButtonLife44;
+    protoLife44.addSkill = nativeAddSkillLife44;
+    protoLife44.getSkills = nativeGetSkillsLife44;
+    host44.game.check = nativeCheckLife44;
+    host44.game.__djsc_check_hooked = false;
+
+    ao44.installAIOverride();
+    const ownedButtonV1_44 = protoLife44.chooseButton;
+    const ownedAddV1_44 = protoLife44.addSkill;
+    const ownedGetV1_44 = protoLife44.getSkills;
+    const ownedCheckV1_44 = host44.game.check;
+    ok(ownedButtonV1_44 !== nativeChooseButtonLife44
+        && typeof ownedButtonV1_44.__djscHookActive === 'function'
+        && ownedButtonV1_44.__djscHookActive(),
+        '10.44 第一代 chooseButton wrapper 安装后 token 活跃');
+    ok(typeof ownedAddV1_44.__djscHookActive === 'function' && ownedAddV1_44.__djscHookActive()
+        && typeof ownedGetV1_44.__djscHookActive === 'function' && ownedGetV1_44.__djscHookActive()
+        && typeof ownedCheckV1_44.__djscHookActive === 'function' && ownedCheckV1_44.__djscHookActive(),
+        '10.44 addSkill/getSkills/game.check 同样绑定本代 hook token');
+
+    const thirdButton44 = function () { return ownedButtonV1_44.apply(this, arguments); };
+    const thirdAdd44 = function () { return ownedAddV1_44.apply(this, arguments); };
+    const thirdGet44 = function () { return ownedGetV1_44.apply(this, arguments); };
+    const thirdCheck44 = function () { return ownedCheckV1_44.apply(this, arguments); };
+    protoLife44.chooseButton = thirdButton44;
+    protoLife44.addSkill = thirdAdd44;
+    protoLife44.getSkills = thirdGet44;
+    host44.game.check = thirdCheck44;
+
+    ao44.uninstallAIOverride();
+    eq(protoLife44.chooseButton, thirdButton44,
+        '10.44 卸载不覆盖后装第三方 chooseButton wrapper');
+    eq(protoLife44.addSkill, thirdAdd44,
+        '10.44 卸载不覆盖后装第三方 addSkill wrapper');
+    eq(protoLife44.getSkills, thirdGet44,
+        '10.44 卸载不覆盖后装第三方 getSkills wrapper');
+    eq(host44.game.check, thirdCheck44,
+        '10.44 卸载不覆盖后装第三方 game.check wrapper');
+    ok(!ownedButtonV1_44.__djscHookActive()
+        && !ownedAddV1_44.__djscHookActive()
+        && !ownedGetV1_44.__djscHookActive()
+        && !ownedCheckV1_44.__djscHookActive(),
+        '10.44 卸载后被第三方包住的第一代 Noname-AI wrappers 全部永久失效');
+
+    ao44.installAIOverride();
+    const ownedButtonV2_44 = protoLife44.chooseButton;
+    ok(ownedButtonV2_44 !== thirdButton44
+        && typeof ownedButtonV2_44.__djscHookActive === 'function'
+        && ownedButtonV2_44.__djscHookActive(),
+        '10.44 reinstall 在第三方 wrapper 外生成新的活跃 wrapper');
+    ok(!ownedButtonV1_44.__djscHookActive(),
+        '10.44 reinstall 后第一代 wrapper 不会因全局重新启用而复活');
+    ao44.uninstallAIOverride();
+
+    /* 恢复本段测试前宿主状态。 */
+    protoLife44.chooseButton = savedLife44.chooseButton;
+    protoLife44.addSkill = savedLife44.addSkill;
+    protoLife44.getSkills = savedLife44.getSkills;
+    host44.game.check = savedLife44.gameCheck;
+    host44.game.players = savedLife44.players;
+    host44.lib.skill = savedLife44.libSkill;
+    if (savedLife44.checkHooked === undefined) delete host44.game.__djsc_check_hooked;
+    else host44.game.__djsc_check_hooked = savedLife44.checkHooked;
+
+    /* G. 结构守卫：新增宿主 hook + 对称卸载 + generation token。 */
+    const src44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js'), 'utf8');
+    const brainSrc44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js'), 'utf8');
+    ok(src44.indexOf('const origChooseButtonTarget = proto.chooseButtonTarget') >= 0
+        && src44.indexOf('const origChooseButton = proto.chooseButton') >= 0
+        && src44.indexOf('const origChooseControl = proto.chooseControl') >= 0,
+        '10.44 stage2 hook 覆盖 chooseButtonTarget / chooseButton / chooseControl');
+    ok(src44.indexOf('eventAcceptsSkillTargetPlan(next, player, decision)') >= 0
+        && src44.indexOf('_eventFixedTargetCount(next)') >= 0
+        && src44.indexOf('_eventFilterDependsOnSelection') >= 0,
+        '10.44 多目标桥要求匹配固定目标数，且 selection-dependent 组合 fail-open');
+    ok(src44.indexOf('ba.buttonChoice === undefined || ba.buttonChoice === null') >= 0
+        && src44.indexOf('ba.controlChoice === undefined || ba.controlChoice === null') >= 0,
+        '10.44 button/control 均要求 planner 显式语义选择');
+    ok(src44.indexOf('__djscSkillButtonBridgeConsumed') >= 0
+        && src44.indexOf('__djscSkillControlBridgeConsumed') >= 0,
+        '10.44 button/control 无 stage provenance 时按 owner event 单次消费');
+    ok(src44.indexOf('const attached = next.__djscSkillTargetDecision') >= 0,
+        '10.44 card half 必须绑定同事件已确认的 target plan');
+    ok(src44.indexOf('_protoBackup.chooseButtonTarget') >= 0
+        && src44.indexOf('_protoBackup.chooseButton') >= 0
+        && src44.indexOf('_protoBackup.chooseControl') >= 0,
+        '10.44 stage2 hook 有对称备份/卸载');
+    ok(src44.indexOf('proto.chooseTarget === _protoOwned.chooseTarget') >= 0
+        && src44.indexOf('proto.chooseButton === _protoOwned.chooseButton') >= 0
+        && src44.indexOf('proto.chooseControl === _protoOwned.chooseControl') >= 0,
+        '10.44 choose* 卸载只还原自己仍持有的 wrapper，不覆盖后装扩展');
+    ok(src44.indexOf('proto.addSkill === _protoOwned.addSkill') >= 0
+        && src44.indexOf('proto.getSkills === _protoOwned.getSkills') >= 0
+        && src44.indexOf('g.check === _protoOwned.gameCheck') >= 0,
+        '10.44 legacy addSkill/getSkills/game.check 也使用 wrapper ownership');
+    ok(src44.indexOf('let _activeHookToken = null') >= 0
+        && src44.indexOf('__djscHookActive') >= 0
+        && src44.indexOf('_activeHookToken !== hookToken') >= 0,
+        '10.44 generation token 使被第三方包住的旧 wrapper 卸载后永久透明化');
+    ok(brainSrc44.indexOf('ctx.selectTargetRange') >= 0
+        && brainSrc44.indexOf('targetRangeResolved') >= 0,
+        '10.44 多目标 planner 消费宿主数量契约');
+    ok(brainSrc44.indexOf('targetDecisionResolved') >= 0
+        && brainSrc44.indexOf('targetRequired') >= 0
+        && brainSrc44.indexOf('可选零目标区间') >= 0,
+        '10.44 [0,N] 以显式 provenance 表示“可合法不选目标”');
+    ok(eng44._skillTargetRange && true,
+        '10.44 engine 保留 selectTarget range 解析入口');
+    const engineSrc44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    ok(engineSrc44.indexOf('d.targetRequired !== false') >= 0
+        && engineSrc44.indexOf('d.targetDecisionResolved !== false') >= 0,
+        '10.44 veto-target 只针对“目标必选且决策已解析”的缺目标情况');
 }
 
 /* ---------- 汇总 ---------- */
