@@ -8,6 +8,7 @@
  */
 
 import { dispositionOf } from '../../decision/relations/relations.js';
+import { isCandidateEligible, ensureCandidatePolicy, PRIORITY_TIER } from '../../decision/state/actionCandidate.js';
 
 /* ================= 决策积分引擎 · 模型行为护栏 =================
  * 职责：模型输出动作后，执行前的最后一层"法律检查"。
@@ -180,14 +181,17 @@ export function guardCheck(me, action, context) {
                 }
             }
 
-            /* ---- 红线 5：能击杀时放水 ---- */
-            if (context && context.killAvailable && action.type === 'card') {
+            /* ---- 红线 5：已有 Planner 验证的 forced-kill policy 时，不得无理由放弃 ---- */
+            if (context && context.killAvailable && isCandidateEligible(context.killAvailable) && action.type === 'card') {
+                const kp = ensureCandidatePolicy(context.killAvailable);
+                const isForcedKill = kp && kp.priorityTier === PRIORITY_TIER.FORCED;
+                const sameAction = action === context.killAvailable;
                 const isAtk = ATK_IDS.indexOf(action.id) >= 0;
-                if (!isAtk && context.killAvailable.score > action.score + 5) {
+                if (isForcedKill && !sameAction && !isAtk) {
                     const isUtility = ['wuzhong', 'tao', 'wuxie', 'shan', 'jiu'].indexOf(action.id) >= 0;
                     if (!isUtility) {
-                        _recordBlock(me, action, RED_LINES.MISS_KILL, '候选击杀分=' + context.killAvailable.score);
-                        return { ok: false, rule: RED_LINES.MISS_KILL, reason: '能击杀却放水', fallback: context.killAvailable };
+                        _recordBlock(me, action, RED_LINES.MISS_KILL, '存在已验证击杀序列');
+                        return { ok: false, rule: RED_LINES.MISS_KILL, reason: '已有已验证击杀序列却放弃', fallback: context.killAvailable };
                     }
                 }
             }
@@ -234,11 +238,11 @@ function _fallbackAction(context) {
         if (!context || !Array.isArray(context.allCandidates)) return null;
         /* 优先选"结束回合" */
         for (const c of context.allCandidates) {
-            if (c.type === 'end') return c;
+            if (isCandidateEligible(c) && c.type === 'end') return c;
         }
         /* 次选：非攻击牌 */
         for (const c of context.allCandidates) {
-            if (c.type !== 'card') continue;
+            if (!isCandidateEligible(c) || c.type !== 'card') continue;
             if (ATK_IDS.indexOf(c.id) < 0) return c;
         }
         /* 最次：返回 null 让上层走原生 */
