@@ -22,7 +22,7 @@ import { isEnemyOf, probHasShan, seatPressure, threatOf } from '../threat/threat
 import { isAllyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 import { baseEquipValue } from '../basic/equipBrain.js';
 import { signedNormalizedImprovement, DECISION_MARGIN } from '../state/decisionMargin.js';
-import { targetKey } from '../state/actionCandidate.js';
+import { targetKey, setCandidatePriority, PRIORITY_TIER, isCandidateEligible } from '../state/actionCandidate.js';
 
 const PLAN_TIMEOUT = 350;
 const LOOKAHEAD_DISCOUNT = 0.7;
@@ -295,7 +295,7 @@ function _findKillSequence(me, target) {
 				steps: steps,
 				totalDmg: Math.round(totalDmg * 10) / 10,
 				killable: true,
-				score: 100 + totalDmg * 10,
+				killRank: Math.round((certainDmg * 10 + totalDmg) * 100) / 100,
 			};
 		}
 		return null;
@@ -493,17 +493,24 @@ export function planSequence(me) {
 			if (!p || p === me || !p.isIn()) continue;
 			if (!isEnemyOf(me, p)) continue;
 			const ks = _findKillSequence(me, p);
-			if (ks && (!killSeq || ks.score > killSeq.score)) {
+			if (ks && (!killSeq || ks.killRank > killSeq.killRank)) {
 				killSeq = ks;
 			}
 		}
 		if (killSeq) {
 			log.debug('planner', '残局解：打 ' + killSeq.targetName + ' ' + killSeq.totalDmg + ' 点可秒');
+			const first = killSeq.steps[0] || {};
+			const firstType = first.type === 'equip' ? 'equip' : 'card';
+			const firstCandidate = candidates.find(function (c) {
+				return c && isCandidateEligible(c) && c.id === first.id && c.type === firstType;
+			}) || null;
 			return {
 				best: {
-					action: killSeq.steps[0],
-					total: killSeq.score,
+					action: first,
+					baseScore: firstCandidate ? (firstCandidate.score || 0) : 0,
+					total: firstCandidate ? (firstCandidate.score || 0) : 0,
 					futureScore: 0,
+					killRank: killSeq.killRank,
 					steps: killSeq.steps,
 					isKill: true,
 					target: killSeq.target,
@@ -516,7 +523,7 @@ export function planSequence(me) {
 		}
 
 		const ranked = candidates
-			.filter(function (a) { return a.type !== 'end'; })
+			.filter(function (a) { return isCandidateEligible(a) && a.type !== 'end'; })
 			.slice(0, 5);
 
 		if (ranked.length < 2) return null;
@@ -585,10 +592,11 @@ export function refineBestWithPlan(me, best, bestT) {
 			const out = canonicalKill || {
 				type: planBest.action.type === 'equip' ? 'equip' : 'card',
 				id: planBest.action.id,
+				score: Number(planBest.baseScore || 0),
 			};
-			out.score = planBest.total;
-			out.reason = '★ 残局解：' + planBest.steps.map(function (s) { return s.id; }).join(' → ') +
-				'（' + planBest.steps.reduce(function (sum, x) { return sum + (x.dmg || 0); }, 0) + ' 点伤害）';
+			setCandidatePriority(out, PRIORITY_TIER.FORCED, Number(planBest.killRank || 0), '已验证击杀序列');
+			out.reason = (out.reason || '') + '（★残局解：' + planBest.steps.map(function (step) { return step.id; }).join(' → ') +
+				'，预计' + planBest.steps.reduce(function (sum, x) { return sum + (x.dmg || 0); }, 0) + '点伤害）';
 			out.killTarget = planBest.target;
 			if (planBest.action.type === 'equip') {
 				out.target = null;
