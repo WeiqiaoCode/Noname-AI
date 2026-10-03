@@ -197,16 +197,26 @@ export function getSkillTargetBridgeDecision(player, sid, baOverride) {
 		if (!player || !sid) return null;
 		const ba = baOverride || _getBA(player);
 		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
+		/* 只桥接 scanner/skill kernel 自动推断出的高置信单方向技能。
+		 * mixed / 低置信 / 没有 provenance 的旧技能全部 fail-open，避免把一个技能内部
+		 * 第二、第三次不同目的的 chooseTarget 错绑到同一个目标。 */
+		const confidence = Number(ba.targetConfidence || 0);
+		if (ba.targetInferred !== true || confidence < 0.55) return null;
 		const target = _findActionTarget(ba);
 		if (!target) return null;
 		const purpose = ba.purpose || ((ba.rule === 'attack' || ba.rule === 'control') ? 'attack'
 			: ((ba.rule === 'defense' || ba.rule === 'aux') ? 'support' : null));
 		if (purpose !== 'attack' && purpose !== 'support') return null;
+		if (ba.targetIntent === 'support' && purpose !== 'support') return null;
+		if (ba.targetIntent === 'offense' && purpose !== 'attack') return null;
+		if (ba.targetIntent !== 'support' && ba.targetIntent !== 'offense') return null;
 		return {
 			skillId: sid,
 			target: target,
 			targetName: target.playerid || target.name1 || target.name || '',
 			purpose: purpose,
+			intent: ba.targetIntent,
+			confidence: confidence,
 			score: Number(ba.score || 0),
 		};
 	} catch (e) { return null; }
@@ -249,11 +259,32 @@ export function wrapSkillTargetAI(original, player, decision) {
 	return wrapped;
 }
 
+function _eventFilterDependsOnCard(filterTarget) {
+	try {
+		if (typeof filterTarget !== 'function') return false;
+		const src = filterTarget.toString();
+		const body = src.indexOf('=>') >= 0 ? src.slice(src.indexOf('=>') + 2) : src.slice(src.indexOf('{') + 1);
+		return /\bcard\b/.test(body);
+	} catch (e) { return true; }
+}
+
+export function eventAcceptsSkillTarget(next, player, target) {
+	try {
+		if (!next || !target) return false;
+		const ft = next.filterTarget;
+		if (typeof ft !== 'function') return true;
+		/* chooseCardTarget 的合法性如果依赖尚未选定的 card，就不猜。 */
+		if (_eventFilterDependsOnCard(ft)) return false;
+		try { return ft(null, player, target) !== false; } catch (e) { return false; }
+	} catch (e) { return false; }
+}
+
 export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 	try {
 		if (!next || !player || !sid || !field) return next;
 		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
 		if (!decision) return next;
+		if (!eventAcceptsSkillTarget(next, player, decision.target)) return next;
 		if (typeof next[field] === 'function') next[field] = wrapSkillTargetAI(next[field], player, decision);
 
 		/* 很多本体技能是 chooseTarget(...).set('ai', fn)：
