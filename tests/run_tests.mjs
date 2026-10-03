@@ -4838,6 +4838,82 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.48 StrategyBus 即使未来重新启用也复用统一 margin 契约');
 }
 
+/* ================= 10.49 Action utility / policy priority 分离 ================= */
+{
+    const fs49 = await import('node:fs');
+    const ac49 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'actionCandidate.js')).href);
+
+    const veto49 = ac49.makeActionCandidate({ type:'card', id:'lebu', score:7.25 });
+    ac49.vetoCandidate(veto49, '目标非法');
+    eq(veto49.score, 7.25, '10.49 veto 不修改真实 utility');
+    eq(ac49.isCandidateEligible(veto49), false, '10.49 veto candidate 结构上不可选');
+    eq(veto49.policy.vetoReason, '目标非法', '10.49 veto 原因进入 policy');
+
+    const normalHighUtil49 = ac49.makeActionCandidate({ type:'card', id:'a', score:8 });
+    const normalLowUtil49 = ac49.makeActionCandidate({ type:'card', id:'b', score:5 });
+    ac49.setCandidatePriority(normalHighUtil49, ac49.PRIORITY_TIER.NORMAL, 20, '');
+    ac49.setCandidatePriority(normalLowUtil49, ac49.PRIORITY_TIER.NORMAL, 90, '');
+    const normalSorted49 = [normalLowUtil49, normalHighUtil49].sort(ac49.compareActionCandidates);
+    eq(normalSorted49[0], normalHighUtil49, '10.49 normal tier 保持 utility-first，不让普通 priority 覆盖收益');
+
+    const critical9949 = ac49.makeActionCandidate({ type:'card', id:'sha', score:2 });
+    const critical10049 = ac49.makeActionCandidate({ type:'card', id:'wuzhong', score:1 });
+    ac49.setCandidatePriority(critical9949, ac49.PRIORITY_TIER.CRITICAL, 99, '可直接完成击杀');
+    ac49.setCandidatePriority(critical10049, ac49.PRIORITY_TIER.CRITICAL, 100, '高优先纯收益');
+    const criticalSorted49 = [critical9949, critical10049].sort(ac49.compareActionCandidates);
+    eq(criticalSorted49[0], critical10049, '10.49 critical tier 内显式 priorityValue 生效');
+
+    const forced49 = ac49.makeActionCandidate({ type:'equip', id:'qinglong', score:-2 });
+    ac49.setCandidatePriority(forced49, ac49.PRIORITY_TIER.FORCED, 11, '已验证击杀序列');
+    const tierSorted49 = [normalHighUtil49, critical10049, forced49].sort(ac49.compareActionCandidates);
+    eq(tierSorted49[0], forced49, '10.49 forced tier 高于 critical/normal，且无需伪造高 utility');
+    eq(forced49.score, -2, '10.49 forced priority 不污染原始 utility');
+
+    const eng49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    eq(eng49.indexOf('a.score += 999') < 0, true, '10.49 engine 删除 +999 灌爆收益');
+    eq(/Math\.min\(a\.score,\s*-(?:12|8|6)\)/.test(eng49), false,
+        '10.49 card/skill/equip/judge veto 不再伪造成负分');
+    ok(eng49.indexOf("const priorityReason = killCritical ? '可直接完成击杀' : '高优先纯收益'") >= 0,
+        '10.49 priority>=99 区分补刀与纯收益，不再把无中/五谷误标补刀');
+    ok(eng49.indexOf('acts.sort(compareActionCandidates)') >= 0 &&
+       eng49.indexOf('eligibleActs = acts.filter(isCandidateEligible)') >= 0,
+        '10.49 engine 统一按 policy comparator 排序并过滤 veto candidate');
+    ok(eng49.indexOf('applyChampionRule(eligibleActs') >= 0 &&
+       eng49.indexOf('deepThinkCritic(me, eligibleActs') >= 0,
+        '10.49 Champion/DeepThink 只消费 eligible candidates');
+
+    const planner49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    eq(/score:\s*100\s*\+\s*totalDmg/.test(planner49), false,
+        '10.49 Planner 击杀序列不再写入 100+ fake utility');
+    ok(planner49.indexOf('killRank:') >= 0 &&
+       planner49.indexOf("setCandidatePriority(out, PRIORITY_TIER.FORCED") >= 0,
+        '10.49 Planner 使用内部 killRank + forced policy');
+    ok(planner49.indexOf('samePolicyTier') >= 0,
+        '10.49 普通 Planner 改判不得跨 policy tier');
+
+    const guard49 = fs49.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    eq(/killAvailable\.score\s*>\s*action\.score\s*\+\s*5/.test(guard49), false,
+        '10.49 Guard 删除旧固定 +5 击杀分差');
+    ok(guard49.indexOf("priorityTier === PRIORITY_TIER.FORCED") >= 0,
+        '10.49 Guard 读取已验证 forced-kill policy');
+    ok(guard49.indexOf('isCandidateEligible(c)') >= 0,
+        '10.49 Guard fallback 不会重新选中 veto candidate');
+
+    const champ49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
+    const deep49 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+    ok(champ49.indexOf('candidatePriorityRank(a) === bestTier') >= 0,
+        '10.49 Champion 只在当前 policy tier 内复核');
+    ok(deep49.indexOf('candidatePriorityRank(a) === bestTier') >= 0,
+        '10.49 DeepThink 只在当前 policy tier 内复核');
+
+    const replay49 = fs49.readFileSync(join(_pkg, 'score', 'view', 'dashboard', 'replayPanel.js'), 'utf8');
+    ok(replay49.indexOf('真实收益评分：') >= 0 && replay49.indexOf('策略优先级：') >= 0,
+        '10.49 对局回放分别显示真实收益与策略优先级');
+    const narr49 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'explain', 'decisionNarrator.js'), 'utf8');
+    ok(narr49.indexOf('真实收益评分 ') >= 0 && narr49.indexOf('策略优先级 ') >= 0,
+        '10.49 决策解释器使用玩家可读的 utility / policy 说明');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
