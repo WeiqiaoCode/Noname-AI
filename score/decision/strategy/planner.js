@@ -22,7 +22,7 @@ import { isEnemyOf, probHasShan, seatPressure, threatOf } from '../threat/threat
 import { isAllyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 import { baseEquipValue } from '../basic/equipBrain.js';
 import { signedNormalizedImprovement, DECISION_MARGIN } from '../state/decisionMargin.js';
-import { targetKey, setCandidatePriority, PRIORITY_TIER, isCandidateEligible } from '../state/actionCandidate.js';
+import { targetKey, setCandidatePriority, PRIORITY_TIER, isCandidateEligible, candidatePriorityRank } from '../state/actionCandidate.js';
 
 const PLAN_TIMEOUT = 350;
 const LOOKAHEAD_DISCOUNT = 0.7;
@@ -611,11 +611,15 @@ export function refineBestWithPlan(me, best, bestT) {
 		}
 
 		const planTop = planBest.action;
+		const canonicalTop = planTop ? canonicalOf(planTop) : null;
+		const samePolicyTier = canonicalTop
+			? candidatePriorityRank(canonicalTop) === candidatePriorityRank(best)
+			: false;
 		const improvement = planTop && planTop.id
 			? signedNormalizedImprovement(best.score || 0, planBest.total)
 			: 0;
-		if (planTop && planTop.id && improvement > DECISION_MARGIN.PLANNER_REPLACE) {
-			const canonical = canonicalOf(planTop) || planTop;
+		if (planTop && planTop.id && samePolicyTier && improvement > DECISION_MARGIN.PLANNER_REPLACE) {
+			const canonical = canonicalTop || planTop;
 			canonical.score = planBest.total;
 			canonical.reason = '规划：' + planTop.id + '（基础 ' + planBest.baseScore +
 				' + 展望 ' + planBest.futureScore + '，相对提升 ' + improvement.toFixed(3) + '）';
