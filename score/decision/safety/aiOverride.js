@@ -304,6 +304,16 @@ export function eventAcceptsSkillTarget(next, player, target) {
 	} catch (e) { return false; }
 }
 
+function _eventFilterDependsOnSelection(filterTarget) {
+	try {
+		if (typeof filterTarget !== 'function') return false;
+		const src = filterTarget.toString();
+		const body = src.indexOf('=>') >= 0 ? src.slice(src.indexOf('=>') + 2) : src.slice(src.indexOf('{') + 1);
+		/* 多目标组合合法性若依赖已选目标/实时事件，不能通过逐目标静态调用证明。 */
+		return /ui\s*\.\s*selected|_status\s*\.\s*event|get\s*\.\s*event\s*\(/.test(body);
+	} catch (e) { return true; }
+}
+
 function _eventFixedTargetCount(next) {
 	try {
 		if (!next) return null;
@@ -326,6 +336,7 @@ export function eventAcceptsSkillTargetPlan(next, player, decision) {
 		if (!eventAcceptsSkillTarget(next, player, planned[0])) return false;
 		if (planned.length <= 1) return true;
 		if (decision.targetRangeResolved !== true) return false;
+		if (_eventFilterDependsOnSelection(next.filterTarget)) return false;
 		const fixed = _eventFixedTargetCount(next);
 		if (fixed !== planned.length) return false;
 		for (const t of planned) {
@@ -450,16 +461,47 @@ export function wrapSkillButtonAI(original, decision) {
 	return wrapped;
 }
 
+function _skillExplicitButtonDecision(player, sid, baOverride) {
+	try {
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
+		if (ba.rule === 'veto' || ba.rule === 'veto-target') return null;
+		if (ba.buttonChoice === undefined || ba.buttonChoice === null) return null;
+		return ba.buttonChoice;
+	} catch (e) { return null; }
+}
+
+export function wrapExplicitSkillButtonAI(original, planned) {
+	if (planned === null || planned === undefined) return original;
+	const wrapped = function (button) {
+		let nativeScore = 0;
+		try {
+			if (typeof original === 'function') {
+				const n = Number(original.apply(this, arguments));
+				if (Number.isFinite(n)) nativeScore = n;
+			}
+		} catch (e) {}
+		try {
+			if (!button) return nativeScore;
+			if (button.link === planned || button === planned) return Math.max(nativeScore, 12);
+		} catch (e) {}
+		return nativeScore;
+	};
+	return wrapped;
+}
+
 export function bridgeSkillButtonEvent(next, player, sid, field, baOverride) {
 	try {
 		if (!next || !player || !sid || !field || next.processAI) return next;
-		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
-		if (!decision) return next;
-		if (typeof next[field] === 'function') next[field] = wrapSkillButtonAI(next[field], decision);
+		/* button.link 即使恰好是玩家，也可能表示技能内部另一种角色/分支语义。
+		 * 只有 planner 明确产出 buttonChoice 才允许接管；否则完全原生。 */
+		const planned = _skillExplicitButtonDecision(player, sid, baOverride);
+		if (planned === null) return next;
+		if (typeof next[field] === 'function') next[field] = wrapExplicitSkillButtonAI(next[field], planned);
 		if (typeof next.set === 'function' && !next.__djscSkillButtonSetBridge) {
 			const origSet = next.set;
 			next.set = function (key, value) {
-				if (key === field && typeof value === 'function') value = wrapSkillButtonAI(value, decision);
+				if (key === field && typeof value === 'function') value = wrapExplicitSkillButtonAI(value, planned);
 				return origSet.call(this, key, value);
 			};
 			try { next.__djscSkillButtonSetBridge = true; } catch (e) {}
