@@ -5081,6 +5081,88 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     fb51.resetDecisionFeedback();
 }
 
+
+/* ================= 10.52 评分增量 / 倍率契约 ================= */
+{
+    const fs52 = await import('node:fs');
+    const ac52 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'actionCandidate.js')).href + '?pr22-delta');
+
+    eq(ac52.applyRelativeUtilityDelta(10, 0), 10,
+        '10.52 delta=0 为中性值');
+    eq(ac52.applyRelativeUtilityDelta(10, 0.2), 12,
+        '10.52 正分 +0.2 按相对收益提升为 12');
+    eq(ac52.applyRelativeUtilityDelta(10, -0.2), 8,
+        '10.52 正分 -0.2 按相对收益降低为 8');
+    eq(ac52.applyRelativeUtilityDelta(-10, 0.2), -8,
+        '10.52 负分 +0.2 必须提高 utility，不能被普通倍率反向放大');
+    eq(ac52.applyRelativeUtilityDelta(-10, -0.2), -12,
+        '10.52 负分 -0.2 必须降低 utility');
+    eq(ac52.applyRelativeUtilityDelta(0, 0.3), 0,
+        '10.52 相对增量不能凭空从零制造 utility');
+    eq(ac52.applyRelativeUtilityDelta(10, NaN), 10,
+        '10.52 非有限 delta 安全回退为中性');
+
+    const eng52 = fs52.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const deltaCalls52 = [
+        ['moodStrategyBonus', 'moodDelta'],
+        ['counterRelationBonus', 'relationDelta'],
+        ['damageTransferBonus', 'transferDelta'],
+        ['treeSearchBonus', 'treeDelta'],
+        ['deckTopBonus', 'deckDelta'],
+        ['gameTheoryBonus', 'gameDelta'],
+        ['situationStrategyBonus', 'situationDelta'],
+    ];
+
+    for (const [fn, deltaName] of deltaCalls52) {
+        ok(eng52.indexOf('const ' + deltaName + ' = ' + fn + '(') >= 0,
+            '10.52 ' + fn + ' 明确命名为 delta 信号');
+        ok(eng52.indexOf('applyRelativeUtilityDelta(s, ' + deltaName + ')') >= 0,
+            '10.52 ' + fn + ' 通过相对增量契约消费');
+    }
+
+    const forbiddenDirectMultiply52 = [
+        'moodStrategyBonus',
+        'counterRelationBonus',
+        'damageTransferBonus',
+        'treeSearchBonus',
+        'deckTopBonus',
+        'gameTheoryBonus',
+        'situationStrategyBonus',
+    ];
+    for (const fn of forbiddenDirectMultiply52) {
+        const re = new RegExp('(?:const\\s+\\w+\\s*=\\s*' + fn + '\\([^;]+;[\\s\\S]{0,120}?s\\s*\\*=)', 'm');
+        eq(re.test(eng52), false,
+            '10.52 ' + fn + ' 不得再作为 multiplier 直接乘到 score');
+    }
+
+    const multiplierContracts52 = [
+        'responseBonus',
+        'discardBonus',
+        'endgameBonus',
+        'resourceTimingBonus',
+        'aoeBonus',
+        'judgeBonus',
+        'equipReplaceBonus',
+        'keepBonus',
+        'multiTurnBonus',
+        'duelBonus',
+        'jiedaoBonus',
+        'shandianBonus',
+        'taoyuanBonus',
+        'wuguBonus',
+        'shaTargetBonus',
+        'taoBonus',
+        'jiuBonus',
+        'wuxieBonus',
+        'shunshouBonus',
+        'deepValueBonus',
+    ];
+    for (const fn of multiplierContracts52) {
+        ok(eng52.indexOf(fn + '(') >= 0,
+            '10.52 既有 1.0-based multiplier 保持独立契约：' + fn);
+    }
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
