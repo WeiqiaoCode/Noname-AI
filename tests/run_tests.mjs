@@ -3456,6 +3456,18 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok((mixed43.__targets || []).includes('ally') && (mixed43.__targets || []).includes('enemy'),
         '10.43 mixed 同时保留 ally/enemy');
 
+    /* A4. 语义本身有歧义的效果不能仅凭 target 名字强推敌友。 */
+    const ambiguous43 = sc43.scanObjectMethod(`
+        function content(event) {
+            event.target.addSkill('some_skill');
+            event.target.turnOver();
+        }
+    `, { skill: { enable: 'phaseUse' } });
+    eq(ambiguous43.__targetIntent, undefined,
+        '10.43 addSkill/turnOver 等歧义效果无显式关系证据 → 不自动定向');
+    eq((ambiguous43.__targets || []).length, 0,
+        '10.43 歧义目标效果保持 fail-open，不生成 ally/enemy 目标');
+
     /* B. 模拟“炜烈类”未知技能：不写 ID 特判，源码扫描自动形成 ally/support profile。 */
     const SID43 = 'kernel_support_fixture_alpha';
     host43.lib.skill[SID43] = {
@@ -3520,6 +3532,16 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 低置信 support intent 不生成宿主强方向');
     eq(eng43._skillPurposeFromIntent('mixed', 'attack', 1), null,
         '10.43 mixed intent 不被粗分类强制成单方向');
+    eq(eng43._isSingleTargetSkillProfile({
+        tags: { __targets: ['enemy', 'multi'], __scope: 'any1' },
+        targets: { category: 'enemy' },
+    }, { targetIndexes: [0] }), false,
+        '10.43 multi 语义技能即使当前只剩一个目标也不能进入单目标宿主桥');
+    eq(eng43._isSingleTargetSkillProfile({
+        tags: { __targets: ['ally'], __scope: 'any1' },
+        targets: { category: 'ally' },
+    }, { targetIndexes: [0] }), true,
+        '10.43 明确单目标 support profile 可进入单目标桥');
 
     const SELF43 = 'kernel_self_fixture_alpha';
     host43.lib.skill[SELF43] = {
