@@ -37,7 +37,7 @@ import { cfg, safe, nameOf, keyOf } from '../../foundation/config/util.js';
 import { teamPlan } from '../../perception/team/team.js';
 import { log } from '../../foundation/diag/logger.js';
 import { DIRS } from '../../foundation/storage/storagePaths.js';   /* ★ 统一导出路径：避免 'data' 误写到游戏根 */
-import { getDecisionBonus, recordTargetOutcome, recordTempoOutcome, recordKeepOutcome, flushDecisionFeedback, markOutcome } from '../feedback/decisionFeedback.js';
+import { getDecisionBonus, recordTargetOutcome, recordTempoOutcome, recordPlayOutcome, flushDecisionFeedback, markOutcome } from '../feedback/decisionFeedback.js';
 import { perfMark } from '../../foundation/diag/perf.js';
 import { resourceBalance, discardCost, sellHpValue, equipReplaceCost, abolishPenalty } from '../resource/economy.js';
 import { fxRate, fxToMoney, fxSnapshot } from '../../knowledge/exchange/exchange.js';
@@ -3326,8 +3326,8 @@ function bestAction() {
 						const equipB = equipReplaceBonus(me, { id: id, card: { name: id } });
 						if (equipB !== 1.0) s *= equipB;
 
-						/* ⑲ 手牌保留策略 */
-						const keepB = keepBonus(me, { id: id, card: { name: id } });
+						/* ⑲ 手牌保留策略：只施加“现在消耗这张牌”的机会成本，不制造正收益 */
+						const keepB = keepBonus(me, { id: id, card: { name: id }, stage: stageLabel });
 						if (keepB !== 1.0) s *= keepB;
 
 						/* ⑳ 多轮规划 */
@@ -3815,14 +3815,14 @@ function bestAction() {
 					if (ATK_CARDS.indexOf(id) >= 0) s *= ROLE_PREFS.cardAtk;
 					if (DEF_CARDS.indexOf(id) >= 0) s *= ROLE_PREFS.cardDef;
 				}
-				/* ★ 决策维度反馈（target / tempo / keep） */
+				/* ★ 决策维度反馈（target / tempo / play） */
 				try {
 					const targetBonus = cardTarget ? getDecisionBonus('target', cardTarget.name1 || cardTarget.name) : 1.0;
 					s *= targetBonus;
 					const tempoBonus = getDecisionBonus('tempo', stageLabel);
 					s *= tempoBonus;
-					const keepBonus = getDecisionBonus('keep', id);
-					s *= keepBonus;
+					const playBonus = getDecisionBonus('play', id);
+					s *= playBonus;
 				} catch (eFB) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eFB); }
 
 				/* ★ 单回合动量线性倍率：本回合持续高收益 → 乘胜追击（放大进攻向）；
@@ -3969,73 +3969,8 @@ function bestAction() {
 		/* 结束回合候选 */
 		acts.push({ type: "end", id: "end", score: 0, reason: "结束回合（保留" + hand.length + "张，" + sit.mode + "）" });
 
-		/* ★ 手牌管理策略：评估「留牌 vs 出牌」的全局权衡 */
-		try {
-			const handCount = hand.length;
-			const alive = (game.players || []).filter(function (p) { return p && p.alive !== false; }).length;
-			const round = _getRoundNumber();
-			const stage = stageLabel;  /* early / mid / late / endgame */
-
-			/* ① 阶段感知：早期手牌多 → 可以攒牌；后期 → 出手 */
-			let handKeepBias = 0;
-			if (stage === 'early') handKeepBias = 0.15;
-			else if (stage === 'mid') handKeepBias = 0.0;
-			else if (stage === 'late') handKeepBias = -0.15;
-			else if (stage === 'endgame') handKeepBias = -0.3;
-
-			/* ② 手牌溢出：手牌 > 手牌上限 → 必须出手 */
-			try {
-				const limit = me.getHandcardLimit ? me.getHandcardLimit() : 5;
-				const overflow = handCount - limit;
-				if (overflow >= 2) handKeepBias -= 0.4;
-				else if (overflow >= 1) handKeepBias -= 0.2;
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-			/* ③ 队友濒死 → 强制出手（桃/无懈） */
-			try {
-				let dyingAlly = false;
-				for (const p of (game.players || [])) {
-					if (!p || p === me || p.alive === false) continue;
-					if ((p.hp || 0) <= 0 && isAllyOf(me, p)) { dyingAlly = true; break; }   /* 敌我系统：真队友濒死才留救援牌 */
-				}
-				if (dyingAlly) handKeepBias -= 0.5;
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-			/* ④ 敌方连弩 → 留闪 */
-			try {
-				let enemyZhuge = false;
-				for (const p of (game.players || [])) {
-					if (!p || p === me || p.alive === false) continue;
-					if (!isEnemy(me, p)) continue;
-					if (p.getEquip && p.getEquip('zhuge')) { enemyZhuge = true; break; }
-				}
-				if (enemyZhuge) handKeepBias += 0.2;
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-			/* ⑤ 血量低 → 留防御牌 */
-			try {
-				const hpRatio = (me.hp || 0) / Math.max(1, me.maxHp || 1);
-				if (hpRatio < 0.4) handKeepBias += 0.25;
-				else if (hpRatio < 0.6) handKeepBias += 0.1;
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-			/* ⑥ 应用：对所有非攻击牌调整评分 */
-			if (Math.abs(handKeepBias) > 0.01) {
-				acts.forEach(function (a) {
-					if (a.type !== 'card') return;
-					const DEF_CARDS = ['shan', 'tao', 'wuxie', 'jiu'];
-					const ATK_CARDS = ['sha', 'juedou', 'huogong', 'nanman', 'wanjian', 'zhujin'];
-					/* 防御牌：留牌倾向 → 提高价值；出牌倾向 → 降低价值 */
-					if (DEF_CARDS.indexOf(a.id) >= 0) {
-						a.score *= (1 + handKeepBias);
-					}
-					/* 攻击牌：留牌倾向 → 降低价值；出牌倾向 → 提高价值 */
-					else if (ATK_CARDS.indexOf(a.id) >= 0) {
-						a.score *= (1 - handKeepBias * 0.7);
-					}
-				});
-			}
-		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		/* 手牌保留压力已统一进入 keepBonus()；此处不再维护第二套 handKeepBias，
+		 * 防止“越想保留，出牌分反而越高”的方向冲突。 */
 
 		/* ★ 模式专属加成 */
 		try {
@@ -5126,7 +5061,7 @@ function settle() {
 				try { log.info('style', '风格反馈已更新标签可信度'); } catch (eL2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eL2); }
 			}
 		} catch (eSf2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSf2); }
-		/* ★ 决策维度反馈回写（target / tempo / keep） */
+		/* ★ 决策维度反馈回写（target / tempo / play） */
 		try {
 			if (cfg("decisionFeedback", true) !== false) {
 				const me = game.me;
@@ -5152,7 +5087,8 @@ function settle() {
 				try {
 					const RECx = getREC();
 					const ck = (RECx && RECx.cards) || {};
-					Object.keys(ck).forEach(function (k) { recordKeepOutcome(k, win); });
+					/* REC.cards 记录的是本局实际使用过的牌，不再伪装成“保留行为”。 */
+					Object.keys(ck).forEach(function (k) { recordPlayOutcome(k, win); });
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				flushDecisionFeedback();
 				log.info('feedback', '决策维度反馈已更新');
@@ -5699,7 +5635,7 @@ export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninst
     reg.bind('multiTurnPlan', { _real: true, plan: multiTurnForecast, stats: function() { return { ok: true }; } });
     reg.bind('resourceManage', { _real: true, balance: resourceBalance, discardCost: discardCost, sellHpValue: sellHpValue, stats: function() { return { ok: true }; } });
     reg.bind('elementAccess', { _real: true, read: observeCardUse, observeAttack: observeAttack, observeAid: observeAid, getObs: getObs, stats: function() { return { ok: true }; } });
-    reg.bind('decisionHook', { _real: true, getBonus: getDecisionBonus, recordTarget: recordTargetOutcome, recordTempo: recordTempoOutcome, flush: flushDecisionFeedback, getStats: getDecisionFeedbackStats, stats: function() { return { ok: true }; } });
+    reg.bind('decisionHook', { _real: true, getBonus: getDecisionBonus, recordTarget: recordTargetOutcome, recordTempo: recordTempoOutcome, recordPlay: recordPlayOutcome, flush: flushDecisionFeedback, getStats: getDecisionFeedbackStats, stats: function() { return { ok: true }; } });
     reg.bind('decisionRegistry', { _real: true, install: installAutoDiscover, promote: promoteRegret, getStats: getRegretStats, list: function() { return []; }, stats: function() { return { ok: true }; } });
     reg.bind('identityVisual', { _real: true, identityOf: _identityOf, confidenceOf: confidenceOf, beliefOf: beliefOf, isLikelyEnemy: isLikelyEnemy, isLikelyAlly: isLikelyAlly, explain: explainIdentity, render: function() {}, stats: function() { return { ok: true }; } });
     reg.bind('skillRules', { _real: true, ruleOf: skillRuleOf, buildAutoRules: buildAutoSkillRules, stats: function() { return { ok: true }; } });

@@ -8,11 +8,11 @@ export const AUDIT = {
 	"files": 217,
 	"cleanFiles": 91,
 	"legacyFiles": 126,
-	"hits": 3453,
+	"hits": 3442,
 	"cleanRate": 42,
 	"byDomain": {
 		"cognition": 120,
-		"decision": 1870,
+		"decision": 1859,
 		"foundation": 54,
 		"knowledge": 218,
 		"model": 280,
@@ -23,7 +23,7 @@ export const AUDIT = {
 	"top": [
 		{
 			"file": "score/decision/engine/engine.js",
-			"count": 379
+			"count": 368
 		},
 		{
 			"file": "score/perception/observer/identity.js",
