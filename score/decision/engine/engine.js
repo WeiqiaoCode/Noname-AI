@@ -2344,6 +2344,10 @@ function applyBasicSkillRules(me, acts) {
 					if (tk && tk.pp) {
 						a.target = tk.pp.name1 || tk.pp.name || '';
 						a.targetObj = tk.pp;
+						/* provenance：只有真正经过 kernel 合法目标池 + decideSkill 解析出的目标，
+						 * 才允许后续宿主桥消费。防止旧 action 上恰好存在 target 字段被误接管。 */
+						a.skillTargetResolved = true;
+						a.skillTargetSingle = !(Array.isArray(d.targetIndexes) && d.targetIndexes.length > 1);
 						a.targetRule = d.rule + '→' + a.target + '(' + d.reason + ')';
 						a.reason = (a.reason || '') + '（对象：' + a.target + '）';
 						/* ★ 技能方向(purpose)：按技能类别映射，供统一收益守卫 actionValue 强判方向
