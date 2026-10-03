@@ -3547,9 +3547,11 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const ba43 = {
         type: 'skill', id: SID43, targetObj: allyDamaged43,
         target: 'allyDamaged43', purpose: 'support', rule: 'defense', score: 8,
+        targetIntent: 'support', targetConfidence: 1, targetInferred: true,
     };
     const event43 = {
         ai: function () { return 0; },
+        filterTarget: function (card, player, target) { return target.isDamaged(); },
         set: function (k, v) { this[k] = v; return this; },
     };
     ao43.bridgeSkillTargetEvent(event43, me43, SID43, 'ai', ba43);
@@ -3561,11 +3563,55 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     const eventCardTarget43 = {
         ai2: function () { return 0; },
+        filterTarget: function (_card, player, target) { return target.isDamaged(); },
         set: function (k, v) { this[k] = v; return this; },
     };
     ao43.bridgeSkillTargetEvent(eventCardTarget43, me43, SID43, 'ai2', ba43);
     ok(eventCardTarget43.ai2(allyDamaged43) >= 12,
         '10.43 chooseCardTarget 的 ai2 同样桥接推荐目标');
+
+    /* E2. 当前具体选择事件不接受推荐目标 → 不桥接。 */
+    const rejectedNative43 = function () { return 4; };
+    const rejectedEvent43 = {
+        ai: rejectedNative43,
+        filterTarget: function (_card, _player, target) { return target !== allyDamaged43; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(rejectedEvent43, me43, SID43, 'ai', ba43);
+    eq(rejectedEvent43.ai, rejectedNative43,
+        '10.43 当前 chooseTarget filterTarget 拒绝推荐目标 → 原生 AI 完全不改');
+
+    /* E3. mixed / 低置信 / 无推断来源 → 一律 fail-open。 */
+    const lowNative43 = function () { return 2; };
+    const lowEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(lowEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetConfidence: 0.4,
+    }));
+    eq(lowEvent43.ai, lowNative43, '10.43 低置信目标策略 → 不桥接');
+
+    const mixedEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(mixedEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetIntent: 'mixed', targetConfidence: 1,
+    }));
+    eq(mixedEvent43.ai, lowNative43, '10.43 mixed 技能 → 不桥接');
+
+    const unprovenEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(unprovenEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetInferred: false,
+    }));
+    eq(unprovenEvent43.ai, lowNative43, '10.43 无 scanner provenance → 不桥接');
 
     /* F1. 不匹配当前 best skill → 原生 AI 引用不动。 */
     const native43 = function () { return 3; };
@@ -3600,6 +3646,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 宿主桥覆盖 chooseTarget + chooseCardTarget');
     ok(overrideSrc43.indexOf("if (key === field && typeof value === 'function')") >= 0,
         '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
+    ok(overrideSrc43.indexOf("ba.targetInferred !== true || confidence < 0.55") >= 0,
+        '10.43 宿主桥只接受高置信 scanner 推断');
+    ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
+        '10.43 宿主桥再次校验当前选择事件合法目标');
 }
 
 /* ---------- 汇总 ---------- */
