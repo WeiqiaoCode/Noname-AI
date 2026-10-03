@@ -7,6 +7,8 @@
  * ============================================
  */
 
+import { dispositionOf } from '../../decision/relations/relations.js';
+
 /* ================= 决策积分引擎 · 深度价值量化 =================
  * 精确量化：卡牌价值 / 目标价值 / 局势价值 / 时机价值
  */
@@ -133,7 +135,7 @@ export function deepTargetValue(me, target) {
 	try {
 		if (!me || !target) return 0;
 
-		const att = get.attitude(me, target);
+		const att = dispositionOf(me, target);
 		if (att > 0) return _allyDeepValue(me, target);  // 队友价值
 		if (att < 0) return _enemyDeepValue(me, target);  // 敌人价值
 		return 0;
@@ -246,7 +248,7 @@ export function deepSituationValue(me) {
 		let allyCount = 0, enemyCount = 0;
 		(game.players || []).forEach(function (p) {
 			if (!p || p.alive === false || p === me) return;
-			const att = get.attitude(me, p);
+			const att = dispositionOf(me, p);
 			if (att > 0) allyCount++;
 			else if (att < 0) enemyCount++;
 		});
