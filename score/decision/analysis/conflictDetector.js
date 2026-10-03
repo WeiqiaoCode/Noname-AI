@@ -85,7 +85,7 @@ export function detectConflict(ruleBest, modelConf, metaMod, actionMeta) {
         const noisy = now - last < DEDUP_WINDOW;
         _lastLog[dk] = now;
         if (!noisy) {
-            try { log.warn('conflict', '认知冲突：规则出【' + _labelDesc(ruleLabel) + '】' + _displayName(ruleBest.id) + '，模型判【' + _labelDesc(modelClass) + '】'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+            try { log.warn('conflict', '决策参考分歧：当前规则选择【' + _displayName(ruleBest.id) + '】（' + _labelDesc(ruleLabel) + '），模型分类倾向【' + _labelDesc(modelClass) + '】；这里只记录意见不同，不代表模型已接管，最终操作以后续裁定为准。'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
         }
         return true;
     } catch (e) { return false; }
