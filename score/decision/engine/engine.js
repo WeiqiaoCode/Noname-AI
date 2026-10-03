@@ -3517,66 +3517,7 @@ function bestAction() {
 					} catch (eDying) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eDying); }
 				}
 
-				/* AOE：场上只要有 HP=1 的友方，且友方无对应防御牌 → 强烈压制 */
-				if (id === 'nanman' || id === 'wanjian') {
-					try {
-						const respCard = id === 'nanman' ? 'sha' : 'shan';
-						let allyAtRisk = 0, enemyAtRisk = 0;
-						for (const p of (game.players || [])) {
-							if (!p || p === me || p.alive === false) continue;
-							if (p.countCards('hs', respCard) > 0) continue;
-							const hp = p.hp || 0;
-							const w = hp <= 1 ? 3 : (hp <= 2 ? 2 : 1);
-							if (isSameCamp(me, p)) allyAtRisk += w;
-							else enemyAtRisk += w;
-						}
-						/* 自身：若自己无防御牌也计入风险 */
-						if (me.countCards('hs', respCard) === 0) {
-							const hp = me.hp || 0;
-							allyAtRisk += hp <= 1 ? 3 : (hp <= 2 ? 2 : 1);
-						}
-						const net = enemyAtRisk - allyAtRisk;
-						if (net <= -3) s -= 10;      // 严重亏损：强压
-						else if (net <= -1) s -= 4;  // 轻度亏损
-						else if (net >= 3) s += 3;   // 大赚
-						else if (net >= 1) s += 1.5; // 小赚
-							/* ★ 残局 AOE 乘数（与 optimization 层对齐） */
-							try {
-								const alive = (game.players || []).filter(function (p) {
-									return p && p.alive !== false;
-								}).length;
-								let endgameMul = 1.0;
-								if (alive <= 2) endgameMul = 1.6;
-								else if (alive <= 4) endgameMul = 1.3;
-								else if (alive <= 6) endgameMul = 1.1;
-								/* 残局 + 敌方有残血 → 强推 */
-								if (alive <= 4) {
-									let enemyLowHp = 0, allyLowHp = 0;
-									for (const p of (game.players || [])) {
-										if (!p || p === me || p.alive === false) continue;
-										if ((p.hp || 0) > 1) continue;
-										if (isSameCamp(me, p)) allyLowHp++;
-										else enemyLowHp++;
-									}
-									if (enemyLowHp >= 1 && allyLowHp === 0) s *= 1.5;
-									if (allyLowHp >= 1) s *= 0.5;
-								}
-								s *= endgameMul;
-
-								/* ★ 牌堆感知：南蛮/万箭的命中率随牌堆变化 */
-								try {
-									if (id === 'nanman') {
-										const shaRemain = cardRemaining('sha');
-										if (shaRemain <= 3) s *= 1.25;  /* 杀稀缺 → 南蛮更值 */
-									} else if (id === 'wanjian') {
-										const shanRemain = cardRemaining('shan');
-										if (shanRemain <= 3) s *= 1.25;  /* 闪稀缺 → 万箭更值 */
-									}
-								} catch (eDeck) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eDeck); }
-							} catch (eEndgame) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eEndgame); }
-
-					} catch (eAoe) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eAoe); }
-				}
+				/* AOE 的响应概率、友军风险、残血权重与牌堆稀缺统一由 aoeTiming.js 评估。 */
 
 				/* ★ 敌方爆发威胁调整 */
 				if (burst.value >= 0.4) {

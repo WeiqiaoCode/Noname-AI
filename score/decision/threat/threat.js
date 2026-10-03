@@ -18,6 +18,7 @@ import { styleShanFactor, styleOf, attackBy } from '../../perception/observer/ob
 import { identityBiasOf } from '../../perception/observer/identity.js';  /* ★ 深度连接：身份信念 → 目标评分（仅 identity 局非零，其它模式返回 0，零回归） */
 import { dispositionOf as _dispositionOf, isAllyOf as _isAllyOf, isNeutralOf as _isNeutralOf, relationStateKey } from '../relations/relations.js';  /* ★ 统一敌我系统：与 relations 单一权威源收敛 */
 import { isPlayerLinked } from '../state/playerState.js';  /* ★ 指令 02：唯一横置状态读取入口 */
+import { getGamePhase, GAME_PHASE } from '../state/gamePhase.js';
 
 /* ================= 回合内缓存工具 =================
  * 目的：削减 enemiesOf / threatOf 的重复计算。
@@ -264,39 +265,31 @@ function hasBadStatus(tgt) {
 }
 
 /* ================= 时间节奏（早期/常规/发力/残局） =================
- * 阶段判定：轮次 + 存活人数
- *   early    : r<=3          蓄爆期
- *   mid      : 4<=r<=7       常规期
- *   late     : r>=8          发力期
- *   endgame  : alive<=4      残局（优先级最高）
- * 提供：atkMul（进攻倍率）/ keepMul（保留闪桃倍率）/ burstMul（爆发倍率）
+ * 阶段分类只消费 gamePhase 单一权威源。
+ * endgame 不再附带“全力收割”的统一攻防倍率；具体残局战术由 endgameOpt 决定，
+ * 避免阶段事实和战术判断重复放大同一个动作。
  */
-function tempoFactor() /* ★ 成长效率降低 30% */ {
+function tempoFactor() {
 	try {
-		const r = (_status && typeof _status.roundNumber === "number") ? _status.roundNumber : 1;
-		let alive = 0;
-		try {
-			(game.players || []).forEach(function (p) {
-				if (p && p.alive !== false) alive++;
-			});
-		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		if (!alive) alive = 1;
-
-		let stage = "mid";
-		if (r <= 3) stage = "early";
-		else if (alive <= 4) stage = "endgame";
-		else if (r >= 8) stage = "late";
-
+		const phase = getGamePhase();
 		const T = {
 			early:   { atkMul: 0.9, keepMul: 1.1, burstMul: 0.8, desc: "蓄爆期（适度进攻）" },
 			mid:     { atkMul: 1.2, keepMul: 0.9, burstMul: 1.2, desc: "常规期（主动进攻）" },
 			late:    { atkMul: 1.5, keepMul: 0.6, burstMul: 1.6, desc: "发力期（果断进攻）" },
-			endgame: { atkMul: 1.8, keepMul: 0.4, burstMul: 1.8, desc: "残局（全力收割）" },
+			endgame: { atkMul: 1.0, keepMul: 1.0, burstMul: 1.0, desc: "残局（由残局策略决定攻守）" },
 		};
-		const t = T[stage] || T.mid;
-		return { stage, round: r, alive, atkMul: t.atkMul, keepMul: t.keepMul, burstMul: t.burstMul, desc: t.desc };
+		const t = T[phase.phase] || T[GAME_PHASE.MID];
+		return {
+			stage: phase.phase,
+			round: phase.round,
+			alive: phase.alive,
+			atkMul: t.atkMul,
+			keepMul: t.keepMul,
+			burstMul: t.burstMul,
+			desc: t.desc,
+		};
 	} catch (e) {
-		return { stage: "mid", round: 1, alive: 1, atkMul: 1, keepMul: 1, burstMul: 1, desc: "常规期" };
+		return { stage: "mid", round: 1, alive: 0, atkMul: 1, keepMul: 1, burstMul: 1, desc: "常规期" };
 	}
 }
 

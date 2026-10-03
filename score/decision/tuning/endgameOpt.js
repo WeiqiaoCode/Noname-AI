@@ -20,6 +20,7 @@
 
 import { lib, game, get, ai } from '../../foundation/adapt/host.js';
 import { isAllyOf, isEnemyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
+import { isEndgamePhase } from '../state/gamePhase.js';
 
 /* 若无 lib/game/get 则空跑（兼容性保护） */
 try { void get; void ai; void lib; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -27,7 +28,7 @@ try { void get; void ai; void lib; } catch (e) { if (typeof window !== 'undefine
 /* ★ 判断是否残局（存活 <= 4，覆盖 1v1/1v2/2v1/2v2） */
 export function isEndgame(me) {
 	try {
-		return aliveCount() <= 4;
+		return isEndgamePhase();
 	} catch (e) {
 		return false;
 	}

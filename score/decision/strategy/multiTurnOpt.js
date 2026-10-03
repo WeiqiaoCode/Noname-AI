@@ -12,6 +12,7 @@
  */
 import { game } from '../../foundation/adapt/host.js';
 import { isEnemyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
+import { getGamePhase, GAME_PHASE } from '../state/gamePhase.js';
 
 /* ★ 预测接下来 3 轮的局势 */
 export function multiTurnPlan(me) {
@@ -33,48 +34,39 @@ export function multiTurnPlan(me) {
 		const myMaxHp = me.maxHp || 1;
 		const hpRatio = myHp / myMaxHp;
 
-		/* 3. 预测回合数 */
-		const round = (_status && _status.roundNumber) || 0;
+		/* 3. 统一阶段：人数残局优先于轮次 */
+		const phase = getGamePhase();
+		const round = phase.round;
 
-		/* 4. 综合判断 */
+		/* 4. 多轮规划只细化非残局阶段；残局具体战术交给 endgameOpt。 */
 		let strategy = 'normal';
 		let desc = '正常策略';
 
-		/* 早期（前 3 轮） */
-		if (round <= 3) {
+		if (phase.phase === GAME_PHASE.ENDGAME) {
+			strategy = 'endgame';
+			desc = '残局，由残局策略决定攻守';
+		}
+		else if (phase.phase === GAME_PHASE.EARLY) {
 			strategy = 'early';
 			desc = '早期，攒牌发育';
 		}
-		/* 中期（4~7 轮） */
-		else if (round <= 7) {
-			/* 敌人多 → 进攻 */
+		else if (phase.phase === GAME_PHASE.MID) {
 			if (enemyCount >= 3) {
 				strategy = 'mid_attack';
 				desc = '中期敌人多，主动进攻';
 			}
-			/* 自己残血 → 防守 */
 			else if (hpRatio < 0.4) {
 				strategy = 'mid_defense';
 				desc = '中期残血，先防守';
 			}
-			/* 正常 */
 			else {
 				strategy = 'mid_normal';
 				desc = '中期，正常打';
 			}
 		}
-		/* 后期（8+ 轮） */
-		else {
-			/* 残局 */
-			if (alive <= 3) {
-				strategy = 'endgame';
-				desc = '残局，决胜时刻';
-			}
-			/* 大后期 */
-			else {
-				strategy = 'late';
-				desc = '大后期，拼手牌质量';
-			}
+		else if (phase.phase === GAME_PHASE.LATE) {
+			strategy = 'late';
+			desc = '大后期，拼手牌质量';
 		}
 
 		return {
@@ -119,13 +111,8 @@ export function multiTurnBonus(me, act) {
 			if (act.id === 'sha') return 0.8;
 		}
 
-		/* 残局 */
-		if (plan.strategy === 'endgame') {
-			/* 桃 → 加成 */
-			if (act.id === 'tao') return 1.4;
-			/* 杀 → 加成 */
-			if (act.id === 'sha') return 1.2;
-		}
+		/* 残局不再做“杀/桃”泛化加权；斩杀、保命、救援由 endgameOpt 唯一负责。 */
+		if (plan.strategy === 'endgame') return 1.0;
 
 		return 1.0;
 	} catch (e) {
