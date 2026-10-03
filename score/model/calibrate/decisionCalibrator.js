@@ -18,6 +18,7 @@
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { log } from '../../foundation/diag/logger.js';
 import { safeGet as _lsGet, safeSet as _lsSet, safeRemove as _lsRemove } from '../../foundation/storage/storage.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
+import { dispositionOf } from '../../decision/relations/relations.js';
 
 const STORE_KEY = 'djsc_calibrator_v1';
 const OBSERVE_DELAY = 1500;
@@ -136,7 +137,7 @@ function _evaluateOne(p) {
 
         let tgtIsEnemy = false;
         try {
-            if (tgt && get.attitude(me, tgt) < 0) tgtIsEnemy = true;
+            if (tgt && dispositionOf(me, tgt) < 0) tgtIsEnemy = true;
         } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
         if (tgtIsEnemy) {
             gain += (-tgtHpDelta) * 2.5;
