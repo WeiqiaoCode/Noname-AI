@@ -21,18 +21,31 @@ function n(v) {
 }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-export function classifySkillCardSelection(profile) {
+export function classifySkillCardSelection(profile, ctx) {
 	try {
+		ctx = ctx || {};
 		const tags = (profile && profile.tags) || {};
+		const info = ctx.skillInfo || null;
 		const give = Math.max(0, n(tags.giveCard));
 		const cost =
 			Math.max(0, n(tags.loseCard))
 			+ Math.abs(Math.min(0, n(tags.selfDiscard)))
 			+ Math.abs(Math.min(0, n(tags.selfLose)));
 
-		/* giveCard 是强语义：只要明确检测到“把牌给别人”，就不能按弃牌成本处理。
-		 * 这使仁德/交牌类技能继续由目标与原生 AI 决定牌的用途。 */
+		/* giveCard 是强语义：明确“把牌给别人”时不能按弃牌成本处理。 */
 		if (give > 0.15) return 'give';
+
+		/* 宿主主动技的声明本身是更直接的规则证据：
+		 * - filterCard 存在，且未关闭默认 discard/lose → 所选牌是成本/转化材料；
+		 * - discard:false / lose:false 常用于“给牌、展示、移动”等非弃置语义，不能猜。
+		 * viewAs 技能也属于“拿自己的牌作材料”，因此默认落入 cost。 */
+		if (info && info.filterCard) {
+			if (info.discard !== false && info.lose !== false) return 'cost';
+			if (info.discard === false || info.lose === false) {
+				return cost > 0.15 ? 'cost' : 'unknown';
+			}
+		}
+
 		if (cost > 0.15) return 'cost';
 		return 'unknown';
 	} catch (e) { return 'unknown'; }
@@ -70,7 +83,7 @@ export function skillCardSelectionAdjustment(cardId, profile, ctx) {
 	const me = ctx.me || {};
 	const value = Number(ctx.cardValue);
 	const hasValue = Number.isFinite(value);
-	const semantic = classifySkillCardSelection(profile);
+	const semantic = classifySkillCardSelection(profile, ctx);
 
 	/* give / unknown：不凭“低价值”推出“应该给/应该选”。
 	 * 只保留 Stage 3 原有的极小机会成本 tie-break。 */
