@@ -333,10 +333,12 @@ export function eventAcceptsSkillTargetPlan(next, player, decision) {
 	try {
 		if (!decision || !decision.target) return false;
 		const planned = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
+		/* 组合合法性依赖实时已选目标时，连第一目标也不预执行 filterTarget，
+		 * 直接 fail-open，避免拿“空选择态”误证明整组合法。 */
+		if (planned.length > 1 && _eventFilterDependsOnSelection(next && next.filterTarget)) return false;
 		if (!eventAcceptsSkillTarget(next, player, planned[0])) return false;
 		if (planned.length <= 1) return true;
 		if (decision.targetRangeResolved !== true) return false;
-		if (_eventFilterDependsOnSelection(next.filterTarget)) return false;
 		const fixed = _eventFixedTargetCount(next);
 		if (fixed !== planned.length) return false;
 		for (const t of planned) {
@@ -423,8 +425,12 @@ export function bridgeSkillCardCostEvent(next, player, sid, field, baOverride) {
 		if (!next || !player || !sid || !field || next.processAI) return next;
 		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
 		if (!decision) return next;
-		/* target 合法性依赖所选 card 时不做联合猜测。 */
-		if (!eventAcceptsSkillTarget(next, player, decision.target)) return next;
+		/* 联合选牌只跟随“同一个 chooseCardTarget 事件里已经成功桥接的目标计划”。
+		 * 若目标桥因 consumed / stage mismatch / card-dependent filter 而 fail-open，
+		 * 牌半边也必须一起 fail-open。 */
+		const attached = next.__djscSkillTargetDecision;
+		if (!attached || attached.skillId !== sid) return next;
+		if (!eventAcceptsSkillTargetPlan(next, player, decision)) return next;
 		if (typeof next[field] === 'function') next[field] = wrapSkillCostCardAI(next[field], player, decision);
 		if (typeof next.set === 'function' && !next.__djscSkillCostSetBridge) {
 			const origSet = next.set;
@@ -436,29 +442,6 @@ export function bridgeSkillCardCostEvent(next, player, sid, field, baOverride) {
 		}
 		return next;
 	} catch (e) { return next; }
-}
-
-export function wrapSkillButtonAI(original, decision) {
-	if (!decision) return original;
-	const tag = decision.skillId + '|' + decision.targetName;
-	if (original && original.__djscSkillButtonBridge === tag) return original;
-	const wrapped = function (button) {
-		let nativeScore = 0;
-		try {
-			if (typeof original === 'function') {
-				const n = Number(original.apply(this, arguments));
-				if (Number.isFinite(n)) nativeScore = n;
-			}
-		} catch (e) {}
-		try {
-			const link = button && button.link;
-			const planned = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
-			if (link && planned.some(function (p) { return _samePlayer(link, p); })) return Math.max(nativeScore, 12);
-		} catch (e) {}
-		return nativeScore;
-	};
-	try { Object.defineProperty(wrapped, '__djscSkillButtonBridge', { value: tag, configurable: true }); } catch (e) {}
-	return wrapped;
 }
 
 function _skillExplicitButtonDecision(player, sid, baOverride) {
