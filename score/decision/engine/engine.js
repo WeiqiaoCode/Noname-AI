@@ -2381,6 +2381,7 @@ function applyBasicSkillRules(me, acts) {
 				/* ★ 多目标技能：写回 targetList（全部真敌/真友玩家对象），
 				 *   供收益方向守卫逐目标判定整体方向，避免只判主目标漏判。 */
 				if (Array.isArray(d.targetIndexes)) {
+					a.targetRangeResolved = d.targetRangeResolved !== false;
 					const list = [];
 					d.targetIndexes.forEach(function (ti) {
 						const tt = skillTargets[ti];
