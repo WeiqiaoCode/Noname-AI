@@ -19,6 +19,8 @@
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
 import { skillProfileOf } from '../skills/skills.js';
+import { beginSkillChoiceStage } from '../skills/skillChoiceTransaction.js';
+import { classifySkillCardSelection, skillCardSelectionAdjustment } from '../skills/skillCardChoiceBrain.js';
 import { cfg } from '../../foundation/config/util.js';
 import { isAllyOf, dispositionOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 
@@ -53,14 +55,14 @@ function _markOwnedWrapper(fn, token) {
 /* ★ M09：备份被换装的底层方法原引用，卸载时原样还原，避免热重载残留 */
 const _protoBackup = {
 	addSkill: null, getSkills: null, gameCheck: null,
-	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
+	chooseCard: null, chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
 	chooseButton: null, chooseControl: null,
 };
 /* 记录“我们实际安装进去的 wrapper”本身。卸载时只有当前方法仍严格等于
  * 该 wrapper 才恢复原引用；若后装扩展又包了一层，则绝不覆盖别人的修改。 */
 const _protoOwned = {
 	addSkill: null, getSkills: null, gameCheck: null,
-	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
+	chooseCard: null, chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
 	chooseButton: null, chooseControl: null,
 };
 
@@ -119,6 +121,17 @@ function _getBA(player) {
 			}
 		} catch (eLog) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eLog); }
 
+		return ba;
+	} catch (e) { return null; }
+}
+
+function _getFreshSkillBA(player, sid) {
+	try {
+		/* 连续技能每进入一个新的 choice stage 都重新评估当前真实状态。
+		 * 这里只失效该 AI 玩家的 soft-override 缓存，不清全局决策日志。 */
+		CACHE.delete(player);
+		const ba = _getBA(player);
+		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
 		return ba;
 	} catch (e) { return null; }
 }
@@ -185,18 +198,37 @@ function _parentEventOf(ev) {
 export function resolveActiveSkillContext(player, startEvent) {
 	try {
 		let ev = startEvent || (_status && _status.event) || null;
+		let foundId = null;
+		let ownerEvent = null;
 		for (let depth = 0; ev && depth < 7; depth++) {
 			const cand = [ev.skill, ev.sourceSkill, ev.skillName, ev.name];
+			let localId = null;
 			for (const id of cand) {
 				if (typeof id !== 'string' || !id || id === SKILL_ID) continue;
 				/* 真正 lib.skill 条目是技能对象；普通事件名 chooseTarget/phaseUse 等
 				 * 即使某些测试/扩展 Proxy 对未知 key 返回函数，也不能误认成技能。 */
 				const info = lib.skill && lib.skill[id];
-				if (info && typeof info === 'object') return { id: id, event: ev };
+				if (info && typeof info === 'object') {
+					localId = id;
+					break;
+				}
+			}
+			if (localId) {
+				if (!foundId) {
+					foundId = localId;
+					ownerEvent = ev;
+				} else if (localId === foundId) {
+					/* 子 choice event 可能复制同一个 skill/sourceSkill。继续向上收敛到
+					 * 同一技能最外层 owner，使连续阶段稳定共享 transaction。 */
+					ownerEvent = ev;
+				} else {
+					/* 遇到另一个真实技能说明跨入外层/嵌套技能边界，不能串 transaction。 */
+					break;
+				}
 			}
 			ev = _parentEventOf(ev);
 		}
-		return null;
+		return foundId ? { id: foundId, event: ownerEvent } : null;
 	} catch (e) { return null; }
 }
 
@@ -381,6 +413,20 @@ export function eventAcceptsSkillTargetPlan(next, player, decision) {
 export function bridgeSkillTargetChoiceOnce(next, player, skillContext, field, baOverride) {
 	try {
 		if (!skillContext || !skillContext.id) return next;
+		const stage = next && next.__djscSkillChoiceStage;
+		if (stage && stage.skillId === skillContext.id) {
+			/* Stage 3：消费范围收缩到当前 transaction stage。这样同一技能后续
+			 * 仍可出现新的 target stage，但上一阶段计划不会跨阶段复用。 */
+			if (stage.targetBridgeConsumed) return next;
+			const out = bridgeSkillTargetEvent(next, player, skillContext.id, field, baOverride);
+			if (out && out.__djscSkillTargetDecision) {
+				stage.targetBridgeConsumed = true;
+				stage.targetDecision = out.__djscSkillTargetDecision;
+			}
+			return out;
+		}
+
+		/* 没有 transaction provenance 时维持 Stage 2 的保守 owner-event 单次语义。 */
 		const ownerEvent = skillContext.event || null;
 		if (ownerEvent && ownerEvent.__djscSkillTargetBridgeConsumed) return next;
 		const out = bridgeSkillTargetEvent(next, player, skillContext.id, field, baOverride);
@@ -418,6 +464,158 @@ export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 		}
 		try {
 			next.__djscSkillTargetDecision = decision;
+			_softStat(player);
+		} catch (e) {}
+		return next;
+	} catch (e) { return next; }
+}
+
+function _ownSkillCardContext(player) {
+	const out = {
+		hp: (player && player.hp !== undefined) ? player.hp : 3,
+		maxHp: (player && player.maxHp) || 3,
+		shaCount: 0, shanCount: 0, wuxieCount: 0, jiuCount: 0,
+		hasZhuge: false, hasPaoxiao: false,
+	};
+	try {
+		const hand = player && typeof player.getCards === 'function' ? (player.getCards('h') || []) : [];
+		for (const c of hand) {
+			let id = '';
+			try { id = (typeof get.name === 'function' && get.name(c, player)) || (c && c.name) || ''; } catch (e) { id = (c && c.name) || ''; }
+			if (id === 'sha') out.shaCount++;
+			else if (id === 'shan') out.shanCount++;
+			else if (id === 'wuxie') out.wuxieCount++;
+			else if (id === 'jiu') out.jiuCount++;
+		}
+		try {
+			const equips = player && typeof player.getCards === 'function' ? (player.getCards('e') || []) : [];
+			for (const c of equips) {
+				let id = '';
+				try { id = (typeof get.name === 'function' && get.name(c, player)) || (c && c.name) || ''; } catch (e) { id = (c && c.name) || ''; }
+				if (id === 'zhuge') out.hasZhuge = true;
+			}
+		} catch (e) {}
+		try { if (player && typeof player.hasSkill === 'function' && player.hasSkill('paoxiao')) out.hasPaoxiao = true; } catch (e) {}
+	} catch (e) {}
+	return out;
+}
+
+export function skillCardAIValueModifier(player, card, num, baOverride, eventOverride) {
+	try {
+		const base = Number(num);
+		if (!player || !card || !Number.isFinite(base)) return num;
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || !ba.id) return num;
+
+		/* declarative 主动技（filterCard/check）没有 player.chooseCard() 调用。
+		 * 只在当前真实技能上下文与 bestAction 完全一致时修改 aiValue，避免污染普通出牌。 */
+		const active = resolveActiveSkillContext(player,
+			eventOverride !== undefined ? eventOverride : (_status && _status.event));
+		if (!active || active.id !== ba.id) return num;
+
+		const info = lib.skill && lib.skill[ba.id];
+		if (!info || typeof info !== 'object' || !info.filterCard) return num;
+		const profile = skillProfileOf(ba.id);
+		const semantic = classifySkillCardSelection(profile, { skillInfo: info });
+		if (semantic !== 'cost') return num;
+
+		let owner = null;
+		try {
+			if (typeof get.owner !== 'function') return num;
+			owner = get.owner(card);
+		} catch (e) { return num; }
+		if (owner !== player) return num;
+
+		let id = '';
+		try {
+			id = (typeof get.name === 'function' && get.name(card, player))
+				|| (card && card.name) || '';
+		} catch (e) { id = (card && card.name) || ''; }
+		if (!id) return num;
+
+		const d = skillCardSelectionAdjustment(id, profile, {
+			me: _ownSkillCardContext(player),
+			cardValue: base,
+			skillInfo: info,
+		});
+		/* 宿主常见 check(card)=常数-get.value(card)。
+		 * 适合作成本 → adjustment>0 → 降低 value；关键牌则提高 value。 */
+		return base - Number(d && d.adjustment || 0);
+	} catch (e) { return num; }
+}
+
+export function wrapSkillCardOpportunityAI(original, player, stage, profile) {
+	if (!player || !stage) return original;
+	const tag = stage.skillId + '|' + stage.transactionId + '|' + stage.ordinal;
+	if (original && original.__djscSkillCardStageBridge === tag) return original;
+	const meCardCtx = _ownSkillCardContext(player);
+	const wrapped = function (card) {
+		let nativeScore = 0;
+		try {
+			if (typeof original === 'function') {
+				const n = Number(original.apply(this, arguments));
+				if (Number.isFinite(n)) nativeScore = n;
+			}
+		} catch (e) {}
+		try {
+			let owner = null;
+			try {
+				if (typeof get.owner !== 'function') return nativeScore;
+				owner = get.owner(card);
+			} catch (e) { return nativeScore; }
+			/* 只评价明确属于当前玩家的牌；未知/外部来源完全沿用原生 AI。 */
+			if (owner !== player) return nativeScore;
+
+			let id = '';
+			try { id = (typeof get.name === 'function' && get.name(card, player)) || (card && card.name) || ''; } catch (e) { id = (card && card.name) || ''; }
+			if (!id) return nativeScore;
+			let value = NaN;
+			try { value = Number(get.value(card, player)); } catch (e) {}
+
+			const d = skillCardSelectionAdjustment(id, profile, {
+				me: meCardCtx,
+				cardValue: value,
+				skillInfo: profile && profile.__skillInfo,
+			});
+			return nativeScore + Number(d && d.adjustment || 0);
+		} catch (e) { return nativeScore; }
+	};
+	try { Object.defineProperty(wrapped, '__djscSkillCardStageBridge', { value: tag, configurable: true }); } catch (e) {}
+	return wrapped;
+}
+
+export function bridgeSkillCardStageEvent(next, player, skillContext, field, baOverride) {
+	try {
+		if (!next || !player || !skillContext || !skillContext.id || !field || next.processAI) return next;
+		const stage = next.__djscSkillChoiceStage;
+		if (!stage || stage.skillId !== skillContext.id || stage.choiceType !== 'card') return next;
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || ba.id !== skillContext.id) return next;
+		if (ba.rule === 'veto' || ba.rule === 'veto-target') return next;
+		const baseProfile = skillProfileOf(skillContext.id);
+		const profile = Object.assign({}, baseProfile || {}, {
+			__skillInfo: lib.skill && lib.skill[skillContext.id],
+		});
+
+		if (typeof next[field] === 'function') {
+			next[field] = wrapSkillCardOpportunityAI(next[field], player, stage, profile);
+		}
+		if (typeof next.set === 'function' && !next.__djscSkillCardStageSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === field && typeof value === 'function') {
+					value = wrapSkillCardOpportunityAI(value, player, stage, profile);
+				}
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillCardStageSetBridge = true; } catch (e) {}
+		}
+		try {
+			next.__djscSkillCardStageDecision = {
+				skillId: skillContext.id,
+				transactionId: stage.transactionId,
+				stageOrdinal: stage.ordinal,
+			};
 			_softStat(player);
 		} catch (e) {}
 		return next;
@@ -615,6 +813,21 @@ function _hookSkillTargetChoice() {
 		const hookToken = _activeHookToken;
 		if (!hookToken) return;
 
+		const origChooseCard = proto.chooseCard;
+		if (typeof origChooseCard === 'function') {
+			_protoBackup.chooseCard = origChooseCard;
+			proto.chooseCard = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseCard.apply(this, arguments);
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
+				const next = origChooseCard.apply(this, arguments);
+				if (!skillCtx) return next;
+				beginSkillChoiceStage(this, skillCtx, 'card', next);
+				const ba = _getFreshSkillBA(this, skillCtx.id);
+				return bridgeSkillCardStageEvent(next, this, skillCtx, 'ai', ba);
+			}, hookToken);
+			_protoOwned.chooseCard = proto.chooseCard;
+		}
+
 		const origChooseTarget = proto.chooseTarget;
 		if (typeof origChooseTarget === 'function') {
 			_protoBackup.chooseTarget = origChooseTarget;
@@ -622,7 +835,10 @@ function _hookSkillTargetChoice() {
 				if (_activeHookToken !== hookToken) return origChooseTarget.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseTarget.apply(this, arguments);
-				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai') : next;
+				if (!skillCtx) return next;
+				beginSkillChoiceStage(this, skillCtx, 'target', next);
+				const ba = _getFreshSkillBA(this, skillCtx.id);
+				return bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai', ba);
 			}, hookToken);
 			_protoOwned.chooseTarget = proto.chooseTarget;
 		}
@@ -635,8 +851,10 @@ function _hookSkillTargetChoice() {
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseCardTarget.apply(this, arguments);
 				if (!skillCtx) return next;
-				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2');
-				bridgeSkillCardCostEvent(next, this, skillCtx.id, 'ai1');
+				beginSkillChoiceStage(this, skillCtx, 'card-target', next);
+				const ba = _getFreshSkillBA(this, skillCtx.id);
+				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2', ba);
+				bridgeSkillCardCostEvent(next, this, skillCtx.id, 'ai1', ba);
 				return next;
 			}, hookToken);
 			_protoOwned.chooseCardTarget = proto.chooseCardTarget;
@@ -650,8 +868,10 @@ function _hookSkillTargetChoice() {
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseButtonTarget.apply(this, arguments);
 				if (!skillCtx) return next;
-				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2');
-				bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai1');
+				beginSkillChoiceStage(this, skillCtx, 'button-target', next);
+				const ba = _getFreshSkillBA(this, skillCtx.id);
+				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2', ba);
+				bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai1', ba);
 				return next;
 			}, hookToken);
 			_protoOwned.chooseButtonTarget = proto.chooseButtonTarget;
@@ -664,7 +884,10 @@ function _hookSkillTargetChoice() {
 				if (_activeHookToken !== hookToken) return origChooseButton.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseButton.apply(this, arguments);
-				return skillCtx ? bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai') : next;
+				if (!skillCtx) return next;
+				beginSkillChoiceStage(this, skillCtx, 'button', next);
+				const ba = _getFreshSkillBA(this, skillCtx.id);
+				return bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai', ba);
 			}, hookToken);
 			_protoOwned.chooseButton = proto.chooseButton;
 		}
@@ -676,12 +899,15 @@ function _hookSkillTargetChoice() {
 				if (_activeHookToken !== hookToken) return origChooseControl.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseControl.apply(this, arguments);
-				return skillCtx ? bridgeSkillControlChoiceOnce(next, this, skillCtx) : next;
+				if (!skillCtx) return next;
+				beginSkillChoiceStage(this, skillCtx, 'control', next);
+				const ba = _getFreshSkillBA(this, skillCtx.id);
+				return bridgeSkillControlChoiceOnce(next, this, skillCtx, ba);
 			}, hookToken);
 			_protoOwned.chooseControl = proto.chooseControl;
 		}
 
-		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget
+		_skillTargetHooked = !!(_protoBackup.chooseCard || _protoBackup.chooseTarget || _protoBackup.chooseCardTarget
 			|| _protoBackup.chooseButtonTarget || _protoBackup.chooseButton || _protoBackup.chooseControl);
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
@@ -775,6 +1001,11 @@ export function installAIOverride() {
 						if (isRecastRecommended(ba)) {
 							return num;
 						}
+
+						/* Stage 3：declarative filterCard/check 技能没有 chooseCard() 桥。
+						 * 在当前技能上下文中，通过 aiValue 让宿主原生 check(card) 消费同一套成本策略。 */
+						const skillCardValue = skillCardAIValueModifier(player, card, num, ba);
+						if (skillCardValue !== num) return skillCardValue;
 
 						/* 如果是我们推荐的牌 → 加价值 */
 						if (ba.rule && _cardMatches(card, player, ba.rule)) {
@@ -947,6 +1178,7 @@ export function uninstallAIOverride() {
 		if (proto) {
 			if (_protoBackup.addSkill && proto.addSkill === _protoOwned.addSkill) proto.addSkill = _protoBackup.addSkill;
 			if (_protoBackup.getSkills && proto.getSkills === _protoOwned.getSkills) proto.getSkills = _protoBackup.getSkills;
+			if (_protoBackup.chooseCard && proto.chooseCard === _protoOwned.chooseCard) proto.chooseCard = _protoBackup.chooseCard;
 			if (_protoBackup.chooseTarget && proto.chooseTarget === _protoOwned.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
 			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget === _protoOwned.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
 			if (_protoBackup.chooseButtonTarget && proto.chooseButtonTarget === _protoOwned.chooseButtonTarget) proto.chooseButtonTarget = _protoBackup.chooseButtonTarget;
