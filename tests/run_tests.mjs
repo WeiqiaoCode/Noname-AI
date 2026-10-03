@@ -1551,7 +1551,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const wt = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'timing', 'wuxieTiming.js')).href);
     const meP = { name: 'meP', hp: 4, maxHp: 4, countCards: function () { return 3; }, getCards: function () { return []; } };
     eq(wt.wuxieTiming(meP, meP, 'lebu').use, true, '10.22 wrapper：自己中乐 → use');
-    eq(wt.wuxieTiming(meP, null, 'guohe').use, false, '10.22 wrapper：缺少目标 → 不构成 use（待定）');
+    eq(wt.wuxieTiming(meP, null, 'guohe').use, null, '10.22 wrapper：缺少目标 → use=null（结构化 fail-open）');
+    eq(wt.wuxieTiming(meP, null, 'guohe').resolved, false, '10.22 wrapper：缺少目标 → resolved=false');
+    eq(wt.wuxieBonus(meP, { id: 'wuxie' }), 1.0, '10.22 wuxieBonus 上下文缺失 → 中性 1.0（不得因中文 reason 误降权）');
     eq(wt.wuxieBonus(meP, { id: 'sha' }), 1.0, '10.22 wuxieBonus 非无懈 → 1.0');
 }
 
@@ -1707,7 +1709,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         const engSrc = fsSync23.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
         const cacheSrc = fsSync23.readFileSync(join(_pkg, 'score', 'foundation', 'storage', 'cache.js'), 'utf8');
         ok(/turnStrategicState\.js/.test(engSrc), '10.23 engine.js 接入唯一权威 turnStrategicState');
-        ok(/evaluateDestroyPenalty/.test(engSrc), '10.23 engine.js 调用 evaluateDestroyPenalty');
+        ok(/evaluateActionTransitionPenalty/.test(engSrc), '10.23 engine.js 调用通用 evaluateActionTransitionPenalty');
         eq(engSrc.indexOf('s *= 0.4') < 0, true, '10.23 engine.js 删除「判定区有延时牌 → ×0.4」粗暴同目标降权');
         ok(/getCards\(['"]j['"]\)/.test(cacheSrc), '10.23 cache.makeStateKey 纳入判定区指纹');
         ok(/checkStateChanged/.test(engSrc) && /_lastBestAction = null/.test(engSrc),
@@ -3057,6 +3059,342 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         host40.get.identityList = oldIdentityList40;
         host40._status.mode = oldStatusMode40;
     }
+}
+
+
+/* ================= 10.41 Strategic Transition Ledger V2 =================
+ * A. create-state 只有真实落区才确认；被无懈/未生效不得留下假 commitment；
+ * B. remove-target-card 只有真实移除战略状态才写 REMOVE；
+ * C. CREATE→REMOVE 与 REMOVE→CREATE 都是 soft penalty；
+ * D. actor / target / turn epoch 隔离；同角色额外回合也清空；
+ * E. engine 候选评分只消费通用 strategic operation，不靠具体牌名单触发。
+ */
+{
+    const fs41 = await import('node:fs');
+    const host41 = await import(pathToFileURL(_hostPath).href);
+    const tss41 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js')).href);
+    const terms41 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'terms.js')).href);
+
+    function C41(id) { return { name: id }; }
+    function P41(name, rel, o) {
+        o = o || {};
+        return {
+            name: name, name1: name, playerid: name, rel: rel, alive: true, hp: 4, maxHp: 4,
+            _h: o.h || [], _e: o.e || [], _j: o.j || [],
+            countCards: function (z) {
+                if (z === 'h') return this._h.length;
+                if (z === 'e') return this._e.length;
+                if (z === 'j') return this._j.length;
+                return 0;
+            },
+            getCards: function (z) {
+                if (z === 'h') return this._h;
+                if (z === 'e') return this._e;
+                if (z === 'j') return this._j;
+                return [];
+            },
+        };
+    }
+
+    const me = P41('me41', 1);
+    const other = P41('other41', 1);
+    const enemy = P41('enemy41', -1);
+    const enemy2 = P41('enemy42', -1);
+    const rctx = { relationOf: function (_me, t) { return t.rel; } };
+
+    host41.game.me = me;
+    host41.game.players = [me, other, enemy, enemy2];
+    host41.game.alivePlayers = host41.game.players.slice();
+    host41._status.currentPhase = me;
+
+    eq(terms41.strategicEffectOf('lebu').operation, 'create-state',
+        '10.41 乐由 profile 映射为 create-state');
+    eq(terms41.strategicEffectOf('shunshou').operation, 'remove-target-card',
+        '10.41 顺由 profile 映射为 remove-target-card');
+
+    /* A1. 被无懈/未落区：pending 结案但不得制造 CREATE。 */
+    tss41.beginStrategicTurn(me);
+    tss41.beginStrategicAction(me, 'lebu', enemy, rctx);
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 useCard 时只记录 pending，不提前宣称 CREATE');
+    eq(tss41.getPendingStrategicActions().length, 1,
+        '10.41 create-state 动作前快照进入 pending');
+    tss41.reconcileStrategicTransitions(me, rctx);
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 乐未进入判定区（如被无懈）→ 不产生假 commitment');
+
+    /* A2. 真实落区：下一决策 reconcile 后确认 CREATE。 */
+    tss41.beginStrategicAction(me, 'lebu', enemy, rctx);
+    enemy._j.push(C41('lebu'));
+    const made = tss41.reconcileStrategicTransitions(me, rctx);
+    ok(made.some(function (x) { return x.operation === 'create-state'; }),
+        '10.41 乐真实落区 → 确认 CREATE');
+    const destroyAfterCreate = tss41.evaluateDestroyPenalty(me, enemy, rctx);
+    eq(destroyAfterCreate.selfCreated, true,
+        '10.41 已确认 CREATE 后，同 actor 识别 self-created');
+    ok(destroyAfterCreate.effectivePenalty > 0,
+        '10.41 CREATE→REMOVE 敌方有利状态存在 soft opportunity cost');
+
+    /* actor 隔离：另一角色不能把我的 CREATE 当成自己的 commitment。 */
+    eq(tss41.evaluateRemovalChoice(other, enemy, enemy._j[0], rctx).selfCreated, false,
+        '10.41 self-created 必须匹配 actor，不跨角色串账');
+    /* CREATE 后若状态被别人/自然结算移除，再次补挂不属于自己的反向操作。 */
+    enemy._j.length = 0;
+    eq(tss41.evaluateCreateConsistency(me, enemy, 'lebu', rctx).penalty, 0,
+        '10.41 自建状态被外部移除后重新补挂 → 不误判为 self reversal');
+    enemy._j.push(C41('lebu'));
+
+
+    /* B1. 顺/拆若拿走装备而非状态，不得写 REMOVE-state。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('lebu')];
+    enemy._e = [C41('weapon41')];
+    tss41.beginStrategicAction(me, 'guohe', enemy, rctx);
+    enemy._e.length = 0;
+    tss41.reconcileStrategicTransitions(me, rctx);
+    eq(tss41.getStrategicRecords().filter(function (x) { return x.operation === 'remove-state'; }).length, 0,
+        '10.41 过河只拆装备、判定状态仍在 → 不误记 REMOVE-state');
+
+    /* B2/C. 真正移除兵粮后，再给同目标兵粮应识别 REMOVE→CREATE reversal。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('bingliang')];
+    tss41.beginStrategicAction(me, 'shunshou', enemy, rctx);
+    enemy._j.length = 0;
+    const removed = tss41.reconcileStrategicTransitions(me, rctx);
+    ok(removed.some(function (x) { return x.operation === 'remove-state'; }),
+        '10.41 顺手真实拿走兵粮 → 写 REMOVE-state');
+    const recreate = tss41.evaluateCreateConsistency(me, enemy, 'bingliang', rctx);
+    ok(recreate.penalty > 0 && Number.isFinite(recreate.penalty),
+        '10.41 REMOVE→同目标CREATE → 有限 reversal penalty');
+    eq(tss41.evaluateCreateConsistency(me, enemy2, 'bingliang', rctx).penalty, 0,
+        '10.41 REMOVE 后换目标 CREATE → 不视为反转');
+
+    /* D. 同一个角色获得额外回合：显式 phaseBegin epoch 也必须清空旧 ledger。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('lebu')];
+    tss41.recordStateCreation(me, enemy, 'lebu', rctx);
+    const epoch1 = tss41.getStrategicTurnEpoch();
+    eq(tss41.getStrategicRecords().length, 1, '10.41 当前回合存在 confirmed ledger');
+    const epoch2 = tss41.beginStrategicTurn(me);
+    ok(epoch2 > epoch1, '10.41 同角色额外回合也创建新 turn epoch');
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 同角色额外回合清空上一回合 strategic ledger');
+
+    /* E. 源码守卫：engine 不再在 useCard 时按乐/兵硬编码记 commitment；
+     * transition evaluator 独立于“拆牌/延时类打敌”具体牌列表。 */
+    const eng41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const tssSrc41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js'), 'utf8');
+    const opt41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'optimization.js'), 'utf8');
+
+    ok(eng41.indexOf('beginStrategicAction(me, _cid, _target') >= 0,
+        '10.41 engine useCard 对任意 strategic operation 只建 pending');
+    eq(eng41.indexOf("if (_cid === 'lebu' || _cid === 'bingliang')") < 0, true,
+        '10.41 engine 不再按乐/兵具体牌名记录 commitment');
+    ok(eng41.indexOf('reconcileStrategicTransitions(_stMe') >= 0,
+        '10.41 每次 bestAction 前先按真实状态 reconcile pending');
+    ok(eng41.indexOf('const tp = evaluateActionTransitionPenalty(me, bestT, id') >= 0,
+        '10.41 候选统一进入通用 transition evaluator');
+    ok(tssSrc41.indexOf("operation === 'remove-state'") >= 0 &&
+       tssSrc41.indexOf("operation === 'create-state'") >= 0,
+        '10.41 ledger 同时表达 CREATE 与 confirmed REMOVE');
+    eq(/const\s+(DELAYED_CONTROL_IDS|PROVENANCE_IDS)\s*=/.test(tssSrc41), false,
+        '10.41 核心 ledger 不维护乐/兵专用名单');
+    ok(opt41.indexOf("idsWithStrategicOperation('remove-target-card')") >= 0,
+        '10.41 button hook 按 profile operation 自动枚举');
+    ok(opt41.indexOf('uninstallButtonHooks();') >= 0,
+        '10.41 generic button hook 有对称卸载路径');
+}
+
+
+/* ================= 10.42 Wuxie Host Bridge V2 =================
+ * 真实宿主链路：_wuxie → chooseToUse({type:'wuxie', info_map, state})。
+ * 验收：
+ * A. 官方 info_map/state 优先于 parent-chain 猜测；
+ * B. 回合外响应不受 currentPhase guard 阻断；
+ * C. unresolved 原生 ai1 原样保留；
+ * D. 顺/拆按“一次一张 + 行动方最优合法选择”估值；
+ * E. AOE 按实际 targets 净效用；
+ * F. 不读取隐藏手牌内容 / 不维护第二套最终政策。
+ */
+{
+    const fs42 = await import('node:fs');
+    const fx42 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'response', 'wuxieEvaluator.js')).href);
+    const use42 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'override', 'use.js')).href);
+    const wt42 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'timing', 'wuxieTiming.js')).href);
+
+    function C42(id) { return { name: id }; }
+    function P42(name, rel, o) {
+        o = o || {};
+        return {
+            name: name, name1: name, playerid: name, rel: rel, alive: true,
+            hp: o.hp == null ? 4 : o.hp, maxHp: 4,
+            _h: o.h == null ? 0 : o.h, _e: o.e || [], _j: o.j || [],
+            countCards: function (z, filter) {
+                if (z === 'h') return this._h;
+                if (z === 'hs') return this._h;
+                return 0;
+            },
+            getCards: function (z) {
+                if (z === 'e') return this._e;
+                if (z === 'j') return this._j;
+                return [];
+            },
+            isOnline2: function () { return false; },
+        };
+    }
+    const rel42 = function (_me, t) { return t && typeof t.rel === 'number' ? t.rel : 0; };
+    const me42 = P42('me42', 1, { h: 2 });
+    const ally42 = P42('ally42', 1, { h: 1 });
+    const enemy42 = P42('enemy42', -1, { h: 2 });
+    const human42 = P42('human42', 1);
+    hostStub.game.me = human42;
+    hostStub.game.players = [human42, me42, ally42, enemy42];
+    hostStub.game.alivePlayers = hostStub.game.players.slice();
+
+    eq(typeof fx42.resolveWuxieHostContext, 'function', '10.42 导出 resolveWuxieHostContext');
+    eq(typeof use42._bridgeWuxieChooseToUse, 'function', '10.42 use.js 导出 wuxie host bridge');
+
+    /* A1. 官方普通无懈 request：state=+1 表示原锦囊即将生效。 */
+    const reqLebu42 = {
+        type: 'wuxie', state: 1,
+        info_map: {
+            card: C42('lebu'),
+            player: enemy42,
+            target: ally42,
+            targets: [ally42],
+            state: 1,
+        },
+        ai1: function () { return 0; },
+    };
+    const hc42 = fx42.resolveWuxieHostContext(me42, reqLebu42, {});
+    eq(hc42.resolved, true, '10.42 host info_map 乐可直接解析');
+    eq(hc42.originalSpellId, 'lebu', '10.42 host info_map 原锦囊=lebu');
+    eq(hc42.source, enemy42, '10.42 host info_map source 正确');
+    eq(hc42.target, ally42, '10.42 host info_map target 正确');
+    eq(hc42.hostState, 1, '10.42 host state=+1 保留');
+    eq(hc42.currentlyNegated, false, '10.42 state=+1 → 原锦囊当前未被抵消');
+
+    /* A2. 反无懈：当前 card=wuxie，但 _source 指向原始锦囊；state=-1 权威表示原锦囊已被抵消。 */
+    const reqCounter42 = {
+        type: 'wuxie', state: -1,
+        info_map: {
+            card: C42('wuxie'),
+            player: enemy42,
+            state: -1,
+            _source: {
+                card: C42('lebu'),
+                player: enemy42,
+                target: ally42,
+                targets: [ally42],
+            },
+        },
+        ai1: function () { return 9; },
+    };
+    const hcCounter42 = fx42.resolveWuxieHostContext(me42, reqCounter42, {});
+    eq(hcCounter42.originalSpellId, 'lebu', '10.42 counter-wuxie 仍追到原始 lebu');
+    eq(hcCounter42.hostState, -1, '10.42 counter-wuxie 读取宿主 state=-1');
+    eq(hcCounter42.currentlyNegated, true, '10.42 state=-1 → 原锦囊当前已被抵消');
+    eq(hcCounter42.inWuxieChain, true, '10.42 _source/current=wuxie → 识别反无懈链');
+    eq(fx42.evaluateWuxie(me42, reqCounter42, { relationOf: rel42, hostRequest: reqCounter42, wuxieCount: 2 }).use,
+        false, '10.42 对有害乐：宿主已是失效态时不反无懈恢复它');
+
+    /* B. 真正的实战根因回归：响应者不是 currentPhase，bridge 仍须接管 type=wuxie 的 ai1。 */
+    hostStub._status.currentPhase = enemy42;
+    const reqSelf42 = {
+        type: 'wuxie', state: 1,
+        info_map: { card: C42('lebu'), player: enemy42, target: me42, targets: [me42], state: 1 },
+        ai1: function () { return 0; },
+    };
+    const br42 = use42._bridgeWuxieChooseToUse(me42, [reqSelf42]);
+    eq(br42.isWuxie, true, '10.42 回合外 type=wuxie 被窄范围识别');
+    eq(br42.resolved, true, '10.42 回合外无懈 request 可解析');
+    eq(br42.use, true, '10.42 敌人乐自己 → bridge 判定使用无懈');
+    eq(br42.bridged, true, '10.42 resolved request 实际改写宿主 ai1');
+    ok(reqSelf42.ai1(C42('wuxie')) > 0, '10.42 currentPhase≠响应者时 ai1 仍获得正分，不再“捏死”');
+
+    /* C. unresolved 必须完全 fail-open：原生 ai1 函数引用不变。 */
+    const nativeAi42 = function () { return 7; };
+    const reqUnknown42 = {
+        type: 'wuxie', state: 1,
+        info_map: { card: C42('wuxie'), state: 1 },
+        ai1: nativeAi42,
+    };
+    const brUnknown42 = use42._bridgeWuxieChooseToUse(me42, [reqUnknown42]);
+    eq(brUnknown42.resolved, false, '10.42 无原始锦囊事实 → unresolved');
+    eq(brUnknown42.bridged, false, '10.42 unresolved 不改写宿主策略');
+    eq(reqUnknown42.ai1, nativeAi42, '10.42 unresolved 原生 ai1 引用原样保留');
+    eq(reqUnknown42.ai1(), 7, '10.42 unresolved 原生 ai1 行为原样保留');
+
+    /* C2. hardOverride=false 时必须完全尊重“只评分、不改宿主选择”的配置语义。 */
+    hostStub._configStore['extension_无名AI_hardOverride'] = false;
+    const nativeOff42 = function () { return 5; };
+    const reqOff42 = {
+        type: 'wuxie', state: 1,
+        info_map: { card: C42('lebu'), player: enemy42, target: me42, targets: [me42], state: 1 },
+        ai1: nativeOff42,
+    };
+    const brOff42 = use42._bridgeWuxieChooseToUse(me42, [reqOff42]);
+    eq(brOff42.bridged, false, '10.42 hardOverride=false → Wuxie bridge 不改写');
+    eq(reqOff42.ai1, nativeOff42, '10.42 hardOverride=false → 原生 ai1 引用不变');
+    delete hostStub._configStore['extension_无名AI_hardOverride'];
+
+    /* D. 顺/拆：行动方按最优合法选择，而不是“有乐就默认帮忙拆乐”或把所有装备求和。 */
+    const allyOnlyLebu42 = P42('allyOnlyLebu42', 1, { h: 0, j: [C42('lebu')] });
+    const allyLebuBagua42 = P42('allyLebuBagua42', 1, { h: 0, j: [C42('lebu')], e: [C42('bagua')] });
+    const allyTwoEquip42 = P42('allyTwoEquip42', 1, { h: 0, e: [C42('bagua'), C42('zhuge')] });
+
+    function dec42(id, target, extra) {
+        return fx42.evaluateWuxie(me42, null, Object.assign({
+            originalSpellId: id, source: enemy42, target: target,
+            relationOf: rel42, wuxieCount: 2,
+        }, extra || {}));
+    }
+    eq(dec42('guohe', allyOnlyLebu42).use, false,
+        '10.42 敌方过河：我方只有乐可拆 → 放行（让其帮忙解乐）');
+    eq(dec42('guohe', allyLebuBagua42).use, true,
+        '10.42 敌方过河：乐+八卦 → 假设敌人拆八卦，应该无懈');
+    eq(dec42('shunshou', allyLebuBagua42).use, true,
+        '10.42 敌方顺手：乐+八卦 → 假设敌人拿最有利牌，应该无懈');
+    eq(fx42.evaluateTrickEffect(me42, {
+            originalSpellId: 'guohe', source: enemy42, target: allyTwoEquip42,
+        }, { relationOf: rel42 }), -3.5,
+        '10.42 两件关键装备一次过河仍只按“最好的一件”计，不把所有装备求和');
+
+    /* E. 多目标 AOE 使用实际 targets 净效用。 */
+    const allyA42 = P42('allyA42', 1), allyB42 = P42('allyB42', 1);
+    const enemyA42 = P42('enemyA42', -1), enemyB42 = P42('enemyB42', -1), enemyC42 = P42('enemyC42', -1);
+    const aoeGood42 = fx42.evaluateWuxie(me42, null, {
+        originalSpellId: 'nanman', source: enemy42,
+        targets: [allyA42, allyB42, enemyA42, enemyB42, enemyC42],
+        relationOf: rel42, wuxieCount: 2,
+    });
+    eq(aoeGood42.use, false, '10.42 AOE 敌方受损更多、净效用对我方有利 → 不无懈');
+    const aoeBad42 = fx42.evaluateWuxie(me42, null, {
+        originalSpellId: 'nanman', source: enemy42,
+        targets: [me42, allyA42, allyB42, enemyA42],
+        relationOf: rel42, wuxieCount: 2,
+    });
+    eq(aoeBad42.use, true, '10.42 AOE 我方受损更多 → 使用无懈');
+
+    /* F. 结构守卫：真实 host bridge 在 generic currentPhase hard override 之前，且 timing 不再解析中文 reason。 */
+    const useSrc42 = fs42.readFileSync(join(_pkg, 'score', 'decision', 'override', 'use.js'), 'utf8');
+    const wxSrc42 = fs42.readFileSync(join(_pkg, 'score', 'decision', 'response', 'wuxieEvaluator.js'), 'utf8');
+    const wtSrc42 = fs42.readFileSync(join(_pkg, 'score', 'decision', 'timing', 'wuxieTiming.js'), 'utf8');
+
+    const bridgeCall42 = useSrc42.indexOf('const wuxieBridge = _bridgeWuxieChooseToUse(player, args)');
+    const genericCall42 = useSrc42.indexOf('return _runChooseToUse.call(this, player, ev, orig, args)');
+    ok(bridgeCall42 >= 0 && genericCall42 > bridgeCall42,
+        '10.42 wuxie bridge 先于 generic chooseToUse/currentPhase hard override');
+    ok(/req\.type !== 'wuxie'/.test(useSrc42),
+        '10.42 host bridge 严格限定 type=wuxie，不扩大回合外接管面');
+    ok(/request\.info_map/.test(wxSrc42) && /request\.state/.test(wxSrc42) && /map\._source/.test(wxSrc42),
+        '10.42 evaluator 直接消费宿主 info_map/state/_source');
+    eq(wxSrc42.indexOf("countCards('h', function (c)") >= 0, true,
+        '10.42 仅统计自己的无懈数量；顺拆手牌估值只依赖 countCards 数量');
+    eq(wtSrc42.indexOf("reason.indexOf('待定')") < 0, true,
+        '10.42 wuxieTiming fail-open 不再依赖中文 reason 文本');
+    eq(wt42.wuxieBonus(me42, { id: 'wuxie' }), 1.0,
+        '10.42 engine 缺少实时 spell context 时 wuxieBonus 保持中性 1.0');
 }
 
 /* ---------- 汇总 ---------- */

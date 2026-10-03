@@ -56,6 +56,10 @@ Object.keys(SEMANTIC_LABEL).forEach(function (k) { _sem[k] = {}; });
 const _bucket = {};
 [BUCKET.ATK, BUCKET.DEF, BUCKET.CTRL, BUCKET.DELAY].forEach(function (k) { _bucket[k] = {}; });
 
+/* 游戏档案声明的“战略效果”只负责把具体卡牌映射成通用状态转移语义。
+ * 决策层只消费 operation/state 等通用字段，不再散落具体牌名判断。 */
+const _strategic = {};
+
 let _reverse = {};
 
 function _clear(o) { Object.keys(o).forEach(function (k) { delete o[k]; }); }
@@ -68,6 +72,7 @@ export function setMapping(map) {
 	map = map || {};
 	const sem = map.semanticIds || {};
 	const buckets = map.featureBuckets || {};
+	const strategic = map.strategicEffects || {};
 
 	Object.keys(_sem).forEach(function (s) {
 		const dst = _sem[s];
@@ -86,6 +91,14 @@ export function setMapping(map) {
 			const src = _sem[s];
 			if (src) Object.keys(src).forEach(function (id) { dst[id] = 1; });
 		});
+	});
+
+	/* 战略效果映射：具体牌名只允许存在于游戏档案，内核只读通用 operation/state。 */
+	_clear(_strategic);
+	Object.keys(strategic).forEach(function (id) {
+		const e = strategic[id];
+		if (!e || typeof e !== 'object') return;
+		_strategic[id] = Object.assign({}, e, e.state ? { state: Object.assign({}, e.state) } : {});
 	});
 
 	/* 反向索引：卡牌 id → 语义类（同一 id 归多类时取声明顺序第一个） */
@@ -109,6 +122,22 @@ export function semanticOf(id) { return _reverse[id] || ''; }
 
 /** 判断卡牌是否属于某语义类 */
 export function isSemantic(id, semantic) { return !!(_sem[semantic] && _sem[semantic][id]); }
+
+/** 具体卡牌 id → 通用战略效果；未登记返回 null。 */
+export function strategicEffectOf(id) {
+	const e = _strategic[id];
+	if (!e) return null;
+	return Object.assign({}, e, e.state ? { state: Object.assign({}, e.state) } : {});
+}
+
+/** 返回声明某种战略 operation 的卡牌 id。 */
+export function idsWithStrategicOperation(operation) {
+	if (!operation) return [];
+	return Object.keys(_strategic).filter(function (id) {
+		const e = _strategic[id];
+		return !!(e && e.operation === operation);
+	});
+}
 
 /** 语义覆盖度自检：哪些语义类已填、哪些待填 */
 export function coverage() {

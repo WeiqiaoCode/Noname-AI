@@ -160,39 +160,85 @@ function _equipValueOf(card) {
 	return 1.2;
 }
 
-/* 目标可被拆除/窃取牌的价值（用于顺/拆评估） */
-function _exposedLoss(tgt) {
-	let loss = 0;
-	try {
-		const h = _handOf(tgt);
-		/* 顺/拆一次只动 1 张：按最可能被动的牌估，最多按 2 张手牌保守估计 */
-		loss += Math.min(h, 2) * 0.9;
-		const eq = _equipCardsOf(tgt);
-		for (let i = 0; i < eq.length; i++) loss += _equipValueOf(eq[i]);
-		/* 残血队友的关键牌（如唯一一张桃）价值更高 */
-		if (_hpOf(tgt) <= 1 && (h > 0 || eq.length > 0)) loss += 1.5;
-	} catch (e) { _swallow(e); }
-	return Math.round(loss * 100) / 100;
+/* ================= 顺/拆：一次只操作一张牌，按行动方最优合法选择估值 =================
+ * 只读取公开装备/判定区 + 手牌数量；绝不读取对手隐藏手牌内容。
+ * 返回值仍是“原锦囊生效对决策者的价值”：正=对我方有利，负=对我方有害。
+ */
+
+function _targetRemovalValue(tgtRel, baseValue) {
+	if (tgtRel > 0) return -baseValue;
+	if (tgtRel < 0) return baseValue;
+	return 0;
 }
 
-/* 目标判定区是否存在「负面」延时牌（乐/兵）→ 拆掉反而帮目标 */
-function _hasHarmfulJudge(tgt) {
+function _sourceGainValue(srcRel) {
+	if (srcRel > 0) return 1.2;
+	if (srcRel < 0) return -1.2;
+	return 0;
+}
+
+function _removalOptions(tgt, tgtRel, srcRel, isSteal) {
+	const out = [];
 	try {
+		const gain = isSteal ? _sourceGainValue(srcRel) : 0;
+		const h = _handOf(tgt);
+		if (h > 0) {
+			/* 手牌身份不可见，只按“可失去一张未知手牌”的期望价值估计。 */
+			let handValue = 0.9;
+			if (_hpOf(tgt) <= 1) handValue += 2.5;
+			out.push(_targetRemovalValue(tgtRel, handValue) + gain);
+		}
+
+		const eq = _equipCardsOf(tgt);
+		for (let i = 0; i < eq.length; i++) {
+			out.push(_targetRemovalValue(tgtRel, _equipValueOf(eq[i])) + gain);
+		}
+
+		/* 判定区是公开信息。移除负面延时状态会帮助其持有者。 */
 		const js = _judgeCardsOf(tgt);
 		for (let i = 0; i < js.length; i++) {
 			const id = _cardId(js[i], null);
-			if (id && HARMFUL_JUDGE.indexOf(id) >= 0) return true;
+			let v = 0;
+			if (id && HARMFUL_JUDGE.indexOf(id) >= 0) {
+				if (tgtRel > 0) v = 2.0;
+				else if (tgtRel < 0) v = -2.0;
+			}
+			out.push(v + gain);
 		}
 	} catch (e) { _swallow(e); }
-	return false;
+	return out;
+}
+
+function _selectRemovalOutcome(options, srcRel) {
+	if (!options || !options.length) return 0;
+	/* 行动方是敌人：假设其选择对我方最不利的合法牌；
+	 * 行动方是队友：假设其选择对我方最有利的合法牌；
+	 * 中性行动方：不替其猜极端策略，取平均。 */
+	if (srcRel < 0) return Math.min.apply(Math, options);
+	if (srcRel > 0) return Math.max.apply(Math, options);
+	return options.reduce(function (a, b) { return a + b; }, 0) / options.length;
+}
+
+function _destroyValue(player, ctx, context, isSteal) {
+	try {
+		const tgt = ctx && ctx.target;
+		if (!tgt) return 0;
+		const tgtRel = _rel(player, tgt, context);
+		const srcRel = ctx.source ? _rel(player, ctx.source, context) : 0;
+		const options = _removalOptions(tgt, tgtRel, srcRel, !!isSteal);
+		const v = _selectRemovalOutcome(options, srcRel);
+		return Math.round(v * 100) / 100;
+	} catch (e) { _swallow(e); return 0; }
 }
 
 /* ================= ① Wuxie Context Resolver ================= */
 
 function _finalizeContext(ctx, extraConfidence) {
 	const spellId = ctx.originalSpellId || null;
-	/* ★ 闪电属延时锦囊，无独立受害目标：使用者即判定区持有者（受害者） */
+	const targets = Array.isArray(ctx.targets) ? ctx.targets.filter(Boolean) : [];
+	/* ★ 闪电属延时锦囊，无独立受害目标：判定区持有者就是受害者。 */
 	let target = ctx.target || null;
+	if (!target && targets.length === 1) target = targets[0];
 	if (!target && spellId === 'shandian' && ctx.source) target = ctx.source;
 	const needsTarget = !!spellId && TRICKS_NEED_TARGET.indexOf(spellId) >= 0;
 	const isAoe = !!spellId && AOE_TRICKS.indexOf(spellId) >= 0;
@@ -200,11 +246,13 @@ function _finalizeContext(ctx, extraConfidence) {
 	let confidence = 0;
 	if (spellId) confidence += 0.55;
 	if (ctx.source) confidence += 0.2;
-	if (target) confidence += 0.25;
+	if (target || targets.length) confidence += 0.25;
 	if (typeof extraConfidence === 'number') confidence = Math.max(confidence, extraConfidence);
 
 	const depth = (typeof ctx.chainDepth === 'number' && ctx.chainDepth >= 0) ? ctx.chainDepth : 0;
-	const currentlyNegated = (depth % 2 === 1);
+	const currentlyNegated = (typeof ctx.currentlyNegated === 'boolean')
+		? ctx.currentlyNegated
+		: (depth % 2 === 1);
 
 	const resolved = !!spellId && (!needsTarget || !!target) && confidence >= RESOLVE_CONFIDENCE_MIN;
 	return {
@@ -212,14 +260,65 @@ function _finalizeContext(ctx, extraConfidence) {
 		originalSpellId: spellId,
 		source: ctx.source || null,
 		target: target,
+		targets: targets,
 		currentCardId: ctx.currentCardId || null,
 		chainDepth: depth,
 		currentlyNegated: currentlyNegated,
+		hostState: (typeof ctx.hostState === 'number') ? ctx.hostState : null,
+		inWuxieChain: !!ctx.inWuxieChain,
 		needsTarget: needsTarget,
 		isAoe: isAoe,
 		path: ctx.path || [],
 		confidence: Math.round(confidence * 100) / 100,
 	};
+}
+
+/**
+ * 解析当前无名杀 _wuxie → chooseToUse({type:'wuxie', info_map, state}) 的官方上下文。
+ * info_map/state 是宿主已经解析好的权威事实；反无懈时 info_map._source 指向原始锦囊。
+ * 返回 null 表示这不是宿主 wuxie request，由旧事件链 resolver 继续处理。
+ */
+export function resolveWuxieHostContext(player, request, context) {
+	context = context || {};
+	try {
+		if (!request || typeof request !== 'object') return null;
+		const map = context.infoMap || context.info_map || request.info_map || request.infoMap || null;
+		if (!map || typeof map !== 'object') return null;
+
+		const currentCardId = _cardId(map.card, player);
+		const root = (map._source && typeof map._source === 'object') ? map._source : map;
+		const originalSpellId = _cardId(root.card, player);
+		if (!originalSpellId || originalSpellId === 'wuxie') return _finalizeContext({
+			originalSpellId: null,
+			path: ['<host-wuxie-unresolved>'],
+		});
+
+		const hostStateRaw = (typeof context.hostState === 'number')
+			? context.hostState
+			: ((typeof request.state === 'number') ? request.state
+				: ((typeof map.state === 'number') ? map.state : null));
+		const hostState = hostStateRaw === null ? null : (hostStateRaw >= 0 ? 1 : -1);
+		const source = root.player || root.source || null;
+		let target = root.target || null;
+		const targets = Array.isArray(root.targets) ? root.targets.filter(Boolean) : (target ? [target] : []);
+		if (!target && root.isJudge && root.target) target = root.target;
+
+		return _finalizeContext({
+			originalSpellId: originalSpellId,
+			source: source,
+			target: target,
+			targets: targets,
+			currentCardId: currentCardId || originalSpellId,
+			chainDepth: (typeof context.chainDepth === 'number') ? context.chainDepth : 0,
+			currentlyNegated: hostState === null ? undefined : hostState < 0,
+			hostState: hostState,
+			inWuxieChain: !!map._source || currentCardId === 'wuxie',
+			path: ['<host-info_map>', originalSpellId],
+		}, 0.99);
+	} catch (e) {
+		_swallow(e);
+		return _finalizeContext({ originalSpellId: null, path: ['<host-wuxie-error>'] });
+	}
 }
 
 /**
@@ -233,19 +332,27 @@ function _finalizeContext(ctx, extraConfidence) {
 export function resolveWuxieContext(player, event, context) {
 	context = context || {};
 	try {
-		/* 1) 调用方已确证事实优先（含测试 fixture、宿主已解析场景） */
+		/* 1) 调用方已确证事实优先（测试 fixture / 上层解析结果）。 */
 		if (context.originalSpellId || context.spellId) {
 			return _finalizeContext({
 				originalSpellId: context.originalSpellId || context.spellId,
 				source: context.source || null,
 				target: context.target || null,
+				targets: context.targets || null,
 				currentCardId: context.currentCardId || null,
 				chainDepth: (typeof context.chainDepth === 'number') ? context.chainDepth : 0,
+				currentlyNegated: (typeof context.currentlyNegated === 'boolean') ? context.currentlyNegated : undefined,
+				hostState: (typeof context.hostState === 'number') ? context.hostState : null,
+				inWuxieChain: !!context.inWuxieChain,
 				path: ['<context>'],
 			}, 0.99);
 		}
 
-		const ctx = { originalSpellId: null, source: null, target: null, currentCardId: null, chainDepth: 0, path: [] };
+		/* 2) 当前宿主官方 wuxie request 优先于 parent-chain 猜测。 */
+		const hostCtx = resolveWuxieHostContext(player, context.hostRequest || event, context);
+		if (hostCtx) return hostCtx;
+
+		const ctx = { originalSpellId: null, source: null, target: null, targets: null, currentCardId: null, chainDepth: 0, path: [] };
 		const seenCards = new Set();
 		const seenEvents = new Set();
 		let cur = event;
@@ -315,32 +422,26 @@ function _delayedValue(player, id, tgtRel, tgt, context) {
 	return 0;
 }
 
-function _shunshouValue(player, tgtRel, tgt) {
-	if (tgtRel > 0) {
-		const loss = _exposedLoss(tgt);
-		const gain = 1.2;             /* 敌方额外获得一张牌 */
-		return -Math.round((loss + gain) * 100) / 100;
-	}
-	if (tgtRel < 0) return 1.5;       /* 敌方顺敌方，轻微有利 */
-	return -0.5;                      /* 中性：保守低权重 */
-}
-
-function _guoheValue(player, tgtRel, tgt) {
-	if (tgtRel > 0) {
-		/* ★ 关键反例：拆掉队友判定区的乐/兵 = 反而帮队友 → 不无懈 */
-		if (_hasHarmfulJudge(tgt)) return 2.0;
-		const loss = _exposedLoss(tgt);
-		if (loss <= 0) return 0;
-		return -loss;
-	}
-	if (tgtRel < 0) return 1.0;
-	return 0;
-}
-
-function _aoeValue(player, srcRel) {
-	if (srcRel < 0) return -3.5;      /* 敌方 AOE 波及我方 */
-	if (srcRel > 0) return 2.0;
-	return 0;
+function _aoeValue(player, ctx, context) {
+	try {
+		const targets = Array.isArray(ctx.targets) ? ctx.targets : [];
+		if (targets.length) {
+			let total = 0;
+			for (const t of targets) {
+				if (!t) continue;
+				const rel = _rel(player, t, context);
+				let magnitude = (t === player) ? 3.8 : 2.8;
+				if (_hpOf(t) <= 1) magnitude += 1.2;
+				if (t === player || rel > 0) total -= magnitude;
+				else if (rel < 0) total += 2.2;
+			}
+			return Math.round(total * 100) / 100;
+		}
+		const srcRel = ctx.source ? _rel(player, ctx.source, context) : 0;
+		if (srcRel < 0) return -3.5;
+		if (srcRel > 0) return 2.0;
+		return 0;
+	} catch (e) { _swallow(e); return 0; }
 }
 
 function _singleDamageValue(player, tgtRel, tgt) {
@@ -350,11 +451,23 @@ function _singleDamageValue(player, tgtRel, tgt) {
 	return 0;
 }
 
-function _beneficialValue(player, srcRel) {
-	/* 敌方对敌/自己使用增益锦囊 → 对我方轻微不利；我方增益 → 有利 */
-	if (srcRel < 0) return -0.8;
-	if (srcRel > 0) return 1.5;
-	return 0;
+function _beneficialValue(player, ctx, context) {
+	try {
+		const targets = Array.isArray(ctx.targets) ? ctx.targets : [];
+		if (targets.length > 1) {
+			let total = 0;
+			for (const t of targets) {
+				const rel = _rel(player, t, context);
+				if (t === player || rel > 0) total += 1.2;
+				else if (rel < 0) total -= 1.2;
+			}
+			return Math.round(total * 100) / 100;
+		}
+		const srcRel = ctx.source ? _rel(player, ctx.source, context) : 0;
+		if (srcRel < 0) return -0.8;
+		if (srcRel > 0) return 1.5;
+		return 0;
+	} catch (e) { _swallow(e); return 0; }
 }
 
 /**
@@ -367,15 +480,14 @@ export function evaluateTrickEffect(player, ctx, context) {
 		if (!ctx || !ctx.originalSpellId) return 0;
 		const id = ctx.originalSpellId;
 		const tgt = ctx.target;
-		const srcRel = ctx.source ? _rel(player, ctx.source, context) : 0;
 		const tgtRel = tgt ? _rel(player, tgt, context) : 0;
 
 		if (DELAYED_TRICKS.indexOf(id) >= 0) return _delayedValue(player, id, tgtRel, tgt, context);
-		if (id === 'shunshou') return _shunshouValue(player, tgtRel, tgt);
-		if (id === 'guohe') return _guoheValue(player, tgtRel, tgt);
-		if (AOE_TRICKS.indexOf(id) >= 0) return _aoeValue(player, srcRel);
+		if (id === 'shunshou') return _destroyValue(player, ctx, context, true);
+		if (id === 'guohe') return _destroyValue(player, ctx, context, false);
+		if (AOE_TRICKS.indexOf(id) >= 0) return _aoeValue(player, ctx, context);
 		if (SINGLE_DAMAGE_TRICKS.indexOf(id) >= 0) return _singleDamageValue(player, tgtRel, tgt);
-		if (BENEFICIAL_TRICKS.indexOf(id) >= 0) return _beneficialValue(player, srcRel);
+		if (BENEFICIAL_TRICKS.indexOf(id) >= 0) return _beneficialValue(player, ctx, context);
 		return 0;
 	} catch (e) {
 		_swallow(e);
@@ -410,7 +522,7 @@ export function estimateWuxieResourceCost(player, context, ctx) {
 		if (count <= 1) cost += LAST_CARD_PREMIUM;         /* 最后一张：提高成本，不是禁止 */
 		const hand = _handOf(player);
 		if (hand <= 2) cost += LOW_HAND_PREMIUM;
-		if (ctx && ctx.chainDepth > 0) cost -= 0.3;         /* 反无懈场景略降（已是链中一环） */
+		if (ctx && (ctx.inWuxieChain || ctx.chainDepth > 0)) cost -= 0.3; /* 反无懈场景略降（宿主 state/info_map 优先） */
 		return Math.round(Math.max(0, cost) * 1000) / 1000;
 	} catch (e) {
 		_swallow(e);
@@ -436,6 +548,8 @@ function _recordDiagnostics(res) {
 			source: _nameOf(res.source),
 			target: _nameOf(res.target),
 			chainDepth: res.chainDepth,
+			hostState: res.hostState,
+			inWuxieChain: res.inWuxieChain,
 			effectValue: res.effectValue,
 			resourceCost: res.resourceCost,
 			score: res.score,
@@ -449,7 +563,8 @@ function _recordDiagnostics(res) {
 function _emptyResult() {
 	return {
 		resolved: false, use: null, score: 0, effectValue: 0, resourceCost: 0,
-		originalSpellId: null, source: null, target: null, chainDepth: 0,
+		originalSpellId: null, source: null, target: null, targets: [], chainDepth: 0,
+		hostState: null, inWuxieChain: false,
 		finalStateIfPass: 'unknown', finalStateIfUse: 'unknown',
 		confidence: 0, reason: 'context-unresolved',
 	};
@@ -478,13 +593,16 @@ export function evaluateWuxie(player, event, context) {
 			r.originalSpellId = ctx.originalSpellId;
 			r.source = ctx.source;
 			r.target = ctx.target;
+			r.targets = ctx.targets || [];
+			r.hostState = ctx.hostState;
+			r.inWuxieChain = !!ctx.inWuxieChain;
 			_recordDiagnostics(r);
 			return r;
 		}
 
 		const effectValue = evaluateTrickEffect(player, ctx, context);
 		const resourceCost = estimateWuxieResourceCost(player, context, ctx);
-		const currentlyNegated = (ctx.chainDepth % 2 === 1);
+		const currentlyNegated = !!ctx.currentlyNegated;
 
 		/* parity：不打 → 维持当前状态；打 → 翻转（原锦囊 resolve/negate 互换） */
 		const finalStateIfPass = currentlyNegated ? 'negate' : 'resolve';
@@ -496,9 +614,12 @@ export function evaluateWuxie(player, event, context) {
 		const score = Math.round((effectDiff - resourceCost) * 1000) / 1000;
 		const use = score > threshold;
 
+		const chainTag = ctx.inWuxieChain
+			? (ctx.hostState === null ? '@chain' : ('@state' + ctx.hostState))
+			: (ctx.chainDepth > 0 ? ('@chain' + ctx.chainDepth) : '');
 		const reason = use
-			? ('use-wuxie:' + ctx.originalSpellId + (ctx.chainDepth > 0 ? ('@chain' + ctx.chainDepth) : ''))
-			: ('hold-wuxie:' + ctx.originalSpellId + '(score=' + score + ')');
+			? ('use-wuxie:' + ctx.originalSpellId + chainTag)
+			: ('hold-wuxie:' + ctx.originalSpellId + chainTag + '(score=' + score + ')');
 
 		const res = {
 			resolved: true,
@@ -509,7 +630,10 @@ export function evaluateWuxie(player, event, context) {
 			originalSpellId: ctx.originalSpellId,
 			source: ctx.source,
 			target: ctx.target,
+			targets: ctx.targets || [],
 			chainDepth: ctx.chainDepth,
+			hostState: ctx.hostState,
+			inWuxieChain: ctx.inWuxieChain,
 			finalStateIfPass: finalStateIfPass,
 			finalStateIfUse: finalStateIfUse,
 			confidence: ctx.confidence,
@@ -536,7 +660,7 @@ export function shouldUseWuxie(player, event, context) {
 export { _delayedValue as delayedControlValue };
 
 export default {
-	resolveWuxieContext, evaluateTrickEffect,
+	resolveWuxieHostContext, resolveWuxieContext, evaluateTrickEffect,
 	estimateWuxieResourceCost, evaluateWuxie, shouldUseWuxie,
 	delayedControlValue: _delayedValue,
 };
