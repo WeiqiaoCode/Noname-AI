@@ -170,6 +170,7 @@ function _bridgeWuxieChooseToUse(player, args) {
 		if (!player || player === game.me) return base;
 		try { if (player.isOnline2 && player.isOnline2()) return base; } catch (e) {}
 		if (cfg('responseAI', true) === false) return base;
+		if (cfg('hardOverride', true) === false) return base;
 
 		try {
 			if (request[WUXIE_BRIDGE_KEY]) return request[WUXIE_BRIDGE_KEY];
