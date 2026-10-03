@@ -24,6 +24,7 @@
 import { lib, game, get, _status } from '../foundation/adapt/host.js';
 import { log } from '../foundation/diag/logger.js';
 import { safeGet as _lsGet, safeSet as _lsSet } from '../foundation/storage/storage.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
+import { dispositionOf } from '../decision/relations/relations.js';
 
 /* ================= 本局运行时统计 ================= */
 const RUNTIME = {
@@ -204,7 +205,7 @@ function _getSituationType() {
                 myHp = p.hp || 0;
             } else {
                 try {
-                    const att = get.attitude(game.me, p);
+                    const att = dispositionOf(game.me, p);
                     if (att < 0) totalEnemyHp += (p.hp || 0);
                     else totalAllyHp += (p.hp || 0);
                 } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
