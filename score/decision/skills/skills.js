@@ -109,6 +109,10 @@ function _emptyTags() {
 		enemy: 0, ally: 0, self: 0, multi: 0,
 		__phases: [],
 		__targets: [],
+		/* ★ Skill Decision Kernel V2：目标方向元数据 */
+		__targetIntent: null,       // support | offense | mixed | null
+		__targetConfidence: 0,
+		__targetInferred: false,
 		__limits: {},
 		__modLabels: [],    // ★ 新增：mod 对象的人类可读标签
 		__aiLabels: [],     // ★ 新增：ai 字段的人类可读标签
@@ -950,6 +954,11 @@ export function skillTagsOf(sid) {
 							srcTags[k] = bv + av * 0.3;
 						}
 					}
+					/* 对象扫描器生成的目标方向不是普通数值标签，需要显式带入。 */
+					if (Array.isArray(objTags.__targets)) srcTags.__targets = objTags.__targets.slice();
+					if (typeof objTags.__targetIntent === 'string') srcTags.__targetIntent = objTags.__targetIntent;
+					if (typeof objTags.__targetConfidence === 'number') srcTags.__targetConfidence = objTags.__targetConfidence;
+					srcTags.__targetInferred = !!objTags.__targetInferred;
 				}
 			}
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -1109,7 +1118,21 @@ export function skillTagsOf(sid) {
 		if (idTags) {
 			merged = _mergeTagsMax(idTags, srcTags);
 			merged.__phases = Array.from(new Set((idTags.__phases || []).concat(srcTags.__phases || [])));
-			merged.__targets = Array.from(new Set((idTags.__targets || []).concat(srcTags.__targets || [])));
+			/* 手工 ID 表属于高置信知识：若明确给了目标方向，不让源码启发式把它污染成 mixed。 */
+			const explicitTargets = idTags.__targets || [];
+			if (explicitTargets.length) {
+				merged.__targets = explicitTargets.slice();
+				const hasEnemy = explicitTargets.indexOf('enemy') >= 0;
+				const hasAlly = explicitTargets.indexOf('ally') >= 0 || explicitTargets.indexOf('self') >= 0;
+				merged.__targetIntent = hasEnemy && hasAlly ? 'mixed' : (hasEnemy ? 'offense' : (hasAlly ? 'support' : null));
+				merged.__targetConfidence = 1;
+				merged.__targetInferred = false;
+			} else {
+				merged.__targets = Array.isArray(srcTags.__targets) ? srcTags.__targets.slice() : [];
+				merged.__targetIntent = srcTags.__targetIntent || null;
+				merged.__targetConfidence = Number(srcTags.__targetConfidence || 0);
+				merged.__targetInferred = !!srcTags.__targetInferred;
+			}
 			merged.__limits = Object.assign({}, idTags.__limits || {}, srcTags.__limits || {});
 			merged.__modLabels = srcTags.__modLabels || [];
 			merged.__aiLabels = srcTags.__aiLabels || [];
@@ -1406,6 +1429,9 @@ function _normalizeTags(tags) {
 
 	out.__phases = Array.isArray(tags.__phases) ? tags.__phases.slice() : [];
 	out.__targets = Array.isArray(tags.__targets) ? tags.__targets.slice() : [];
+	out.__targetIntent = typeof tags.__targetIntent === 'string' ? tags.__targetIntent : null;
+	out.__targetConfidence = typeof tags.__targetConfidence === 'number' ? tags.__targetConfidence : 0;
+	out.__targetInferred = !!tags.__targetInferred;
 	out.__limits = Object.assign({}, tags.__limits || {});
 	out.__modLabels = Array.isArray(tags.__modLabels) ? tags.__modLabels.slice() : [];
 	out.__aiLabels = Array.isArray(tags.__aiLabels) ? tags.__aiLabels.slice() : [];
@@ -1508,6 +1534,9 @@ export function skillProfileOf(sid) {
 			targets: {
 				category,
 				priority: _computeTargetPriority(category),
+				intent: tags.__targetIntent || null,
+				confidence: Number(tags.__targetConfidence || 0),
+				inferred: !!tags.__targetInferred,
 			},
 			profit: (function () {
 				const multi = tags.__multi || scoreSkill(tags, { sid: sid, skill: sk });
