@@ -3517,6 +3517,17 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(eng43._skillPurposeFromIntent('mixed', 'attack'), null,
         '10.43 mixed intent 不被粗分类强制成单方向');
 
+    const SELF43 = 'kernel_self_fixture_alpha';
+    host43.lib.skill[SELF43] = {
+        enable: 'phaseUse',
+        filterTarget: function (card, player, target) { return player === target; },
+        content: function () {},
+    };
+    eq(eng43._canConfirmSelfSkillTarget(SELF43, me43, {
+        tags: { __targets: ['ally', 'self'] },
+        targets: { intent: 'support' },
+    }), true, '10.43 ally+self 技能可确证 self 合法时纳入候选池');
+
     /* D. support profile 只推荐真友；只有敌方合法目标时 targetIndex=-1。 */
     const ctxAlly43 = {
         me: { hp: 4, maxHp: 4 },
