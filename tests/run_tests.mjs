@@ -3730,8 +3730,19 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.44 数字 selectTarget → 固定区间');
     eq(JSON.stringify(eng44._skillTargetRange('range_arr_44')), JSON.stringify([1, 3]),
         '10.44 数组 selectTarget → 保留区间');
+    host44.lib.skill.range_neg_44 = { filterTarget: function () { return true; }, selectTarget: -1 };
+    eq(eng44._skillTargetRange('range_neg_44'), null,
+        '10.44 负数 selectTarget 属宿主特殊语义 → 预规划 fail-open');
     eq(eng44._skillTargetRange('range_dyn_44'), null,
         '10.44 函数 selectTarget → 预规划 fail-open');
+
+    const var44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [1, 3],
+    }));
+    eq(var44.targetIndexes.length, 1,
+        '10.44 可变 [1,3] → 只规划最小必要1个目标');
+    eq(var44.targetRangeResolved, false,
+        '10.44 可变数量组合标记 unresolved，额外目标交回宿主');
     eq(eng44._skillTargetRange('range_special_44'), null,
         '10.44 负数 selectTarget 属宿主特殊语义 → fail-open');
 
