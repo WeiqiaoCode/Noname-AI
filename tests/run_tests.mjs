@@ -3972,12 +3972,141 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(ctlBadPlan44.ai(), 2,
         '10.44 显式 controlChoice 不存在于当前 controls → 回退原生');
 
-    /* F. 结构守卫：新增宿主 hook + 对称卸载。 */
+    /* E2. 显式 button/control provenance 只能在同一技能 owner event 消费一次。
+     * 没有更精确 stage provenance 时，后续同类选择必须 fail-open，不能复用第一次语义。 */
+    const buttonOwner44 = {};
+    const buttonCtx44 = { id: 'stage2_skill_44', event: buttonOwner44 };
+    const buttonFirst44 = {
+        ai: function () { return 2; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonChoiceOnce(buttonFirst44, me44, buttonCtx44, 'ai', Object.assign({}, baMulti44, {
+        buttonChoice: a2_44,
+    }));
+    ok(buttonFirst44.ai({ link: a2_44 }) >= 12,
+        '10.44 同一技能 owner event 的第一次显式 buttonChoice 可消费');
+    const buttonSecondNative44 = function () { return 3; };
+    const buttonSecond44 = {
+        ai: buttonSecondNative44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillButtonChoiceOnce(buttonSecond44, me44, buttonCtx44, 'ai', Object.assign({}, baMulti44, {
+        buttonChoice: a1_44,
+    }));
+    eq(buttonSecond44.ai, buttonSecondNative44,
+        '10.44 同一技能 owner event 后续 chooseButton 无 stage provenance → fail-open，不复用显式选择');
+
+    const controlOwner44 = {};
+    const controlCtx44 = { id: 'stage2_skill_44', event: controlOwner44 };
+    const controlFirst44 = {
+        controls: ['modeA44', 'modeB44'],
+        ai: function () { return 0; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlChoiceOnce(controlFirst44, me44, controlCtx44, Object.assign({}, baMulti44, {
+        controlChoice: 'modeB44',
+    }));
+    eq(controlFirst44.ai(), 1,
+        '10.44 同一技能 owner event 的第一次显式 controlChoice 可消费');
+    const controlSecondNative44 = function () { return 0; };
+    const controlSecond44 = {
+        controls: ['modeA44', 'modeB44'],
+        ai: controlSecondNative44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlChoiceOnce(controlSecond44, me44, controlCtx44, Object.assign({}, baMulti44, {
+        controlChoice: 'modeB44',
+    }));
+    eq(controlSecond44.ai, controlSecondNative44,
+        '10.44 同一技能 owner event 后续 chooseControl 无 stage provenance → fail-open，不复用显式选择');
+
+    /* F. Hook lifecycle 行为门禁：
+     * N1(O) 被第三方 X 包裹后，卸载不能覆盖 X；N1 必须永久失效。
+     * reinstall 生成 N2(X(N1(O))) 时，只有 N2 活跃，N1 不得复活。 */
+    ao44.uninstallAIOverride();
+    const protoLife44 = host44.lib.element.Player.prototype;
+    const savedLife44 = {
+        chooseButton: protoLife44.chooseButton,
+        addSkill: protoLife44.addSkill,
+        getSkills: protoLife44.getSkills,
+        gameCheck: host44.game.check,
+        players: host44.game.players,
+        checkHooked: host44.game.__djsc_check_hooked,
+    };
+    const nativeChooseButtonLife44 = function () { return { ai: function () { return 0; } }; };
+    const nativeAddSkillLife44 = function () { return 'native-add'; };
+    const nativeGetSkillsLife44 = function () { return []; };
+    const nativeCheckLife44 = function () { return 'native-check'; };
+    host44.game.players = [];
+    protoLife44.chooseButton = nativeChooseButtonLife44;
+    protoLife44.addSkill = nativeAddSkillLife44;
+    protoLife44.getSkills = nativeGetSkillsLife44;
+    host44.game.check = nativeCheckLife44;
+    host44.game.__djsc_check_hooked = false;
+
+    ao44.installAIOverride();
+    const ownedButtonV1_44 = protoLife44.chooseButton;
+    const ownedAddV1_44 = protoLife44.addSkill;
+    const ownedGetV1_44 = protoLife44.getSkills;
+    const ownedCheckV1_44 = host44.game.check;
+    ok(ownedButtonV1_44 !== nativeChooseButtonLife44
+        && typeof ownedButtonV1_44.__djscHookActive === 'function'
+        && ownedButtonV1_44.__djscHookActive(),
+        '10.44 第一代 chooseButton wrapper 安装后 token 活跃');
+    ok(typeof ownedAddV1_44.__djscHookActive === 'function' && ownedAddV1_44.__djscHookActive()
+        && typeof ownedGetV1_44.__djscHookActive === 'function' && ownedGetV1_44.__djscHookActive()
+        && typeof ownedCheckV1_44.__djscHookActive === 'function' && ownedCheckV1_44.__djscHookActive(),
+        '10.44 addSkill/getSkills/game.check 同样绑定本代 hook token');
+
+    const thirdButton44 = function () { return ownedButtonV1_44.apply(this, arguments); };
+    const thirdAdd44 = function () { return ownedAddV1_44.apply(this, arguments); };
+    const thirdGet44 = function () { return ownedGetV1_44.apply(this, arguments); };
+    const thirdCheck44 = function () { return ownedCheckV1_44.apply(this, arguments); };
+    protoLife44.chooseButton = thirdButton44;
+    protoLife44.addSkill = thirdAdd44;
+    protoLife44.getSkills = thirdGet44;
+    host44.game.check = thirdCheck44;
+
+    ao44.uninstallAIOverride();
+    eq(protoLife44.chooseButton, thirdButton44,
+        '10.44 卸载不覆盖后装第三方 chooseButton wrapper');
+    eq(protoLife44.addSkill, thirdAdd44,
+        '10.44 卸载不覆盖后装第三方 addSkill wrapper');
+    eq(protoLife44.getSkills, thirdGet44,
+        '10.44 卸载不覆盖后装第三方 getSkills wrapper');
+    eq(host44.game.check, thirdCheck44,
+        '10.44 卸载不覆盖后装第三方 game.check wrapper');
+    ok(!ownedButtonV1_44.__djscHookActive()
+        && !ownedAddV1_44.__djscHookActive()
+        && !ownedGetV1_44.__djscHookActive()
+        && !ownedCheckV1_44.__djscHookActive(),
+        '10.44 卸载后被第三方包住的第一代 Noname-AI wrappers 全部永久失效');
+
+    ao44.installAIOverride();
+    const ownedButtonV2_44 = protoLife44.chooseButton;
+    ok(ownedButtonV2_44 !== thirdButton44
+        && typeof ownedButtonV2_44.__djscHookActive === 'function'
+        && ownedButtonV2_44.__djscHookActive(),
+        '10.44 reinstall 在第三方 wrapper 外生成新的活跃 wrapper');
+    ok(!ownedButtonV1_44.__djscHookActive(),
+        '10.44 reinstall 后第一代 wrapper 不会因全局重新启用而复活');
+    ao44.uninstallAIOverride();
+
+    /* 恢复本段测试前宿主状态。 */
+    protoLife44.chooseButton = savedLife44.chooseButton;
+    protoLife44.addSkill = savedLife44.addSkill;
+    protoLife44.getSkills = savedLife44.getSkills;
+    host44.game.check = savedLife44.gameCheck;
+    host44.game.players = savedLife44.players;
+    if (savedLife44.checkHooked === undefined) delete host44.game.__djsc_check_hooked;
+    else host44.game.__djsc_check_hooked = savedLife44.checkHooked;
+
+    /* G. 结构守卫：新增宿主 hook + 对称卸载 + generation token。 */
     const src44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js'), 'utf8');
     const brainSrc44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js'), 'utf8');
-    ok(src44.indexOf('proto.chooseButtonTarget = function') >= 0
-        && src44.indexOf('proto.chooseButton = function') >= 0
-        && src44.indexOf('proto.chooseControl = function') >= 0,
+    ok(src44.indexOf('const origChooseButtonTarget = proto.chooseButtonTarget') >= 0
+        && src44.indexOf('const origChooseButton = proto.chooseButton') >= 0
+        && src44.indexOf('const origChooseControl = proto.chooseControl') >= 0,
         '10.44 stage2 hook 覆盖 chooseButtonTarget / chooseButton / chooseControl');
     ok(src44.indexOf('eventAcceptsSkillTargetPlan(next, player, decision)') >= 0
         && src44.indexOf('_eventFixedTargetCount(next)') >= 0
@@ -3986,6 +4115,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(src44.indexOf('ba.buttonChoice === undefined || ba.buttonChoice === null') >= 0
         && src44.indexOf('ba.controlChoice === undefined || ba.controlChoice === null') >= 0,
         '10.44 button/control 均要求 planner 显式语义选择');
+    ok(src44.indexOf('__djscSkillButtonBridgeConsumed') >= 0
+        && src44.indexOf('__djscSkillControlBridgeConsumed') >= 0,
+        '10.44 button/control 无 stage provenance 时按 owner event 单次消费');
     ok(src44.indexOf('const attached = next.__djscSkillTargetDecision') >= 0,
         '10.44 card half 必须绑定同事件已确认的 target plan');
     ok(src44.indexOf('_protoBackup.chooseButtonTarget') >= 0
@@ -3995,9 +4127,15 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(src44.indexOf('proto.chooseTarget === _protoOwned.chooseTarget') >= 0
         && src44.indexOf('proto.chooseButton === _protoOwned.chooseButton') >= 0
         && src44.indexOf('proto.chooseControl === _protoOwned.chooseControl') >= 0,
-        '10.44 卸载只还原自己仍持有的 wrapper，不覆盖后装扩展');
-    ok(src44.indexOf('const _protoOwned = {') >= 0,
-        '10.44 记录实际安装 wrapper 所有权');
+        '10.44 choose* 卸载只还原自己仍持有的 wrapper，不覆盖后装扩展');
+    ok(src44.indexOf('proto.addSkill === _protoOwned.addSkill') >= 0
+        && src44.indexOf('proto.getSkills === _protoOwned.getSkills') >= 0
+        && src44.indexOf('g.check === _protoOwned.gameCheck') >= 0,
+        '10.44 legacy addSkill/getSkills/game.check 也使用 wrapper ownership');
+    ok(src44.indexOf('let _activeHookToken = null') >= 0
+        && src44.indexOf('__djscHookActive') >= 0
+        && src44.indexOf('_activeHookToken !== hookToken') >= 0,
+        '10.44 generation token 使被第三方包住的旧 wrapper 卸载后永久透明化');
     ok(brainSrc44.indexOf('ctx.selectTargetRange') >= 0
         && brainSrc44.indexOf('targetRangeResolved') >= 0,
         '10.44 多目标 planner 消费宿主数量契约');
