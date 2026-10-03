@@ -217,7 +217,7 @@ function _ensureTurn() {
 		return;
 	}
 	/* 兼容没有安装 phaseBegin hook 的环境：currentPhase 换人时自动失效。 */
-	if (key && _turnOwnerKey && key !== _turnOwnerKey) beginStrategicTurn(cp);
+	if (key && key !== _turnOwnerKey) beginStrategicTurn(cp);
 }
 
 export function clearTurnState() {
