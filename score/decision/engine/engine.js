@@ -32,7 +32,7 @@ import { observeAttack, observeAid, observeCardUse, resetObs, getObs, fireAttack
 import './scoreSelfMod.js';  // ★ 积分自修改器：AI 直接修改规则积分
 import { deckConsume, deckReset, cardRemaining, deckAutoDetect, deckSyncFromUI } from '../../perception/memory/deckMemory.js';
 import { baguaSuccessRate } from '../../model/predict/deckPredict.js';
-import { identityOf as _identityOf, identityOfFor as _identityOfFor, beliefOf, updateBelief, confidenceOf, confidenceOfFor as _confidenceOfFor, hardIdentityOf as _hardIdentityOf, isLikelyEnemy, isLikelyAlly, resetBelief, explainIdentity, identityBiasOf } from '../../perception/observer/identity.js';
+import { identityOf as _identityOf, identityOfFor as _identityOfFor, beliefOf, beliefOfFor as _beliefOfFor, updateBelief, confidenceOf, confidenceOfFor as _confidenceOfFor, hardIdentityOf as _hardIdentityOf, isLikelyEnemy, isLikelyAlly, resetBelief, explainIdentity, identityBiasOf } from '../../perception/observer/identity.js';
 import { cfg, safe, nameOf, keyOf } from '../../foundation/config/util.js';
 import { teamPlan } from '../../perception/team/team.js';
 import { log } from '../../foundation/diag/logger.js';
@@ -4999,7 +4999,7 @@ function settle() {
 						beliefs[p.name || "?"] = {
 							public: publicIdentity,
 							inferred: observer ? _identityOfFor(observer, p) : _identityOf(p),
-							belief: observer ? (awaitImpossible => beliefOf(p))(0) : beliefOf(p),
+							belief: observer ? _beliefOfFor(observer, p) : beliefOf(p),
 						};
 					});
 					entry.identities = beliefs;
