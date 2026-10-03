@@ -10,6 +10,7 @@
 /* ★ 语义层：卡牌分类不再硬编码，统一由「游戏档案」注入（换游戏只改 gameProfile.js） */
 import { BUCKET, bucketIds } from '../../foundation/adapt/terms.js';
 import '../../foundation/adapt/gameProfile.js';
+import { dispositionOf } from '../../decision/relations/relations.js';
 
 /* ================= 特征提取 · Int8 · 130维 =================
  * 0-31  状态特征（原 32 维，保留）
@@ -126,7 +127,7 @@ export function extractFeatures(me, act, ctx, out, allPlayers) {
             if (!p || p.alive === false) continue;
             alive++;
             if (p === me) continue;
-            const att = get.attitude(me, p);
+            const att = dispositionOf(me, p);
             if (att > 0) { allies++; if ((p.hp || 0) <= 1) allyLow++; }
             else if (att < 0) {
                 enemies++;
@@ -179,7 +180,7 @@ export function extractFeatures(me, act, ctx, out, allPlayers) {
     if (tgt) {
         let isAlly = false;
         try {
-            if (get.attitude(me, tgt) > 0) isAlly = true;
+            if (dispositionOf(me, tgt) > 0) isAlly = true;
             const strategy = typeof getModeStrategy === 'function' ? getModeStrategy() : null;
             if (strategy && strategy.getCamp) {
                 if (strategy.getCamp(me) === strategy.getCamp(tgt)) isAlly = true;
@@ -251,7 +252,7 @@ export function extractFeatures(me, act, ctx, out, allPlayers) {
         let allyAvgHand = 0, allyAvgHp = 0, allyCount2 = 0;
         for (const p of _players) {
             if (!p || p === me || p.alive === false) continue;
-            const att = get.attitude(me, p);
+            const att = dispositionOf(me, p);
             const h2 = p.countCards ? p.countCards('h') : 0;
             const hp2 = p.hp || 0;
             const eq2 = p.countCards ? p.countCards('e') : 0;
@@ -287,7 +288,7 @@ export function extractFeatures(me, act, ctx, out, allPlayers) {
                 if (!p || p === me || p.alive === false) continue;
                 const k = p.name1 || p.name;
                 const s = rd[k] || 0;
-                const att = get.attitude(me, p);
+                const att = dispositionOf(me, p);
                 if (att < 0) { eScore += s; eN++; }
                 else if (att > 0) { aScore += s; aN++; }
             }

@@ -1551,7 +1551,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const wt = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'timing', 'wuxieTiming.js')).href);
     const meP = { name: 'meP', hp: 4, maxHp: 4, countCards: function () { return 3; }, getCards: function () { return []; } };
     eq(wt.wuxieTiming(meP, meP, 'lebu').use, true, '10.22 wrapper：自己中乐 → use');
-    eq(wt.wuxieTiming(meP, null, 'guohe').use, false, '10.22 wrapper：缺少目标 → 不构成 use（待定）');
+    eq(wt.wuxieTiming(meP, null, 'guohe').use, null, '10.22 wrapper：缺少目标 → use=null（结构化 fail-open）');
+    eq(wt.wuxieTiming(meP, null, 'guohe').resolved, false, '10.22 wrapper：缺少目标 → resolved=false');
+    eq(wt.wuxieBonus(meP, { id: 'wuxie' }), 1.0, '10.22 wuxieBonus 上下文缺失 → 中性 1.0（不得因中文 reason 误降权）');
     eq(wt.wuxieBonus(meP, { id: 'sha' }), 1.0, '10.22 wuxieBonus 非无懈 → 1.0');
 }
 
@@ -1707,7 +1709,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         const engSrc = fsSync23.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
         const cacheSrc = fsSync23.readFileSync(join(_pkg, 'score', 'foundation', 'storage', 'cache.js'), 'utf8');
         ok(/turnStrategicState\.js/.test(engSrc), '10.23 engine.js 接入唯一权威 turnStrategicState');
-        ok(/evaluateDestroyPenalty/.test(engSrc), '10.23 engine.js 调用 evaluateDestroyPenalty');
+        ok(/evaluateActionTransitionPenalty/.test(engSrc), '10.23 engine.js 调用通用 evaluateActionTransitionPenalty');
         eq(engSrc.indexOf('s *= 0.4') < 0, true, '10.23 engine.js 删除「判定区有延时牌 → ×0.4」粗暴同目标降权');
         ok(/getCards\(['"]j['"]\)/.test(cacheSrc), '10.23 cache.makeStateKey 纳入判定区指纹');
         ok(/checkStateChanged/.test(engSrc) && /_lastBestAction = null/.test(engSrc),
@@ -2407,12 +2409,15 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     host36.get.mode = function () { return 'identity'; };
     host36.get.attitude = function (me, t) { return t && typeof t.rel === 'number' ? t.rel : 0; };
 
-    /* A. 真实身份场流程：未明目标先按现有态度被视为敌；
-     * 同一 round 身份公开为忠臣后，即使旧 attitude 仍为负，也必须立即作废旧敌人缓存。 */
+    /* A. 真实身份场流程：未明目标先由合法行为证据被推成敌；
+     * 同一 round 身份公开为忠臣后，必须立即作废旧敌人缓存。
+     * 注意：不能再靠宿主 get.attitude 证明“敌对”，因为它可能读 hidden identity。 */
     th36.clearThreatCache();
+    obs36.resetObs();
     id36.resetBelief();
+    obs36.observeAttack(p36, me36, 10);
     const rk1 = rel36.relationStateKey(me36);
-    ok(th36.enemiesOf(me36).indexOf(p36) >= 0, '10.36 未明身份 + 当前敌对态度 → enemiesOf 暂含目标');
+    ok(th36.enemiesOf(me36).indexOf(p36) >= 0, '10.36 未明身份 + 强公开攻击证据 → enemiesOf 暂含目标');
     p36.identity = 'zhong';
     p36.identityShown = true;
     const rk2 = rel36.relationStateKey(me36);
@@ -2564,16 +2569,21 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         eq(id37.identityOfFor(me37, x37), 'zhong',
             '10.37 hard identity 后即使出现反常行为也不改身份，只影响后续策略评估');
 
-        /* 内奸：自己身份固定，但当前 stance 仍允许动态变化。 */
+        /* 内奸：identity 固定；stance 由公平可见的阵营强弱变化，不再跟宿主 attitude 走。 */
         const spy37 = y37;
         spy37.identityShown = false;
         eq(id37.identityOfFor(spy37, spy37), 'nei', '10.37 内奸知道自己的固定身份');
-        x37.rel = -1;
-        const stanceEnemy37 = rel37.dispositionOf(spy37, x37);
-        x37.rel = 1;
-        const stanceAlly37 = rel37.dispositionOf(spy37, x37);
-        eq(stanceEnemy37, -1, '10.37 内奸 stance 可按当前局势对目标敌对');
-        eq(stanceAlly37, 1, '10.37 内奸 identity 不变但 stance 可转为合作');
+        const stanceRebelStrong37 = rel37.dispositionOf(spy37, x37);
+        eq(stanceRebelStrong37, 1, '10.37 反方更强 → 内奸可暂时与确定忠臣合作');
+        f3.alive = false;
+        f4.alive = false;
+        host37.game.alivePlayers = host37.game.players.filter(function (p) { return p.alive !== false; });
+        const stanceLoyalStrong37 = rel37.dispositionOf(spy37, x37);
+        eq(stanceLoyalStrong37, -1, '10.37 主忠更强 → 内奸转而压制忠臣');
+        eq(id37.identityOfFor(spy37, spy37), 'nei', '10.37 stance 翻转不改变内奸身份');
+        f3.alive = true;
+        f4.alive = true;
+        host37.game.alivePlayers = host37.game.players.filter(function (p) { return p.alive !== false; });
 
         /* 源码守卫：不允许回退到“读取未公开真实身份统计人数”的实现。 */
         const idSrc37 = fs37.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
@@ -2583,12 +2593,808 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             '10.37 身份推理包含剩余槽位 + hard fact 层');
         eq(/\(game\.players \|\| \[\]\).*x\.identity === "fan"/s.test(idSrc37), false,
             '10.37 不再遍历隐藏 identity 作为人数先验');
-        ok(modeSrc37.indexOf('beliefOfFor(me, p)') >= 0,
-            '10.37 内奸强弱判断使用合法 posterior，不统计隐藏身份');
+        ok(modeSrc37.indexOf('spyAttackBonus(me, tgt)') >= 0,
+            '10.37 内奸策略消费统一 stance 权威，不在 modeStrategy 重算阵营强弱');
     } finally {
         host37.get.identityList = oldIdentityList37;
         host37.get.attitude = oldAtt37;
     }
+}
+
+/* ================= 10.38 Identity information boundary：公平信息 / 不确定性 / 逻辑可能性 =================
+ * 修复 PR #9 审计项：
+ *   A. 身份模式不得通过宿主 get.attitude/rawAttitude 间接读取 hidden identity；
+ *   B. 50/50 或接近打平必须保持 unknown；
+ *   C. “概率很低/显示为0.00”与“规则槽位为0=逻辑不可能”严格分离；
+ *   D. observer-specific 推理不得混入匿名 identityOf(other)；
+ *   E. 内奸 identity 固定，stance 仅由公平可见信息动态变化。
+ */
+{
+    const host38 = await import(pathToFileURL(_hostPath).href);
+    const obs38 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'observer.js')).href);
+    const id38 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+    const rel38 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'relations', 'relations.js')).href);
+    const fs38 = await import('node:fs');
+
+    function P38(name, identity, shown) {
+        return {
+            name: name, name1: name, playerid: name, alive: true, hp: 4, maxHp: 4,
+            identity: identity || '', identityShown: !!shown,
+            storage: {}, ai: { shown: 0 }, _h: [], _e: [], _j: [],
+            countCards: function () { return 0; },
+            getCards: function () { return []; },
+        };
+    }
+    function install38(players, me, zhu, roleList) {
+        host38.game.me = me;
+        host38.game.zhu = zhu;
+        host38.game.players = players;
+        host38.game.dead = [];
+        host38.game.alivePlayers = players.filter(function (p) { return p.alive !== false; });
+        host38._status.currentPhase = me;
+        host38._status.roundNumber = 4;
+        host38._status.mode = 'normal';
+        host38.get.mode = function () { return 'identity'; };
+        host38.get.identityList = function () { return roleList.slice(); };
+    }
+
+    const oldIdentityList38 = host38.get.identityList;
+    const oldAtt38 = host38.get.attitude;
+    try {
+        /* A + B：四反已出，忠视角剩余 1忠1内 → 50/50 必须 unknown，不得硬选忠。 */
+        {
+            const zhu = P38('zhu38a', 'zhu', true);
+            const me = P38('me38a', 'zhong', false);
+            const fans = [1,2,3,4].map(function (i) { return P38('f38a' + i, 'fan', true); });
+            const x = P38('x38a', 'fan', false);    // hidden 真值故意错误
+            const y = P38('y38a', 'zhong', false);
+            install38([zhu, me].concat(fans, [x, y]), me, zhu,
+                ['zhu','zhong','zhong','nei','fan','fan','fan','fan']);
+            host38.get.attitude = function (from, to) {
+                /* 故意模拟会偷看 hidden identity 的宿主 attitude。 */
+                return to && to.identity === 'fan' ? -9 : 9;
+            };
+            obs38.resetObs();
+            id38.resetBelief();
+
+            const bx = id38.beliefOfFor(me, x);
+            ok(bx && Math.abs((bx.zhong || 0) - (bx.nei || 0)) < 1e-9,
+                '10.38 忠/内各一槽且无行为证据 → posterior 50/50');
+            eq(id38.identityOfFor(me, x), 'unknown',
+                '10.38 50/50 不确定身份 → identityOfFor=unknown');
+            eq(id38.isLikelyAlly(me, x), false,
+                '10.38 50/50 忠/内 → 不升级为确定队友');
+            eq(rel38.dispositionOf(me, x), 0,
+                '10.38 四反已满 + 忠/内未分 → neutral');
+
+            const beforeBelief = JSON.stringify(id38.beliefOfFor(me, x));
+            const beforeDisp = rel38.dispositionOf(me, x);
+            x.identity = 'zhong'; // 未明置 hidden 真值改变
+            const afterBelief = JSON.stringify(id38.beliefOfFor(me, x));
+            const afterDisp = rel38.dispositionOf(me, x);
+            eq(afterBelief, beforeBelief,
+                '10.38 hidden identity 改变不能经宿主 attitude 污染 belief');
+            eq(afterDisp, beforeDisp,
+                '10.38 hidden identity 改变不能经宿主 attitude 污染 disposition');
+        }
+
+        /* C：概率即使低到四舍五入显示 0.00，只要仍有槽位，就不能判“逻辑不可能”。 */
+        {
+            const zhu = P38('zhu38b', 'zhu', true);
+            const me = P38('me38b', 'zhong', false);
+            const x = P38('x38b', 'fan', false);
+            const others = Array.from({ length: 17 }, function (_, i) { return P38('u38b' + i, '', false); });
+            install38([zhu, me, x].concat(others), me, zhu,
+                ['zhu'].concat(Array.from({ length: 18 }, function () { return 'zhong'; }), ['fan']));
+            host38.get.attitude = function () { return 0; };
+            obs38.resetObs();
+            id38.resetBelief();
+            obs38.observeAid(x, zhu, 100);
+
+            const b = id38.beliefOfFor(me, x);
+            ok(b && b.fan > 0 && b.fan < 0.01,
+                '10.38 fan posterior 可低于1%但仍为正');
+            eq(Math.round((b.fan || 0) * 100) / 100, 0,
+                '10.38 低概率显示到两位小数可成为0.00');
+            eq(id38.isRolePossibleFor(me, x, 'fan'), true,
+                '10.38 fan 槽位仍存在 → 逻辑上仍可能为fan');
+        }
+
+        /* D：observer 私有身份会改变合法剩余槽位；匿名视角不能混进当前玩家推理链。 */
+        {
+            const zhu = P38('zhu38c', 'zhu', true);
+            const me = P38('me38c', 'zhong', false);
+            const x = P38('x38c', 'fan', false);
+            const y = P38('y38c', 'nei', false);
+            install38([zhu, me, x, y], me, zhu, ['zhu','zhong','nei','fan']);
+            host38.get.attitude = function () { return 0; };
+            obs38.resetObs();
+            id38.resetBelief();
+
+            const observerBelief = id38.beliefOfFor(me, x);
+            const anonymousBelief = id38.beliefOf(x);
+            ok(observerBelief && anonymousBelief &&
+                Math.abs((observerBelief.zhong || 0) - (anonymousBelief.zhong || 0)) > 0.1,
+                '10.38 observer-specific posterior 与匿名视角确实不同');
+        }
+
+        /* E：内奸身份固定；stance 随公开阵营质量变化，不依赖 hidden identity/get.attitude。 */
+        {
+            const zhu = P38('zhu38d', 'zhu', true);
+            const spy = P38('spy38d', 'nei', false);
+            const f1 = P38('f38d1', 'fan', true);
+            const f2 = P38('f38d2', 'fan', true);
+            const f3 = P38('f38d3', 'fan', true);
+            const f4 = P38('f38d4', 'fan', true);
+            const x = P38('x38d', 'fan', false);
+            const y = P38('y38d', 'fan', false);
+            install38([zhu, spy, f1, f2, f3, f4, x, y], spy, zhu,
+                ['zhu','zhong','zhong','nei','fan','fan','fan','fan']);
+            host38.get.attitude = function (from, to) {
+                return to && to.identity === 'fan' ? -9 : 9;
+            };
+            obs38.resetObs();
+            id38.resetBelief();
+
+            eq(id38.identityOfFor(spy, spy), 'nei',
+                '10.38 内奸知道自己的固定身份');
+            eq(rel38.dispositionOf(spy, f1), -1,
+                '10.38 反方公开质量更强 → 内奸公平地压反');
+            eq(rel38.dispositionOf(spy, x), 1,
+                '10.38 规则唯一剩余忠臣 → 反方强时内奸可暂时合作');
+
+            /* 两名公开反贼退出存活局面 → 强弱翻转；身份不变但 stance 翻转。 */
+            f3.alive = false;
+            f4.alive = false;
+            host38.game.alivePlayers = host38.game.players.filter(function (p) { return p.alive !== false; });
+            eq(id38.identityOfFor(spy, spy), 'nei',
+                '10.38 局势变化后内奸 identity 仍固定');
+            eq(rel38.dispositionOf(spy, x), -1,
+                '10.38 主忠公开质量更强 → 内奸转而压忠');
+            eq(rel38.dispositionOf(spy, f1), 1,
+                '10.38 主忠更强时 → 内奸可暂时与反合作');
+        }
+
+        /* 源码守卫：身份推理链不再消费宿主 hidden-role attitude，也不混淆概率0与槽位0。 */
+        const idSrc38 = fs38.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
+        const relSrc38 = fs38.readFileSync(join(_pkg, 'score', 'decision', 'relations', 'relations.js'), 'utf8');
+        const identityRelBlock38 = relSrc38.slice(
+            relSrc38.indexOf('function _identityDisposition'),
+            relSrc38.indexOf('function dispositionOf')
+        );
+        const dispositionBlock38 = relSrc38.slice(
+            relSrc38.indexOf('function dispositionOf'),
+            relSrc38.indexOf('function isAllyOf')
+        );
+        eq(/get\.attitude\s*\(\s*zhu\s*,\s*p\s*\)/.test(idSrc38), false,
+            '10.38 identity belief 不再使用宿主 get.attitude(zhu,p)');
+        eq(identityRelBlock38.indexOf('get.attitude') >= 0, false,
+            '10.38 identity disposition 分支不调用宿主 get.attitude');
+        ok(relSrc38.indexOf("import { spyDispositionOf } from '../strategy/identityStance.js';") >= 0,
+            '10.38 relations 的内奸立场委托统一 identityStance 权威');
+        eq(identityRelBlock38.indexOf('.isFriend(') >= 0, false,
+            '10.38 identity disposition helper 不调用宿主 isFriend');
+        ok(dispositionBlock38.indexOf("if (_isIdentityMode()) return _identityDisposition(me, t);") >= 0,
+            '10.38 disposition 在宿主 isFriend/get.attitude 之前先返回身份模式公平路径');
+        ok(idSrc38.indexOf('isRolePossibleFor') >= 0,
+            '10.38 逻辑可能性由 role slots 独立表达');
+        eq(/\(b\.fan \|\| 0\) === 0|\(b\.zhong \|\| 0\) === 0/.test(relSrc38), false,
+            '10.38 relations 不再用四舍五入 belief===0 判逻辑不可能');
+        eq(idSrc38.indexOf('const otherId = identityOf(other)') >= 0, false,
+            '10.38 基础行为 belief 不再混入匿名 identityOf(other)');
+        ok(idSrc38.indexOf('const otherId = _publicRoleOf(other)') >= 0,
+            '10.38 二阶行为证据只使用公开身份');
+
+        /* 身份相关决策/学习链不得绕过 relations 重新调用宿主 get.attitude。 */
+        const fairRelationFiles38 = [
+            'score/decision/analysis/postCheck.js',
+            'score/decision/safety/rescuePolicy.js',
+            'score/cognition/metaCognition.js',
+            'score/cognition/situationEval.js',
+            'score/perception/discover/autoDiscover.js',
+            'score/perception/feedback/elementFeedback.js',
+            'score/perception/knowledge/sharedKnowledge.js',
+            'score/model/calibrate/decisionCalibrator.js',
+            'score/model/features/features.js',
+            'score/model/net/deepValue.js',
+            'score/model/net/modelGuard.js',
+        ];
+        for (const relPath38 of fairRelationFiles38) {
+            const src38 = fs38.readFileSync(join(_pkg, ...relPath38.split('/')), 'utf8');
+            eq(/get\.attitude\s*\(/.test(src38), false,
+                '10.38 ' + relPath38 + ' 不得直接调用宿主 get.attitude');
+        }
+        const modeSrc38 = fs38.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'modeStrategy.js'), 'utf8');
+        const genericEnemy38 = modeSrc38.slice(
+            modeSrc38.indexOf('export function isEnemy(a, b)'),
+            modeSrc38.indexOf('/* 快捷：应用模式加成 */')
+        );
+        ok(genericEnemy38.indexOf("return isLikelyEnemy(a, b);") >= 0 &&
+            genericEnemy38.indexOf("const att = get.attitude(a, b);") >
+            genericEnemy38.indexOf("return isLikelyEnemy(a, b);"),
+            '10.38 modeStrategy.isEnemy 身份模式先走公平推断，再允许非身份模式 attitude fallback');
+    } finally {
+        host38.get.identityList = oldIdentityList38;
+        host38.get.attitude = oldAtt38;
+    }
+}
+
+/* ================= 10.39 Situation cache + single spy stance authority =================
+ * A. 局面缓存必须在状态完全相同时复用，但同一 round 的 HP/手牌/装备/关系变化必须失效；
+ * B. relations 与 modeStrategy 必须消费同一个内奸 stance 权威；
+ * C. 测试汇总不再手工维护章节编号。
+ */
+{
+    const host39 = await import(pathToFileURL(_hostPath).href);
+    const id39 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+    const rel39 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'relations', 'relations.js')).href);
+    const sit39 = await import(pathToFileURL(join(_pkg, 'score', 'cognition', 'situationEval.js')).href);
+    const stance39 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'strategy', 'identityStance.js')).href);
+    const mode39 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'strategy', 'modeStrategy.js')).href);
+    const fs39 = await import('node:fs');
+
+    function P39(name, identity, shown, hp, hand, equip) {
+        return {
+            name: name, name1: name, playerid: name,
+            alive: true, hp: hp == null ? 4 : hp, maxHp: 4,
+            identity: identity || '', identityShown: !!shown,
+            _h: hand == null ? 0 : hand, _e: equip == null ? 0 : equip,
+            countCards: function (z) {
+                if (z === 'h' || z === 'hs') return this._h;
+                if (z === 'e') return this._e;
+                return 0;
+            },
+            getCards: function () { return []; },
+        };
+    }
+    function install39(players, me, zhu, roles) {
+        host39.game.me = me;
+        host39.game.zhu = zhu;
+        host39.game.players = players;
+        host39.game.dead = [];
+        host39.game.alivePlayers = players.filter(function (p) { return p.alive !== false; });
+        host39._status.currentPhase = me;
+        host39._status.roundNumber = 5;
+        host39._status.mode = 'normal';
+        host39.get.mode = function () { return 'identity'; };
+        host39.get.identityList = function () { return roles.slice(); };
+    }
+
+    const oldIdentityList39 = host39.get.identityList;
+    const oldAtt39 = host39.get.attitude;
+    try {
+        /* A. 同一 round 关系公开后，局面缓存必须看到新敌人；随后 HP 变化也必须重新估值。 */
+        {
+            const zhu = P39('zhu39a', 'zhu', true, 4, 0, 0);
+            const me = P39('me39a', 'zhong', false, 4, 4, 1);
+            const fan = P39('fan39a', 'fan', false, 8, 6, 3);
+            const spy = P39('spy39a', 'nei', false, 4, 0, 0);
+            install39([zhu, me, fan, spy], me, zhu, ['zhu','zhong','fan','nei']);
+            host39.get.attitude = function () { return 0; };
+            id39.resetBelief();
+
+            const hiddenValue = sit39.evaluateSituation(me);
+            eq(sit39.evaluateSituation(me), hiddenValue,
+                '10.39 状态完全相同 → situation cache 返回相同估值');
+
+            fan.identityShown = true;
+            id39.resetBelief();
+            const revealedValue = sit39.evaluateSituation(me);
+            ok(revealedValue !== hiddenValue,
+                '10.39 同一 round 身份关系公开 → situation cache 失效并重新估值');
+
+            fan.hp = 1;
+            const hpChangedValue = sit39.evaluateSituation(me);
+            ok(hpChangedValue !== revealedValue,
+                '10.39 同一 round HP 变化 → situation cache 失效并重新估值');
+        }
+
+        /* B. 内奸 stance 只有 identityStance.js 一个强弱/阈值权威。 */
+        {
+            const zhu = P39('zhu39b', 'zhu', true, 4, 2, 0);
+            const spy = P39('spy39b', 'nei', false, 4, 2, 0);
+            const f1 = P39('f39b1', 'fan', true, 4, 2, 0);
+            const f2 = P39('f39b2', 'fan', true, 4, 2, 0);
+            const f3 = P39('f39b3', 'fan', true, 4, 2, 0);
+            const f4 = P39('f39b4', 'fan', true, 4, 2, 0);
+            const x = P39('x39b', 'fan', false, 4, 2, 0);
+            const y = P39('y39b', 'zhong', false, 4, 2, 0);
+            install39([zhu, spy, f1, f2, f3, f4, x, y], spy, zhu,
+                ['zhu','zhong','zhong','nei','fan','fan','fan','fan']);
+            host39.get.attitude = function (from, to) {
+                return to && to.identity === 'fan' ? -9 : 9;
+            };
+            id39.resetBelief();
+
+            const centralDisposition = stance39.spyDispositionOf(spy, f1);
+            eq(rel39.dispositionOf(spy, f1), centralDisposition,
+                '10.39 relations 内奸敌友 = identityStance 统一结果');
+
+            const centralBonus = stance39.spyAttackBonus(spy, f1);
+            const modeBonus = mode39.MODE_STRATEGIES.identity.decisionBoost(spy, {
+                type: 'card', id: 'sha', target: f1.name1,
+            });
+            eq(modeBonus, centralBonus,
+                '10.39 modeStrategy 内奸攻击加成 = identityStance 统一结果');
+
+            const beforeHidden = JSON.stringify(stance39.evaluateSpyStance(spy));
+            x.identity = 'zhong';
+            const afterHidden = JSON.stringify(stance39.evaluateSpyStance(spy));
+            eq(afterHidden, beforeHidden,
+                '10.39 hidden identity 字段变化不影响内奸 stance');
+
+            f3.alive = false;
+            f4.alive = false;
+            host39.game.alivePlayers = host39.game.players.filter(function (p) { return p.alive !== false; });
+            const flipped = stance39.evaluateSpyStance(spy);
+            eq(flipped.dominantSide, 'loyal',
+                '10.39 公开存活局势翻转 → central stance 同步翻转');
+        }
+
+        /* 源码守卫。 */
+        const sitSrc39 = fs39.readFileSync(join(_pkg, 'score', 'cognition', 'situationEval.js'), 'utf8');
+        const relSrc39 = fs39.readFileSync(join(_pkg, 'score', 'decision', 'relations', 'relations.js'), 'utf8');
+        const modeSrc39 = fs39.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'modeStrategy.js'), 'utf8');
+        const stanceSrc39 = fs39.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'identityStance.js'), 'utf8');
+
+        ok(sitSrc39.indexOf('_cacheRound = r;') >= 0 &&
+            sitSrc39.indexOf('relationStateKey(me)') >= 0 &&
+            sitSrc39.indexOf("countCards('h')") >= 0 &&
+            sitSrc39.indexOf("countCards('e')") >= 0,
+            '10.39 situation cache 同时绑定 round / relation / HP-手牌-装备状态');
+        ok(relSrc39.indexOf('spyDispositionOf(me, t)') >= 0 &&
+            relSrc39.indexOf('function _identitySpyDisposition') < 0,
+            '10.39 relations 不再维护第二套内奸 stance');
+        ok(modeSrc39.indexOf('spyAttackBonus(me, tgt)') >= 0 &&
+            modeSrc39.indexOf('let loyalMass = 0, rebelMass = 0') < 0,
+            '10.39 modeStrategy 不再重算内奸阵营强弱');
+        ok(stanceSrc39.indexOf('SPY_STANCE_MARGIN') >= 0 &&
+            stanceSrc39.indexOf('spyDispositionOf') >= 0 &&
+            stanceSrc39.indexOf('spyAttackBonus') >= 0,
+            '10.39 identityStance 集中管理内奸阈值、敌友与攻击加成');
+    } finally {
+        host39.get.identityList = oldIdentityList39;
+        host39.get.attitude = oldAtt39;
+    }
+}
+
+
+/* ================= 10.40 Identity boundary completion：engine / ordering / revision / precision =================
+ * 补齐 PR #10 审计剩余项：
+ * A. 相同公开信息下，game.players 遍历顺序不得改变 posterior；
+ * B. engine 决策/学习/历史记录不得读取未公开 target.identity；
+ * C. 一次 card event 只推进一次 observation revision；
+ * D. 决策置信度保留完整精度，禁止两位小数跨阈值。
+ */
+{
+    const fs40 = await import('node:fs');
+    const host40 = await import(pathToFileURL(_hostPath).href);
+    const obs40 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'observer.js')).href);
+    const id40 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+
+    function P40(name, identity, shown) {
+        return {
+            name: name, name1: name, playerid: name, alive: true, hp: 4, maxHp: 4,
+            identity: identity || '', identityShown: !!shown,
+            _h: [], _e: [], _j: [],
+            countCards: function () { return 0; },
+            getCards: function () { return []; },
+        };
+    }
+
+    const oldMode40 = host40.get.mode;
+    const oldIdentityList40 = host40.get.identityList;
+    const oldStatusMode40 = host40._status.mode;
+    try {
+        const zhu = P40('zhu40', 'zhu', true);
+        const me = P40('me40', 'zhong', false);
+        const shownFan = P40('shownFan40', 'fan', true);
+        const x = P40('x40', 'fan', false);
+        const n = P40('n40', 'nei', false);
+
+        host40.game.me = me;
+        host40.game.zhu = zhu;
+        host40.game.dead = [];
+        host40.game.players = [zhu, me, shownFan, x, n];
+        host40.game.alivePlayers = host40.game.players.slice();
+        host40._status.currentPhase = me;
+        host40._status.roundNumber = 4;
+        host40._status.mode = 'normal';
+        host40.get.mode = function () { return 'identity'; };
+        host40.get.identityList = function (count) {
+            if (count === 5) return ['zhu', 'zhong', 'fan', 'fan', 'nei'];
+            return [];
+        };
+
+        obs40.resetObs();
+        id40.resetBelief();
+        obs40.observeAttack(shownFan, x, 1);
+        const bOrder1 = id40.beliefOfFor(me, x);
+
+        host40.game.players = [n, x, shownFan, me, zhu];
+        host40.game.alivePlayers = host40.game.players.slice();
+        id40.resetBelief();
+        const bOrder2 = id40.beliefOfFor(me, x);
+        eq(JSON.stringify(bOrder2), JSON.stringify(bOrder1),
+            '10.40 相同公开事实仅改变 game.players 顺序 → posterior 完全不变');
+
+        /* 一张带直接统计 + attack/aid 委托的牌，只能推进一次 revision。 */
+        obs40.resetObs();
+        const rev0 = obs40.getObservationRevision();
+        obs40.observeCardUse(me, { name: 'tao' }, x);
+        const rev1 = obs40.getObservationRevision();
+        eq(rev1 - rev0, 1, '10.40 桃 card event → observation revision 只递增一次');
+        obs40.observeCardUse(me, { name: 'guohe' }, x);
+        const rev2 = obs40.getObservationRevision();
+        eq(rev2 - rev1, 1, '10.40 过河拆桥 card event → observation revision 只递增一次');
+
+        const engSrc40 = fs40.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+        const idSrc40 = fs40.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
+
+        eq(engSrc40.indexOf('const tid = dyingAlly.identity') < 0, true,
+            '10.40 桃救援价值不直接读取 dyingAlly.identity');
+        eq(/tgtIdentity:\s*bestT\s*&&\s*bestT\.identity/.test(engSrc40), false,
+            '10.40 autoFeature 不把 hidden target.identity 写入学习特征');
+        eq(/real:\s*p\.identity/.test(engSrc40), false,
+            '10.40 身份历史快照不再持久化 hidden real identity');
+        ok(engSrc40.indexOf('public: publicIdentity') >= 0 &&
+            engSrc40.indexOf('_beliefOfFor(observer, p)') >= 0,
+            '10.40 历史身份快照只保存 public identity + observer-specific posterior');
+        ok(engSrc40.indexOf("expose = (p === game.zhu) || !!p.identityShown || p.identity === 'mingzhong';") >= 0,
+            '10.40 identity hidden-reward 只把公开身份目标视为已暴露');
+        ok(/if \(mode === 'identity'\)[\s\S]{0,900}return 'unknown';[\s\S]{0,250}return \(player && player\.identity\) \|\| 'unknown';/.test(engSrc40),
+            '10.40 _campOf 在 identity 模式先返回 unknown，非身份模式才允许宿主 identity fallback');
+
+        const confStart40 = idSrc40.indexOf('export function confidenceOfFor');
+        const confEnd40 = idSrc40.indexOf('export function identityOf(p)', confStart40);
+        const confBlock40 = idSrc40.slice(confStart40, confEnd40);
+        eq(confBlock40.indexOf('Math.round') < 0, true,
+            '10.40 confidenceOfFor 决策值保留完整精度，不因四舍五入跨阈值');
+        eq(idSrc40.indexOf('b.fan *= weight') < 0 &&
+            idSrc40.indexOf('b.zhong *= weight') < 0 &&
+            idSrc40.indexOf('b.nei *= weight') < 0, true,
+            '10.40 移除归一化前等比例放大的伪“回合权重”');
+    } finally {
+        host40.get.mode = oldMode40;
+        host40.get.identityList = oldIdentityList40;
+        host40._status.mode = oldStatusMode40;
+    }
+}
+
+
+/* ================= 10.41 Strategic Transition Ledger V2 =================
+ * A. create-state 只有真实落区才确认；被无懈/未生效不得留下假 commitment；
+ * B. remove-target-card 只有真实移除战略状态才写 REMOVE；
+ * C. CREATE→REMOVE 与 REMOVE→CREATE 都是 soft penalty；
+ * D. actor / target / turn epoch 隔离；同角色额外回合也清空；
+ * E. engine 候选评分只消费通用 strategic operation，不靠具体牌名单触发。
+ */
+{
+    const fs41 = await import('node:fs');
+    const host41 = await import(pathToFileURL(_hostPath).href);
+    const tss41 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js')).href);
+    const terms41 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'terms.js')).href);
+
+    function C41(id) { return { name: id }; }
+    function P41(name, rel, o) {
+        o = o || {};
+        return {
+            name: name, name1: name, playerid: name, rel: rel, alive: true, hp: 4, maxHp: 4,
+            _h: o.h || [], _e: o.e || [], _j: o.j || [],
+            countCards: function (z) {
+                if (z === 'h') return this._h.length;
+                if (z === 'e') return this._e.length;
+                if (z === 'j') return this._j.length;
+                return 0;
+            },
+            getCards: function (z) {
+                if (z === 'h') return this._h;
+                if (z === 'e') return this._e;
+                if (z === 'j') return this._j;
+                return [];
+            },
+        };
+    }
+
+    const me = P41('me41', 1);
+    const other = P41('other41', 1);
+    const enemy = P41('enemy41', -1);
+    const enemy2 = P41('enemy42', -1);
+    const rctx = { relationOf: function (_me, t) { return t.rel; } };
+
+    host41.game.me = me;
+    host41.game.players = [me, other, enemy, enemy2];
+    host41.game.alivePlayers = host41.game.players.slice();
+    host41._status.currentPhase = me;
+
+    eq(terms41.strategicEffectOf('lebu').operation, 'create-state',
+        '10.41 乐由 profile 映射为 create-state');
+    eq(terms41.strategicEffectOf('shunshou').operation, 'remove-target-card',
+        '10.41 顺由 profile 映射为 remove-target-card');
+
+    /* A1. 被无懈/未落区：pending 结案但不得制造 CREATE。 */
+    tss41.beginStrategicTurn(me);
+    tss41.beginStrategicAction(me, 'lebu', enemy, rctx);
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 useCard 时只记录 pending，不提前宣称 CREATE');
+    eq(tss41.getPendingStrategicActions().length, 1,
+        '10.41 create-state 动作前快照进入 pending');
+    tss41.reconcileStrategicTransitions(me, rctx);
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 乐未进入判定区（如被无懈）→ 不产生假 commitment');
+
+    /* A2. 真实落区：下一决策 reconcile 后确认 CREATE。 */
+    tss41.beginStrategicAction(me, 'lebu', enemy, rctx);
+    enemy._j.push(C41('lebu'));
+    const made = tss41.reconcileStrategicTransitions(me, rctx);
+    ok(made.some(function (x) { return x.operation === 'create-state'; }),
+        '10.41 乐真实落区 → 确认 CREATE');
+    const destroyAfterCreate = tss41.evaluateDestroyPenalty(me, enemy, rctx);
+    eq(destroyAfterCreate.selfCreated, true,
+        '10.41 已确认 CREATE 后，同 actor 识别 self-created');
+    ok(destroyAfterCreate.effectivePenalty > 0,
+        '10.41 CREATE→REMOVE 敌方有利状态存在 soft opportunity cost');
+
+    /* actor 隔离：另一角色不能把我的 CREATE 当成自己的 commitment。 */
+    eq(tss41.evaluateRemovalChoice(other, enemy, enemy._j[0], rctx).selfCreated, false,
+        '10.41 self-created 必须匹配 actor，不跨角色串账');
+    /* CREATE 后若状态被别人/自然结算移除，再次补挂不属于自己的反向操作。 */
+    enemy._j.length = 0;
+    eq(tss41.evaluateCreateConsistency(me, enemy, 'lebu', rctx).penalty, 0,
+        '10.41 自建状态被外部移除后重新补挂 → 不误判为 self reversal');
+    enemy._j.push(C41('lebu'));
+
+
+    /* B1. 顺/拆若拿走装备而非状态，不得写 REMOVE-state。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('lebu')];
+    enemy._e = [C41('weapon41')];
+    tss41.beginStrategicAction(me, 'guohe', enemy, rctx);
+    enemy._e.length = 0;
+    tss41.reconcileStrategicTransitions(me, rctx);
+    eq(tss41.getStrategicRecords().filter(function (x) { return x.operation === 'remove-state'; }).length, 0,
+        '10.41 过河只拆装备、判定状态仍在 → 不误记 REMOVE-state');
+
+    /* B2/C. 真正移除兵粮后，再给同目标兵粮应识别 REMOVE→CREATE reversal。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('bingliang')];
+    tss41.beginStrategicAction(me, 'shunshou', enemy, rctx);
+    enemy._j.length = 0;
+    const removed = tss41.reconcileStrategicTransitions(me, rctx);
+    ok(removed.some(function (x) { return x.operation === 'remove-state'; }),
+        '10.41 顺手真实拿走兵粮 → 写 REMOVE-state');
+    const recreate = tss41.evaluateCreateConsistency(me, enemy, 'bingliang', rctx);
+    ok(recreate.penalty > 0 && Number.isFinite(recreate.penalty),
+        '10.41 REMOVE→同目标CREATE → 有限 reversal penalty');
+    eq(tss41.evaluateCreateConsistency(me, enemy2, 'bingliang', rctx).penalty, 0,
+        '10.41 REMOVE 后换目标 CREATE → 不视为反转');
+
+    /* D. 同一个角色获得额外回合：显式 phaseBegin epoch 也必须清空旧 ledger。 */
+    tss41.beginStrategicTurn(me);
+    enemy._j = [C41('lebu')];
+    tss41.recordStateCreation(me, enemy, 'lebu', rctx);
+    const epoch1 = tss41.getStrategicTurnEpoch();
+    eq(tss41.getStrategicRecords().length, 1, '10.41 当前回合存在 confirmed ledger');
+    const epoch2 = tss41.beginStrategicTurn(me);
+    ok(epoch2 > epoch1, '10.41 同角色额外回合也创建新 turn epoch');
+    eq(tss41.getStrategicRecords().length, 0,
+        '10.41 同角色额外回合清空上一回合 strategic ledger');
+
+    /* E. 源码守卫：engine 不再在 useCard 时按乐/兵硬编码记 commitment；
+     * transition evaluator 独立于“拆牌/延时类打敌”具体牌列表。 */
+    const eng41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const tssSrc41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js'), 'utf8');
+    const opt41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'optimization.js'), 'utf8');
+
+    ok(eng41.indexOf('beginStrategicAction(me, _cid, _target') >= 0,
+        '10.41 engine useCard 对任意 strategic operation 只建 pending');
+    eq(eng41.indexOf("if (_cid === 'lebu' || _cid === 'bingliang')") < 0, true,
+        '10.41 engine 不再按乐/兵具体牌名记录 commitment');
+    ok(eng41.indexOf('reconcileStrategicTransitions(_stMe') >= 0,
+        '10.41 每次 bestAction 前先按真实状态 reconcile pending');
+    ok(eng41.indexOf('const tp = evaluateActionTransitionPenalty(me, bestT, id') >= 0,
+        '10.41 候选统一进入通用 transition evaluator');
+    ok(tssSrc41.indexOf("operation === 'remove-state'") >= 0 &&
+       tssSrc41.indexOf("operation === 'create-state'") >= 0,
+        '10.41 ledger 同时表达 CREATE 与 confirmed REMOVE');
+    eq(/const\s+(DELAYED_CONTROL_IDS|PROVENANCE_IDS)\s*=/.test(tssSrc41), false,
+        '10.41 核心 ledger 不维护乐/兵专用名单');
+    ok(opt41.indexOf("idsWithStrategicOperation('remove-target-card')") >= 0,
+        '10.41 button hook 按 profile operation 自动枚举');
+    ok(opt41.indexOf('uninstallButtonHooks();') >= 0,
+        '10.41 generic button hook 有对称卸载路径');
+}
+
+
+/* ================= 10.42 Wuxie Host Bridge V2 =================
+ * 真实宿主链路：_wuxie → chooseToUse({type:'wuxie', info_map, state})。
+ * 验收：
+ * A. 官方 info_map/state 优先于 parent-chain 猜测；
+ * B. 回合外响应不受 currentPhase guard 阻断；
+ * C. unresolved 原生 ai1 原样保留；
+ * D. 顺/拆按“一次一张 + 行动方最优合法选择”估值；
+ * E. AOE 按实际 targets 净效用；
+ * F. 不读取隐藏手牌内容 / 不维护第二套最终政策。
+ */
+{
+    const fs42 = await import('node:fs');
+    const fx42 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'response', 'wuxieEvaluator.js')).href);
+    const use42 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'override', 'use.js')).href);
+    const wt42 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'timing', 'wuxieTiming.js')).href);
+
+    function C42(id) { return { name: id }; }
+    function P42(name, rel, o) {
+        o = o || {};
+        return {
+            name: name, name1: name, playerid: name, rel: rel, alive: true,
+            hp: o.hp == null ? 4 : o.hp, maxHp: 4,
+            _h: o.h == null ? 0 : o.h, _e: o.e || [], _j: o.j || [],
+            countCards: function (z, filter) {
+                if (z === 'h') return this._h;
+                if (z === 'hs') return this._h;
+                return 0;
+            },
+            getCards: function (z) {
+                if (z === 'e') return this._e;
+                if (z === 'j') return this._j;
+                return [];
+            },
+            isOnline2: function () { return false; },
+        };
+    }
+    const rel42 = function (_me, t) { return t && typeof t.rel === 'number' ? t.rel : 0; };
+    const me42 = P42('me42', 1, { h: 2 });
+    const ally42 = P42('ally42', 1, { h: 1 });
+    const enemy42 = P42('enemy42', -1, { h: 2 });
+    const human42 = P42('human42', 1);
+    hostStub.game.me = human42;
+    hostStub.game.players = [human42, me42, ally42, enemy42];
+    hostStub.game.alivePlayers = hostStub.game.players.slice();
+
+    eq(typeof fx42.resolveWuxieHostContext, 'function', '10.42 导出 resolveWuxieHostContext');
+    eq(typeof use42._bridgeWuxieChooseToUse, 'function', '10.42 use.js 导出 wuxie host bridge');
+
+    /* A1. 官方普通无懈 request：state=+1 表示原锦囊即将生效。 */
+    const reqLebu42 = {
+        type: 'wuxie', state: 1,
+        info_map: {
+            card: C42('lebu'),
+            player: enemy42,
+            target: ally42,
+            targets: [ally42],
+            state: 1,
+        },
+        ai1: function () { return 0; },
+    };
+    const hc42 = fx42.resolveWuxieHostContext(me42, reqLebu42, {});
+    eq(hc42.resolved, true, '10.42 host info_map 乐可直接解析');
+    eq(hc42.originalSpellId, 'lebu', '10.42 host info_map 原锦囊=lebu');
+    eq(hc42.source, enemy42, '10.42 host info_map source 正确');
+    eq(hc42.target, ally42, '10.42 host info_map target 正确');
+    eq(hc42.hostState, 1, '10.42 host state=+1 保留');
+    eq(hc42.currentlyNegated, false, '10.42 state=+1 → 原锦囊当前未被抵消');
+
+    /* A2. 反无懈：当前 card=wuxie，但 _source 指向原始锦囊；state=-1 权威表示原锦囊已被抵消。 */
+    const reqCounter42 = {
+        type: 'wuxie', state: -1,
+        info_map: {
+            card: C42('wuxie'),
+            player: enemy42,
+            state: -1,
+            _source: {
+                card: C42('lebu'),
+                player: enemy42,
+                target: ally42,
+                targets: [ally42],
+            },
+        },
+        ai1: function () { return 9; },
+    };
+    const hcCounter42 = fx42.resolveWuxieHostContext(me42, reqCounter42, {});
+    eq(hcCounter42.originalSpellId, 'lebu', '10.42 counter-wuxie 仍追到原始 lebu');
+    eq(hcCounter42.hostState, -1, '10.42 counter-wuxie 读取宿主 state=-1');
+    eq(hcCounter42.currentlyNegated, true, '10.42 state=-1 → 原锦囊当前已被抵消');
+    eq(hcCounter42.inWuxieChain, true, '10.42 _source/current=wuxie → 识别反无懈链');
+    eq(fx42.evaluateWuxie(me42, reqCounter42, { relationOf: rel42, hostRequest: reqCounter42, wuxieCount: 2 }).use,
+        false, '10.42 对有害乐：宿主已是失效态时不反无懈恢复它');
+
+    /* B. 真正的实战根因回归：响应者不是 currentPhase，bridge 仍须接管 type=wuxie 的 ai1。 */
+    hostStub._status.currentPhase = enemy42;
+    const reqSelf42 = {
+        type: 'wuxie', state: 1,
+        info_map: { card: C42('lebu'), player: enemy42, target: me42, targets: [me42], state: 1 },
+        ai1: function () { return 0; },
+    };
+    const br42 = use42._bridgeWuxieChooseToUse(me42, [reqSelf42]);
+    eq(br42.isWuxie, true, '10.42 回合外 type=wuxie 被窄范围识别');
+    eq(br42.resolved, true, '10.42 回合外无懈 request 可解析');
+    eq(br42.use, true, '10.42 敌人乐自己 → bridge 判定使用无懈');
+    eq(br42.bridged, true, '10.42 resolved request 实际改写宿主 ai1');
+    ok(reqSelf42.ai1(C42('wuxie')) > 0, '10.42 currentPhase≠响应者时 ai1 仍获得正分，不再“捏死”');
+
+    /* C. unresolved 必须完全 fail-open：原生 ai1 函数引用不变。 */
+    const nativeAi42 = function () { return 7; };
+    const reqUnknown42 = {
+        type: 'wuxie', state: 1,
+        info_map: { card: C42('wuxie'), state: 1 },
+        ai1: nativeAi42,
+    };
+    const brUnknown42 = use42._bridgeWuxieChooseToUse(me42, [reqUnknown42]);
+    eq(brUnknown42.resolved, false, '10.42 无原始锦囊事实 → unresolved');
+    eq(brUnknown42.bridged, false, '10.42 unresolved 不改写宿主策略');
+    eq(reqUnknown42.ai1, nativeAi42, '10.42 unresolved 原生 ai1 引用原样保留');
+    eq(reqUnknown42.ai1(), 7, '10.42 unresolved 原生 ai1 行为原样保留');
+
+    /* C2. hardOverride=false 时必须完全尊重“只评分、不改宿主选择”的配置语义。 */
+    hostStub._configStore['extension_无名AI_hardOverride'] = false;
+    const nativeOff42 = function () { return 5; };
+    const reqOff42 = {
+        type: 'wuxie', state: 1,
+        info_map: { card: C42('lebu'), player: enemy42, target: me42, targets: [me42], state: 1 },
+        ai1: nativeOff42,
+    };
+    const brOff42 = use42._bridgeWuxieChooseToUse(me42, [reqOff42]);
+    eq(brOff42.bridged, false, '10.42 hardOverride=false → Wuxie bridge 不改写');
+    eq(reqOff42.ai1, nativeOff42, '10.42 hardOverride=false → 原生 ai1 引用不变');
+    delete hostStub._configStore['extension_无名AI_hardOverride'];
+
+    /* D. 顺/拆：行动方按最优合法选择，而不是“有乐就默认帮忙拆乐”或把所有装备求和。 */
+    const allyOnlyLebu42 = P42('allyOnlyLebu42', 1, { h: 0, j: [C42('lebu')] });
+    const allyLebuBagua42 = P42('allyLebuBagua42', 1, { h: 0, j: [C42('lebu')], e: [C42('bagua')] });
+    const allyTwoEquip42 = P42('allyTwoEquip42', 1, { h: 0, e: [C42('bagua'), C42('zhuge')] });
+
+    function dec42(id, target, extra) {
+        return fx42.evaluateWuxie(me42, null, Object.assign({
+            originalSpellId: id, source: enemy42, target: target,
+            relationOf: rel42, wuxieCount: 2,
+        }, extra || {}));
+    }
+    eq(dec42('guohe', allyOnlyLebu42).use, false,
+        '10.42 敌方过河：我方只有乐可拆 → 放行（让其帮忙解乐）');
+    eq(dec42('guohe', allyLebuBagua42).use, true,
+        '10.42 敌方过河：乐+八卦 → 假设敌人拆八卦，应该无懈');
+    eq(dec42('shunshou', allyLebuBagua42).use, true,
+        '10.42 敌方顺手：乐+八卦 → 假设敌人拿最有利牌，应该无懈');
+    eq(fx42.evaluateTrickEffect(me42, {
+            originalSpellId: 'guohe', source: enemy42, target: allyTwoEquip42,
+        }, { relationOf: rel42 }), -3.5,
+        '10.42 两件关键装备一次过河仍只按“最好的一件”计，不把所有装备求和');
+
+    /* E. 多目标 AOE 使用实际 targets 净效用。 */
+    const allyA42 = P42('allyA42', 1), allyB42 = P42('allyB42', 1);
+    const enemyA42 = P42('enemyA42', -1), enemyB42 = P42('enemyB42', -1), enemyC42 = P42('enemyC42', -1);
+    const aoeGood42 = fx42.evaluateWuxie(me42, null, {
+        originalSpellId: 'nanman', source: enemy42,
+        targets: [allyA42, allyB42, enemyA42, enemyB42, enemyC42],
+        relationOf: rel42, wuxieCount: 2,
+    });
+    eq(aoeGood42.use, false, '10.42 AOE 敌方受损更多、净效用对我方有利 → 不无懈');
+    const aoeBad42 = fx42.evaluateWuxie(me42, null, {
+        originalSpellId: 'nanman', source: enemy42,
+        targets: [me42, allyA42, allyB42, enemyA42],
+        relationOf: rel42, wuxieCount: 2,
+    });
+    eq(aoeBad42.use, true, '10.42 AOE 我方受损更多 → 使用无懈');
+
+    /* F. 结构守卫：真实 host bridge 在 generic currentPhase hard override 之前，且 timing 不再解析中文 reason。 */
+    const useSrc42 = fs42.readFileSync(join(_pkg, 'score', 'decision', 'override', 'use.js'), 'utf8');
+    const wxSrc42 = fs42.readFileSync(join(_pkg, 'score', 'decision', 'response', 'wuxieEvaluator.js'), 'utf8');
+    const wtSrc42 = fs42.readFileSync(join(_pkg, 'score', 'decision', 'timing', 'wuxieTiming.js'), 'utf8');
+
+    const bridgeCall42 = useSrc42.indexOf('const wuxieBridge = _bridgeWuxieChooseToUse(player, args)');
+    const genericCall42 = useSrc42.indexOf('return _runChooseToUse.call(this, player, ev, orig, args)');
+    ok(bridgeCall42 >= 0 && genericCall42 > bridgeCall42,
+        '10.42 wuxie bridge 先于 generic chooseToUse/currentPhase hard override');
+    ok(/req\.type !== 'wuxie'/.test(useSrc42),
+        '10.42 host bridge 严格限定 type=wuxie，不扩大回合外接管面');
+    ok(/request\.info_map/.test(wxSrc42) && /request\.state/.test(wxSrc42) && /map\._source/.test(wxSrc42),
+        '10.42 evaluator 直接消费宿主 info_map/state/_source');
+    eq(wxSrc42.indexOf("countCards('h', function (c)") >= 0, true,
+        '10.42 仅统计自己的无懈数量；顺拆手牌估值只依赖 countCards 数量');
+    eq(wtSrc42.indexOf("reason.indexOf('待定')") < 0, true,
+        '10.42 wuxieTiming fail-open 不再依赖中文 reason 文本');
+    eq(wt42.wuxieBonus(me42, { id: 'wuxie' }), 1.0,
+        '10.42 engine 缺少实时 spell context 时 wuxieBonus 保持中性 1.0');
 }
 
 /* ---------- 汇总 ---------- */
@@ -2598,7 +3404,7 @@ if (_fails.length) {
     for (const f of _fails) console.error('  FAIL ' + f);
     process.exitCode = 1;
 } else {
-    console.log('\n✅ 发布门禁全部通过：' + _pass + ' 项断言（§10.1/10.2/10.3/10.4/10.5/10.6/10.7/10.8/10.9/10.11/10.12/10.13/10.14/10.15/10.16/10.17/10.18/10.19/10.20/10.21/10.22/10.23/10.24/10.25/10.26/10.27/10.28/10.29/10.30/10.31/10.32/10.33/10.34）');
+    console.log('\n✅ 发布门禁全部通过：' + _pass + ' 项断言');
 }
 /* trainExport 的防抖落盘定时器无需等待；宿主桩在 process exit 时自动清理 */
 setTimeout(() => { process.exit(process.exitCode || 0); }, 50);

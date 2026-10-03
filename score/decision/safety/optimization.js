@@ -18,6 +18,8 @@ import { suitRemaining } from '../../perception/memory/deckMemory.js';
 import { lebuEscapeRate, bingliangEscapeRate, shandianHitRate, cardRarity } from '../../model/predict/deckPredict.js';
 import { evaluateTaoRescue } from './rescuePolicy.js';
 import { isAllyOf, isEnemyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
+import { idsWithStrategicOperation } from '../../foundation/adapt/terms.js';
+import { evaluateRemovalChoice } from '../state/turnStrategicState.js';
 
 /* ================= 桃评分（唯一权威：dying 场景委托 evaluateTaoRescue） =================
  * ★ 修复：不再对「任何濒死目标」无条件 +5（旧代码 `if (dying === target) score = 5.0`）。
@@ -201,41 +203,51 @@ function uninstallOptimizationHooks() {
             const cardMeta = lib.card && lib.card[cfg.id];
             if (!cardMeta || !cardMeta.result) return;
             if (!cardMeta.result.__djsc_hooked) return;
-            /* 恢复原函数 */
             if (cardMeta.result.__origTarget) {
                 cardMeta.result.target = cardMeta.result.__origTarget;
                 delete cardMeta.result.__origTarget;
             }
             delete cardMeta.result.__djsc_hooked;
         });
+        uninstallButtonHooks();
     } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
 /* ================= 导出 ================= */
-export { installOptimizationHooks, uninstallOptimizationHooks, _exposeOverride, installButtonHooks, _scoreTao };
+export { installOptimizationHooks, uninstallOptimizationHooks, installButtonHooks, uninstallButtonHooks, _exposeOverride, _scoreTao };
 
-/* ================= ★ hook shunshou/guohe 的 button 函数（已知牌检测） ================= */
+/* ================= ★ 通用 remove-target-card button hook =================
+ * 具体卡牌 id 来自 gameProfile.strategicEffects；本层只处理“移除目标卡牌”这一通用 operation。
+ */
 function installButtonHooks() {
     try {
-        /* 顺手牵羊 */
-        const shunshou = lib.card && lib.card.shunshou;
-        if (shunshou && shunshou.button && !shunshou.button.__djsc_hooked) {
-            const origButton = shunshou.button;
-            shunshou.button = function (button) {
+        const removalIds = idsWithStrategicOperation('remove-target-card');
+        let installed = 0;
+
+        removalIds.forEach(function (cardId) {
+            const meta = lib.card && lib.card[cardId];
+            if (!meta || typeof meta.button !== 'function' || meta.button.__djsc_hooked) return;
+            const origButton = meta.button;
+
+            meta.button = function (button) {
                 try {
-                    const { player, target } = get.event();
-                    const pos = get.position(button.link);
-                    if (pos === 'h') {
-                        /* ★ 已明知的牌优先顺走 */
+                    const ev = (get && typeof get.event === 'function' && get.event()) || _status.event || {};
+                    const player = ev.player || _status.event && _status.event.player;
+                    const target = ev.target || _status.event && _status.event.target;
+                    const link = button && button.link;
+                    const pos = link ? get.position(link) : null;
+
+                    /* 手牌：保持既有“已知牌 + 稀缺花色”逻辑。 */
+                    if (pos === 'h' && player && target) {
                         let isKnown = false;
                         try {
                             const known = player.getKnownCards ? player.getKnownCards(target) : [];
-                            isKnown = known.indexOf(button.link) >= 0;
+                            isKnown = known.indexOf(link) >= 0;
                         } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-                        /* ★ 牌堆剩余：某种花色的牌快用完了 → 目标手上该花色可能是最后几张 → 优先顺走 */
+
                         let scarcityBonus = 0;
                         try {
-                            const short = { 'heart':'h', 'diamond':'d', 'club':'c', 'spade':'s' }[button.link.suit];
+                            const short = { heart:'h', diamond:'d', club:'c', spade:'s' }[link.suit];
                             if (short) {
                                 const remain = suitRemaining(short);
                                 if (remain <= 3) scarcityBonus = 1.5;
@@ -244,66 +256,53 @@ function installButtonHooks() {
                             }
                         } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
-                        if (isEnemyOf(player, target)) {
-                            /* 敌方：已知 → 更高分 */
-                            return (isKnown ? 3 : 1) + scarcityBonus;
-                        } else {
-                            /* 友方/中性：已知 → 更不建议顺 */
-                            return (isKnown ? -2 : -1);
+                        if (isEnemyOf(player, target)) return (isKnown ? 3 : 1) + scarcityBonus;
+                        return isKnown ? -2 : -1;
+                    }
+
+                    /* 判定区：不按牌名写规则，只询问该牌代表的战略状态价值。
+                     * 敌方有利状态 → adjustment<0 保护；队友有害状态 → adjustment>0 鼓励解除。 */
+                    if (pos === 'j' && player && target && link) {
+                        const base = origButton.call(this, button);
+                        const choice = evaluateRemovalChoice(player, target, link, {
+                            relationOf: function (mi, t) {
+                                try { return isAllyOf(mi, t) ? 1 : (isEnemyOf(mi, t) ? -1 : 0); } catch (e) { return 0; }
+                            },
+                        });
+                        const b = (typeof base === 'number' && isFinite(base)) ? base : 0;
+                        if (choice && typeof choice.adjustment === 'number' && choice.adjustment !== 0) {
+                            return b + choice.adjustment;
                         }
+                        return base;
                     }
                 } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
                 return origButton.call(this, button);
             };
-            shunshou.button.__djsc_hooked = true;
-            shunshou.button.__origButton = origButton;
-        }
 
-        /* 过河拆桥 */
-        const guohe = lib.card && lib.card.guohe;
-        if (guohe && guohe.button && !guohe.button.__djsc_hooked) {
-            const origButton = guohe.button;
-            guohe.button = function (button) {
-                try {
-                    const player = _status.event.player;
-                    const target = _status.event.target;
-                    const pos = get.position(button.link);
-                    if (pos === 'h') {
-                        /* ★ 已明知的牌优先拆 */
-                        let isKnown = false;
-                        try {
-                            const known = player.getKnownCards ? player.getKnownCards(target) : [];
-                            isKnown = known.indexOf(button.link) >= 0;
-                        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-                        /* ★ 牌堆剩余：某种花色的牌快用完了 → 目标手上该花色可能是最后几张 → 优先拆走 */
-                        let scarcityBonus = 0;
-                        try {
-                            const short = { 'heart':'h', 'diamond':'d', 'club':'c', 'spade':'s' }[button.link.suit];
-                            if (short) {
-                                const remain = suitRemaining(short);
-                                if (remain <= 3) scarcityBonus = 1.5;
-                                else if (remain <= 6) scarcityBonus = 0.8;
-                                else if (remain <= 10) scarcityBonus = 0.3;
-                            }
-                        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+            meta.button.__djsc_hooked = true;
+            meta.button.__origButton = origButton;
+            installed++;
+        });
 
-                        if (isEnemyOf(player, target)) {
-                            /* 敌方：已知 → 更高分 */
-                            return (isKnown ? 3 : 1) + scarcityBonus;
-                        } else {
-                            /* 友方/中性：已知 → 更不建议拆 */
-                            return (isKnown ? -2 : -1);
-                        }
-                    }
-                } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-                return origButton.call(this, button);
-            };
-            guohe.button.__djsc_hooked = true;
-            guohe.button.__origButton = origButton;
-        }
-
-        log.info('optimization', '已 hook shunshou/guohe 的 button 函数');
+        log.info('optimization', '已通用 hook remove-target-card button × ' + installed);
     } catch (e) {
         log.info('optimization', 'button hook 失败: ' + String(e).slice(0, 80));
+    }
+}
+
+
+/* 通用 remove-target-card button hook 的对称卸载；避免热重载后旧闭包叠加。 */
+function uninstallButtonHooks() {
+    try {
+        const removalIds = idsWithStrategicOperation('remove-target-card');
+        removalIds.forEach(function (cardId) {
+            const meta = lib.card && lib.card[cardId];
+            if (!meta || typeof meta.button !== 'function' || !meta.button.__djsc_hooked) return;
+            const orig = meta.button.__origButton;
+            if (typeof orig === 'function') meta.button = orig;
+        });
+    } catch (e) {
+        if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e);
     }
 }

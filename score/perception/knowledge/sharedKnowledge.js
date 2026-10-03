@@ -17,6 +17,7 @@
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { log } from '../../foundation/diag/logger.js';
 import { safeGet as _lsGet, safeSet as _lsSet, safeRemove as _lsRemove } from '../../foundation/storage/storage.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
+import { dispositionOf } from '../../decision/relations/relations.js';
 
 const STORE_KEY = 'djsc_shared_knowledge_v1';
 const VERSION = 1;
@@ -62,7 +63,7 @@ function _fingerprint(me, ctx) {
         let enemyLow = 0, enemyCount = 0;
         for (const p of (game.players || [])) {
             if (!p || p === me || p.alive === false) continue;
-            if (get.attitude(me, p) < 0) {
+            if (dispositionOf(me, p) < 0) {
                 enemyCount++;
                 if ((p.hp || 0) <= 1) enemyLow++;
             }

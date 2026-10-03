@@ -20,6 +20,7 @@ import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { log } from '../../foundation/diag/logger.js';
 import { autoLearnSkill, autoLearnCard } from '../../knowledge/tables/elementAccess.js';
 import { transferWrite } from '../../model/train/crossModeTransfer.js';
+import { dispositionOf } from '../../decision/relations/relations.js';
 
 const DECAY = 0.7;
 const MIN_DELTA = 0.15;
@@ -73,7 +74,7 @@ function _evaluateOne(snap) {
                 const tgtDelta = (tgt.hp || 0) - snap.targetHpBefore;
                 /* 目标是敌人 → 负血量变化 = 好事 */
                 let att = 0;
-                try { att = get.attitude(me, tgt); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+                try { att = dispositionOf(me, tgt); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
                 if (att < 0 && tgtDelta < 0) score += (-tgtDelta) * 2.0;
                 else if (att > 0 && tgtDelta < 0) score += tgtDelta * 2.0;
                 else if (att > 0 && tgtDelta > 0) score += tgtDelta * 1.5;

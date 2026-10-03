@@ -7,6 +7,8 @@
  * ============================================
  */
 
+import { dispositionOf } from '../../decision/relations/relations.js';
+
 /* ================= 决策积分引擎 · 模型行为护栏 =================
  * 职责：模型输出动作后，执行前的最后一层"法律检查"。
  * 设计原则：
@@ -52,11 +54,7 @@ const COOLDOWN_MS = 30 * 60 * 1000;  /* 兜底：30 分钟 */
 function _isAlly(me, target) {
     try {
         if (!me || !target || me === target) return false;
-        /* 兜底：attitude */
-        try {
-            if (typeof get !== 'undefined' && get.attitude(me, target) > 0) return true;
-        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-        return false;
+        return dispositionOf(me, target) > 0;
     } catch (e) { return false; }
 }
 

@@ -4,30 +4,30 @@
  * 重新生成：node build/semantic_audit.mjs（发布前必须重跑，P2-34）
  */
 export const AUDIT = {
-	"generated": "2026-10-02",
-	"files": 212,
+	"generated": "2026-10-03",
+	"files": 213,
 	"cleanFiles": 88,
-	"legacyFiles": 124,
-	"hits": 3436,
-	"cleanRate": 42,
+	"legacyFiles": 125,
+	"hits": 3442,
+	"cleanRate": 41,
 	"byDomain": {
 		"cognition": 120,
-		"decision": 1858,
-		"foundation": 50,
+		"decision": 1854,
+		"foundation": 54,
 		"knowledge": 218,
 		"model": 285,
-		"perception": 780,
+		"perception": 786,
 		"verification": 6,
 		"view": 119
 	},
 	"top": [
 		{
 			"file": "score/decision/engine/engine.js",
-			"count": 365
+			"count": 373
 		},
 		{
 			"file": "score/perception/observer/identity.js",
-			"count": 348
+			"count": 354
 		},
 		{
 			"file": "score/perception/memory/deckMemory.js",
@@ -38,24 +38,24 @@ export const AUDIT = {
 			"count": 135
 		},
 		{
-			"file": "score/decision/strategy/modeStrategy.js",
-			"count": 90
-		},
-		{
 			"file": "score/decision/skills/skills.js",
 			"count": 87
+		},
+		{
+			"file": "score/decision/strategy/modeStrategy.js",
+			"count": 85
 		},
 		{
 			"file": "score/decision/cardplay/cardPlayBrain.js",
 			"count": 84
 		},
 		{
-			"file": "score/decision/strategy/planner.js",
+			"file": "score/decision/relations/relations.js",
 			"count": 81
 		},
 		{
-			"file": "score/decision/relations/relations.js",
-			"count": 80
+			"file": "score/decision/strategy/planner.js",
+			"count": 81
 		},
 		{
 			"file": "score/model/features/features.js",

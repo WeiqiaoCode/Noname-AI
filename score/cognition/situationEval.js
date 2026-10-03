@@ -12,6 +12,7 @@
  * 优势时保守，劣势时激进
  */
 import { lib, game, get, _status } from '../foundation/adapt/host.js';
+import { dispositionOf, relationStateKey } from '../decision/relations/relations.js';
 
 // Författare: Feisheng Original | Licens: GPL-3.0
 /* ================= 局面估值缓存 ================= */
@@ -30,7 +31,30 @@ function _syncCache() {
 	const r = _roundKey();
 	if (r !== _cacheRound) {
 		_evalCache.clear();
+		_cacheRound = r;
 	}
+}
+
+function _stateFingerprint(me) {
+	try {
+		const parts = ['r' + _roundKey(), 'rel:' + relationStateKey(me)];
+		const players = (game.players || []).slice().sort(function (a, b) {
+			const ka = String(a && (a.playerid || a.name1 || a.name) || '');
+			const kb = String(b && (b.playerid || b.name1 || b.name) || '');
+			return ka < kb ? -1 : (ka > kb ? 1 : 0);
+		});
+		for (const p of players) {
+			if (!p) continue;
+			const key = String(p.playerid || p.name1 || p.name || '?');
+			const alive = p.alive === false ? 0 : 1;
+			const hp = Number(p.hp) || 0;
+			let hand = 0, equip = 0;
+			try { hand = p.countCards ? Number(p.countCards('h')) || 0 : 0; } catch (e) { hand = 0; }
+			try { equip = p.countCards ? Number(p.countCards('e')) || 0 : 0; } catch (e) { equip = 0; }
+			parts.push(key + ':' + alive + ':' + hp + ':' + hand + ':' + equip);
+		}
+		return parts.join('|');
+	} catch (e) { return 'state_error'; }
 }
 
 /* ================= 1. 己方力量估值 ================= */
@@ -45,7 +69,7 @@ function allyPower(me) {
 			/* 判断是不是队友 */
 			let isAlly = false;
 			try {
-				if (get.attitude(me, p) > 0) isAlly = true;
+				if (dispositionOf(me, p) > 0) isAlly = true;
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 			if (!isAlly && p !== me) return;
@@ -75,7 +99,7 @@ function enemyPower(me) {
 			/* 判断是不是敌人 */
 			let isEnemy = false;
 			try {
-				if (get.attitude(me, p) < 0) isEnemy = true;
+				if (dispositionOf(me, p) < 0) isEnemy = true;
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 			if (!isEnemy && p !== me) return;
@@ -101,7 +125,7 @@ function enemyPower(me) {
 export function evaluateSituation(me) {
 	try {
 		_syncCache();
-		const key = 'eval_' + (me.name1 || me.name || '?');
+		const key = 'eval_' + (me.name1 || me.name || '?') + '|' + _stateFingerprint(me);
 		if (_evalCache.has(key)) return _evalCache.get(key);
 
 		const ally = allyPower(me);
