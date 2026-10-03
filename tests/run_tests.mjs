@@ -3652,8 +3652,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
     ok(overrideSrc43.indexOf("ba.targetInferred !== true || confidence < 0.55") >= 0,
         '10.43 宿主桥只接受高置信 scanner 推断');
-    ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
-        '10.43 宿主桥再次校验当前选择事件合法目标');
+    ok(overrideSrc43.indexOf("eventAcceptsSkillTargetPlan(next, player, decision)") >= 0,
+        '10.43 宿主桥再次校验当前选择事件合法目标/目标组');
 }
 
 
@@ -3761,6 +3761,28 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(targetAI44(a1_44) >= 12 && targetAI44(a2_44) >= 12,
         '10.44 规划组合中的两个目标都获得宿主正分');
 
+    /* B2. 多目标宿主桥必须和当前事件的固定选择数量一致。 */
+    const fixed2Evt44 = {
+        ai: function () { return 0; },
+        selectTarget: [2, 2],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(fixed2Evt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    ok(fixed2Evt44.ai(a1_44) >= 12 && fixed2Evt44.ai(a2_44) >= 12,
+        '10.44 当前事件同为固定2目标 → 整组计划可桥接');
+
+    const fixed1Native44 = function () { return 3; };
+    const fixed1Evt44 = {
+        ai: fixed1Native44,
+        selectTarget: [1, 1],
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(fixed1Evt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(fixed1Evt44.ai, fixed1Native44,
+        '10.44 engine计划2目标但当前事件只选1个 → 不把上一阶段整组误桥过来');
+
     /* C. chooseCardTarget card half：原生同分时低价值牌略优，但只做很小 tie-break。 */
     host44.get.owner = function () { return me44; };
     host44.get.value = function (card) { return card && card.v; };
@@ -3823,6 +3845,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         && src44.indexOf('proto.chooseButton = function') >= 0
         && src44.indexOf('proto.chooseControl = function') >= 0,
         '10.44 stage2 hook 覆盖 chooseButtonTarget / chooseButton / chooseControl');
+    ok(src44.indexOf('eventAcceptsSkillTargetPlan(next, player, decision)') >= 0
+        && src44.indexOf('_eventFixedTargetCount(next)') >= 0,
+        '10.44 多目标桥要求当前宿主事件具有匹配的固定目标数');
     ok(src44.indexOf('_protoBackup.chooseButtonTarget') >= 0
         && src44.indexOf('_protoBackup.chooseButton') >= 0
         && src44.indexOf('_protoBackup.chooseControl') >= 0,
