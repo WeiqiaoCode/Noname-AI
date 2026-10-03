@@ -740,6 +740,9 @@ export function uninstallAIOverride() {
 			if (_protoBackup.getSkills && proto.getSkills !== _protoBackup.getSkills) proto.getSkills = _protoBackup.getSkills;
 			if (_protoBackup.chooseTarget && proto.chooseTarget !== _protoBackup.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
 			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget !== _protoBackup.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
+			if (_protoBackup.chooseButtonTarget && proto.chooseButtonTarget !== _protoBackup.chooseButtonTarget) proto.chooseButtonTarget = _protoBackup.chooseButtonTarget;
+			if (_protoBackup.chooseButton && proto.chooseButton !== _protoBackup.chooseButton) proto.chooseButton = _protoBackup.chooseButton;
+			if (_protoBackup.chooseControl && proto.chooseControl !== _protoBackup.chooseControl) proto.chooseControl = _protoBackup.chooseControl;
 		}
 		var g = (typeof game !== 'undefined') ? game : null;
 		if (g && _protoBackup.gameCheck && g.check !== _protoBackup.gameCheck) g.check = _protoBackup.gameCheck;
