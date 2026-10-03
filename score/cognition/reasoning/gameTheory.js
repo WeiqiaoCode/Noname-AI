@@ -116,28 +116,10 @@ export function shouldRevealIdentity(me) {
 	}
 }
 
-/* ================= 4. 博弈评分加成 ================= */
+/* ================= 4. 博弈评分增量（兼容入口） =================
+ * 人数阶段不再在博弈层重复修改卡牌 utility。
+ * identityGameStrategy / shouldRevealIdentity 继续负责身份博弈；动作阶段倾向由 gamePhase/endgameOpt 负责。
+ */
 export function gameTheoryBonus(me, act) {
-	try {
-		const strategy = identityGameStrategy(me);
-		let bonus = 0;
-
-		/* === 激进策略 → 进攻加成 === */
-		if (strategy.strategy === 'aggressive') {
-			if (['sha', 'juedou', 'huogong', 'nanman', 'wanjian'].indexOf(act.id) >= 0) {
-				bonus += 0.2;
-			}
-		}
-
-		/* === 保守策略 → 防御加成 === */
-		if (strategy.strategy === 'defensive') {
-			if (['shan', 'tao', 'wuxie', 'bagua', 'tengjia'].indexOf(act.id) >= 0) {
-				bonus += 0.2;
-			}
-		}
-
-		return bonus;
-	} catch (e) {
-		return 0;
-	}
+	return 0;
 }
