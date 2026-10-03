@@ -18,6 +18,7 @@ import { bestAction } from '../engine/engine.js';
 import { cfg } from '../../foundation/config/util.js';
 import { log } from '../../foundation/diag/logger.js';
 import { evaluateTaoRescue } from '../safety/rescuePolicy.js';
+import { evaluateWuxie } from '../response/wuxieEvaluator.js';
 import { trip, isTripped } from './circuit.js';
 
 const ORIG_KEY = '__djsc_orig_chooseToUse';
@@ -26,6 +27,7 @@ const DEGRADE_WINDOW = 5000;
 const VETO_THRESHOLD = 8;  /* ★ 否决阈值：候选分差超过此值 → 硬否决低分牌 */
 const MAX_DYING_DEPTH = 6;      /* ★ 濒死事件链最大上溯层数 */
 const TAO_GUARD_KEY = '__djsc_tao_guard';  /* ★ 护栏安装哨兵（避免叠加） */
+const WUXIE_BRIDGE_KEY = '__djsc_wuxie_host_bridge';
 
 const DEGRADED = new Map();
 
@@ -142,6 +144,99 @@ function _shouldVeto(player, card) {
 		}
 		return false;
 	} catch (e) { return false; }
+}
+
+/* ================= ★ Wuxie Host Bridge V2 =================
+ * 当前无名杀 _wuxie 走 player.chooseToUse({type:'wuxie', info_map, state})，
+ * 而不是 chooseToRespond。这里必须先于 currentPhase hard-override guard 接入，
+ * 但严格只处理 type='wuxie'，不会扩大其它回合外 chooseToUse 的接管范围。
+ */
+
+function _wuxieRequestOf(args) {
+	try {
+		const req = Array.isArray(args) ? args[0] : null;
+		if (!req || typeof req !== 'object' || req.type !== 'wuxie') return null;
+		return req;
+	} catch (e) { return null; }
+}
+
+function _bridgeWuxieChooseToUse(player, args) {
+	const request = _wuxieRequestOf(args);
+	if (!request) return null;
+	const base = { isWuxie: true, bridged: false, resolved: false, use: null, decision: null };
+
+	try {
+		/* 人类本机 / 在线玩家：绝不改写其 ai1；仍直接交回宿主。 */
+		if (!player || player === game.me) return base;
+		try { if (player.isOnline2 && player.isOnline2()) return base; } catch (e) {}
+		if (cfg('responseAI', true) === false) return base;
+
+		try {
+			if (request[WUXIE_BRIDGE_KEY]) return request[WUXIE_BRIDGE_KEY];
+		} catch (e) {}
+
+		const decision = evaluateWuxie(player, request, { hostRequest: request });
+		const result = {
+			isWuxie: true,
+			bridged: false,
+			resolved: !!(decision && decision.resolved),
+			use: decision && decision.resolved ? !!decision.use : null,
+			decision: decision || null,
+		};
+
+		/* unresolved = 真正 fail-open：不修改宿主 ai1，原生决策原样执行。 */
+		if (!decision || !decision.resolved) {
+			try {
+				_status.djsc_lastWuxieBridge = {
+					bridged: false, resolved: false, use: null,
+					reason: decision ? decision.reason : 'context-unresolved',
+					ts: Date.now(),
+				};
+			} catch (e) {}
+			return result;
+		}
+
+		const originalAi1 = (typeof request.ai1 === 'function') ? request.ai1 : null;
+		request.ai1 = function () {
+			try {
+				if (!decision.use) return 0;
+				let nativeScore = 0;
+				if (originalAi1) {
+					const n = Number(originalAi1.apply(this, arguments));
+					if (isFinite(n)) nativeScore = n;
+				}
+				/* evaluator 已经完成最终 use 判定时，至少返回正分确保宿主 AI 真正选择无懈；
+				 * 同时保留更高的原生正分，不破坏宿主内部选牌排序。 */
+				return Math.max(1, nativeScore, 1 + Math.max(0, Number(decision.score) || 0));
+			} catch (e) {
+				return decision.use ? 1 : 0;
+			}
+		};
+		result.bridged = true;
+
+		try {
+			Object.defineProperty(request, WUXIE_BRIDGE_KEY, {
+				value: result, configurable: true, enumerable: false, writable: false,
+			});
+		} catch (e) {}
+
+		try {
+			_status.djsc_lastWuxieBridge = {
+				bridged: true,
+				resolved: true,
+				use: !!decision.use,
+				originalSpellId: decision.originalSpellId,
+				hostState: decision.hostState,
+				score: decision.score,
+				reason: decision.reason,
+				ts: Date.now(),
+			};
+		} catch (e) {}
+		return result;
+	} catch (e) {
+		/* 桥接异常同样 fail-open：不阻断宿主。 */
+		return base;
+	}
 }
 
 /* ================= ★ 窄范围桃救援护栏（指令 01 / Root Cause D） =================
@@ -262,9 +357,17 @@ export function installUseOverride() {
 			const player = this;
 			const ev = _status.event;
 
+			/* ★ 无懈官方入口必须先于 currentPhase guard：
+			 * _wuxie 的回合外响应本来就不是 currentPhase 玩家。
+			 * detected wuxie request 无论 resolved 与否都直接回宿主：
+			 * resolved 时只改写该 request.ai1；unresolved 时完全原样 fail-open。 */
+			const wuxieBridge = _bridgeWuxieChooseToUse(player, args);
+			if (wuxieBridge && wuxieBridge.isWuxie) {
+				return orig.apply(this, args);
+			}
+
 			/* ★ 窄范围桃救援护栏：独立于 currentPhase / _shouldOverride 先行安装。
-			 * 只在"对濒死目标使用桃"时追加 veto；非桃牌与其余路径完全不受影响。
-			 * 注意：不删除 currentPhase 全局保护，也不扩大 bestAction 接管范围。 */
+			 * 只在"对濒死目标使用桃"时追加 veto；非桃牌与其余路径完全不受影响。 */
 			const restoreGuard = _installTaoRescueGuard(player, ev);
 			try {
 				return _runChooseToUse.call(this, player, ev, orig, args);
@@ -375,4 +478,4 @@ export function uninstallUseOverride() {
 }
 
 /* ★ 导出私有 helper 供发布门禁（§10.12）与诊断复用 */
-export { _resolveDyingTarget, _shouldBlockTaoRescue };
+export { _resolveDyingTarget, _shouldBlockTaoRescue, _wuxieRequestOf, _bridgeWuxieChooseToUse };
