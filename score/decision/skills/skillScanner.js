@@ -8,11 +8,12 @@
  */
 
 /* ================= 技能扫描器 · 对象-方法交叉判定 =================
- * 核心：符号由"对谁做"决定，不由"做了什么"决定
- *   player.draw(2)  → draw: +2      （自己摸牌）
- *   target.draw(2)  → feedDraw: -2  （资敌摸牌）
- *   target.damage() → damage: +2    （对敌伤害）
- *   player.damage() → selfDamage:-2 （自伤）
+ * 核心：先识别“效果是什么”，再结合对象/关系判断价值方向。
+ *   player.draw(2)   → draw          （自己摸牌）
+ *   target.draw(2)   → 默认 support  （目标摸牌，不再假定 target=敌人）
+ *   target.damage()  → 默认 offense  （目标受伤）
+ *   player.damage()  → selfDamage    （自伤）
+ * 对语义有歧义的 addSkill/link/turnOver/remove 等，若没有显式关系证据则 fail-open。
  */
 
 const METHOD_POLARITY = {
@@ -24,6 +25,17 @@ const METHOD_POLARITY = {
     turnOver: -1, link: -1, skip: -1,
     die: -1, out: -1,
     changeHp: 0,  // 参数符号决定
+};
+
+/* 只有这些方法的“对目标好/坏”方向足够稳定，才允许在无显式关系证据时
+ * 自动推断 support/offense。其余方法仍可在 get.attitude / friends/enemies 明示后分类。 */
+const TARGET_SEMANTIC_SAFE = {
+    draw: +1, gain: +1, gainPlayerCard: +1, gainMultiple: +1,
+    recover: +1, gainMaxHp: +1, revive: +1, addShan: +1,
+    damage: -1, loseHp: -1, loseMaxHp: -1,
+    discard: -1, lose: -1, loseCard: -1, skip: -1,
+    die: -1, out: -1,
+    changeHp: 0,
 };
 
 const DUAL_TAGS = {
@@ -259,10 +271,11 @@ function _collectEv(call, src, attMap) {
         return e.type === 'object' || e.type === 'outer' || e.type === 'attitude';
     });
     if (semanticTarget && !hasRelationEvidence) {
-        let effectSign = METHOD_POLARITY[call.method];
+        let effectSign = TARGET_SEMANTIC_SAFE[call.method];
         if (effectSign === 0) effectSign = argSign;
         if (effectSign > 0) ev.push({ type: 'target-semantic', sign: +2, weight: 0.85 });
         else if (effectSign < 0) ev.push({ type: 'target-semantic', sign: -1, weight: 0.85 });
+        /* undefined = 语义有歧义，保持无关系证据并在下游 fail-open。 */
     }
 
     return ev;
