@@ -329,8 +329,12 @@ function _eventFilterDependsOnSelection(filterTarget) {
 		if (typeof filterTarget !== 'function') return false;
 		const src = filterTarget.toString();
 		const body = src.indexOf('=>') >= 0 ? src.slice(src.indexOf('=>') + 2) : src.slice(src.indexOf('{') + 1);
-		/* 多目标组合合法性若依赖已选目标/实时事件，不能通过逐目标静态调用证明。 */
-		return /ui\s*\.\s*selected|_status\s*\.\s*event|get\s*\.\s*event\s*\(/.test(body);
+		/* 多目标组合合法性若依赖已选目标/实时事件，不能通过逐目标静态调用证明。
+		 * 这里故意偏保守：漏判会把“不合法组合”错误桥接进宿主；误判最多只是回退原生 AI。 */
+		if (/ui\s*\.\s*selected\b|_status\s*\.\s*event\b|get\s*\.\s*event\b/.test(body)) return true;
+		if (/\b(?:event|evt|currentEvent|chooseEvent|trigger|parent)\s*\.\s*(?:targets|cards|buttons|selected|selectedTargets|selectedCards)\b/.test(body)) return true;
+		if (/\bthis\s*\.\s*(?:targets|cards|buttons|selected|selectedTargets|selectedCards)\b/.test(body)) return true;
+		return false;
 	} catch (e) { return true; }
 }
 
