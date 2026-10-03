@@ -108,8 +108,14 @@ export function compareActionCandidates(a, b) {
 	if (ar !== br) return br - ar;
 
 	const ap = ensureCandidatePolicy(a), bp = ensureCandidatePolicy(b);
+	/* normal 层仍以真实 utility 为主，priorityValue 只作同分 tie-break；
+	 * critical/forced 层才由显式策略优先级先裁定。 */
+	if (ar === 0) {
+		const utilityGap = (Number(b && b.score) || 0) - (Number(a && a.score) || 0);
+		if (utilityGap !== 0) return utilityGap;
+		return bp.priorityValue - ap.priorityValue;
+	}
 	if (ap.priorityValue !== bp.priorityValue) return bp.priorityValue - ap.priorityValue;
-
 	return (Number(b && b.score) || 0) - (Number(a && a.score) || 0);
 }
 
