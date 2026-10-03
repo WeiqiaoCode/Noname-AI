@@ -8,26 +8,26 @@ export const AUDIT = {
 	"files": 213,
 	"cleanFiles": 88,
 	"legacyFiles": 125,
-	"hits": 3454,
+	"hits": 3464,
 	"cleanRate": 41,
 	"byDomain": {
 		"cognition": 120,
-		"decision": 1867,
+		"decision": 1880,
 		"foundation": 50,
 		"knowledge": 218,
 		"model": 285,
-		"perception": 789,
+		"perception": 786,
 		"verification": 6,
 		"view": 119
 	},
 	"top": [
 		{
 			"file": "score/decision/engine/engine.js",
-			"count": 365
+			"count": 378
 		},
 		{
 			"file": "score/perception/observer/identity.js",
-			"count": 357
+			"count": 354
 		},
 		{
 			"file": "score/perception/memory/deckMemory.js",
