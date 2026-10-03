@@ -16,6 +16,15 @@ export function targetKey(target) {
 	return target.name1 || target.name || target.playerid || null;
 }
 
+export function candidateTargetValue(candidate) {
+	if (!candidate) return null;
+	if (candidate.targetObj) return targetKey(candidate.targetObj);
+	const t = candidate.target;
+	if (Array.isArray(t)) return t.map(function (x) { return (x && typeof x === 'object') ? targetKey(x) : x; }).filter(Boolean);
+	if (t && typeof t === 'object') return targetKey(t);
+	return t == null ? null : t;
+}
+
 export function makeActionCandidate(spec) {
 	const out = Object.assign({}, spec || {});
 	out.score = runtimeScore(out.score);
