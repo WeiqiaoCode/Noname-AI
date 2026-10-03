@@ -43,6 +43,12 @@ const _protoBackup = {
 	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
 	chooseButton: null, chooseControl: null,
 };
+/* 记录“我们实际安装进去的 wrapper”本身。卸载时只有当前方法仍严格等于
+ * 该 wrapper 才恢复原引用；若后装扩展又包了一层，则绝不覆盖别人的修改。 */
+const _protoOwned = {
+	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
+	chooseButton: null, chooseControl: null,
+};
 
 /* ================= ★ 软接管打点（决策级去重） ================= */
 const _softCounted = new Map();  // player → round标记
@@ -548,6 +554,7 @@ function _hookSkillTargetChoice() {
 				const next = origChooseTarget.apply(this, arguments);
 				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai') : next;
 			};
+			_protoOwned.chooseTarget = proto.chooseTarget;
 		}
 
 		const origChooseCardTarget = proto.chooseCardTarget;
@@ -561,6 +568,7 @@ function _hookSkillTargetChoice() {
 				bridgeSkillCardCostEvent(next, this, skillCtx.id, 'ai1');
 				return next;
 			};
+			_protoOwned.chooseCardTarget = proto.chooseCardTarget;
 		}
 
 		const origChooseButtonTarget = proto.chooseButtonTarget;
@@ -574,6 +582,7 @@ function _hookSkillTargetChoice() {
 				bridgeSkillButtonEvent(next, this, skillCtx.id, 'ai1');
 				return next;
 			};
+			_protoOwned.chooseButtonTarget = proto.chooseButtonTarget;
 		}
 
 		const origChooseButton = proto.chooseButton;
@@ -584,6 +593,7 @@ function _hookSkillTargetChoice() {
 				const next = origChooseButton.apply(this, arguments);
 				return skillCtx ? bridgeSkillButtonEvent(next, this, skillCtx.id, 'ai') : next;
 			};
+			_protoOwned.chooseButton = proto.chooseButton;
 		}
 
 		const origChooseControl = proto.chooseControl;
@@ -594,6 +604,7 @@ function _hookSkillTargetChoice() {
 				const next = origChooseControl.apply(this, arguments);
 				return skillCtx ? bridgeSkillControlEvent(next, this, skillCtx.id) : next;
 			};
+			_protoOwned.chooseControl = proto.chooseControl;
 		}
 
 		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget
@@ -848,11 +859,11 @@ export function uninstallAIOverride() {
 		if (proto) {
 			if (_protoBackup.addSkill && proto.addSkill !== _protoBackup.addSkill) proto.addSkill = _protoBackup.addSkill;
 			if (_protoBackup.getSkills && proto.getSkills !== _protoBackup.getSkills) proto.getSkills = _protoBackup.getSkills;
-			if (_protoBackup.chooseTarget && proto.chooseTarget !== _protoBackup.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
-			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget !== _protoBackup.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
-			if (_protoBackup.chooseButtonTarget && proto.chooseButtonTarget !== _protoBackup.chooseButtonTarget) proto.chooseButtonTarget = _protoBackup.chooseButtonTarget;
-			if (_protoBackup.chooseButton && proto.chooseButton !== _protoBackup.chooseButton) proto.chooseButton = _protoBackup.chooseButton;
-			if (_protoBackup.chooseControl && proto.chooseControl !== _protoBackup.chooseControl) proto.chooseControl = _protoBackup.chooseControl;
+			if (_protoBackup.chooseTarget && proto.chooseTarget === _protoOwned.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
+			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget === _protoOwned.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
+			if (_protoBackup.chooseButtonTarget && proto.chooseButtonTarget === _protoOwned.chooseButtonTarget) proto.chooseButtonTarget = _protoBackup.chooseButtonTarget;
+			if (_protoBackup.chooseButton && proto.chooseButton === _protoOwned.chooseButton) proto.chooseButton = _protoBackup.chooseButton;
+			if (_protoBackup.chooseControl && proto.chooseControl === _protoOwned.chooseControl) proto.chooseControl = _protoBackup.chooseControl;
 		}
 		var g = (typeof game !== 'undefined') ? game : null;
 		if (g && _protoBackup.gameCheck && g.check !== _protoBackup.gameCheck) g.check = _protoBackup.gameCheck;
@@ -863,6 +874,7 @@ export function uninstallAIOverride() {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	_protoHooked = false;
 	_skillTargetHooked = false;
+	for (const k of Object.keys(_protoOwned)) _protoOwned[k] = null;
 	try { delete lib.skill[SKILL_ID]; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	(game.players || []).forEach(function (p) {
 		try { p.removeSkill(SKILL_ID); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
