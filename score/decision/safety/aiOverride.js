@@ -197,18 +197,37 @@ function _parentEventOf(ev) {
 export function resolveActiveSkillContext(player, startEvent) {
 	try {
 		let ev = startEvent || (_status && _status.event) || null;
+		let foundId = null;
+		let ownerEvent = null;
 		for (let depth = 0; ev && depth < 7; depth++) {
 			const cand = [ev.skill, ev.sourceSkill, ev.skillName, ev.name];
+			let localId = null;
 			for (const id of cand) {
 				if (typeof id !== 'string' || !id || id === SKILL_ID) continue;
 				/* 真正 lib.skill 条目是技能对象；普通事件名 chooseTarget/phaseUse 等
 				 * 即使某些测试/扩展 Proxy 对未知 key 返回函数，也不能误认成技能。 */
 				const info = lib.skill && lib.skill[id];
-				if (info && typeof info === 'object') return { id: id, event: ev };
+				if (info && typeof info === 'object') {
+					localId = id;
+					break;
+				}
+			}
+			if (localId) {
+				if (!foundId) {
+					foundId = localId;
+					ownerEvent = ev;
+				} else if (localId === foundId) {
+					/* 子 choice event 可能复制同一个 skill/sourceSkill。继续向上收敛到
+					 * 同一技能最外层 owner，使连续阶段稳定共享 transaction。 */
+					ownerEvent = ev;
+				} else {
+					/* 遇到另一个真实技能说明跨入外层/嵌套技能边界，不能串 transaction。 */
+					break;
+				}
 			}
 			ev = _parentEventOf(ev);
 		}
-		return null;
+		return foundId ? { id: foundId, event: ownerEvent } : null;
 	} catch (e) { return null; }
 }
 
