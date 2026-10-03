@@ -298,12 +298,45 @@ export function eventAcceptsSkillTarget(next, player, target) {
 	} catch (e) { return false; }
 }
 
+function _eventFixedTargetCount(next) {
+	try {
+		if (!next) return null;
+		const st = next.selectTarget;
+		if (typeof st === 'number') return st >= 0 ? st : null;
+		if (Array.isArray(st) && st.length >= 2) {
+			const a = Number(st[0]), b = Number(st[1]);
+			if (Number.isFinite(a) && Number.isFinite(b) && a >= 0 && a === b) return a;
+			return null;
+		}
+		/* chooseTarget 默认单目标；只有事件对象已具 filterTarget/ai 且没显式 selectTarget 时才采用默认1。 */
+		if (st == null && typeof next.filterTarget === 'function') return 1;
+		return null;
+	} catch (e) { return null; }
+}
+
+export function eventAcceptsSkillTargetPlan(next, player, decision) {
+	try {
+		if (!decision || !decision.target) return false;
+		const planned = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
+		if (!eventAcceptsSkillTarget(next, player, planned[0])) return false;
+		if (planned.length <= 1) return true;
+		/* 只有 engine 与当前宿主事件都确认为同一个固定 N 目标选择，才桥整组。 */
+		if (decision.targetRangeResolved !== true) return false;
+		const fixed = _eventFixedTargetCount(next);
+		if (fixed !== planned.length) return false;
+		for (const t of planned) {
+			if (!eventAcceptsSkillTarget(next, player, t)) return false;
+		}
+		return true;
+	} catch (e) { return false; }
+}
+
 export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 	try {
 		if (!next || !player || !sid || !field) return next;
 		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
 		if (!decision) return next;
-		if (!eventAcceptsSkillTarget(next, player, decision.target)) return next;
+		if (!eventAcceptsSkillTargetPlan(next, player, decision)) return next;
 		if (typeof next[field] === 'function') next[field] = wrapSkillTargetAI(next[field], player, decision);
 
 		/* 很多本体技能是 chooseTarget(...).set('ai', fn)：
