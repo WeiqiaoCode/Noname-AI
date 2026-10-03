@@ -52,7 +52,7 @@ export function equipKind(id) {
 export function vetoCard(id, ctx, tgt) {
 	ctx = ctx || {};
 	const cat = classifyCard(id);
-	const t = tgt || bestTargetOf(ctx);
+	const t = ctx.targetLocked === true ? (tgt || null) : (tgt || bestTargetOf(ctx));
 	const isAlly = t ? !!t.isAlly : null;
 
 	/* ① 延时/控制打在队友身上 → 否决（解判定除外，由 target 解） */
@@ -81,10 +81,10 @@ export function vetoCard(id, ctx, tgt) {
 /* ---------- 基础优先级（越高先出，0-100） ----------
  * 反映五类出牌的先后标准：纯收益 > 补刀 > 及时防御 > 控制 > 输出 > 装备即时
  */
-export function basePriority(id, ctx) {
+export function basePriority(id, ctx, targetOverride) {
 	ctx = ctx || {};
 	const cat = classifyCard(id);
-	const t = bestTargetOf(ctx);
+	const t = ctx.targetLocked === true ? (targetOverride || null) : (targetOverride || bestTargetOf(ctx));
 	switch (cat) {
 		case 'gain': {
 			if (id === 'wuzhong' || id === 'wugu') return 100;                 // 纯收益神牌
@@ -99,10 +99,10 @@ export function basePriority(id, ctx) {
 			return 78;
 		}
 		case 'control': {
-			if (id === 'lebu')    return goodControlTarget(ctx) ? 88 : 30;
-			if (id === 'bingliang') return goodControlTarget(ctx) ? 82 : 30;
-			if (id === 'shunshou') return goodControlTarget(ctx) ? 84 : 40;
-			if (id === 'guohe')     return goodControlTarget(ctx) ? 84 : 40;
+			if (id === 'lebu')    return goodControlTarget(ctx, t) ? 88 : 30;
+			if (id === 'bingliang') return goodControlTarget(ctx, t) ? 82 : 30;
+			if (id === 'shunshou') return goodControlTarget(ctx, t) ? 84 : 40;
+			if (id === 'guohe')     return goodControlTarget(ctx, t) ? 84 : 40;
 			/* ★ 指令 02：tiesuo 不再有专用优先级——铁索的最终「使用/重铸」由
 			 * tiesuoEvaluator 唯一决定，本模块只保留 control 分类（默认 60）。 */
 			if (id === 'jiedao')    return (t && t.hasSha) ? 55 : 20;
@@ -111,7 +111,7 @@ export function basePriority(id, ctx) {
 		case 'output': {
 			if (id === 'sha' || id === 'huosha' || id === 'leisha') {
 				// 能补刀/目标低血/大概率无闪 → 大幅提高
-				if (t && canKill(ctx)) return 99;                              // 补刀硬规则
+				if (t && canKill(ctx, t)) return 99;                              // 补刀硬规则
 				const hit = t ? (1 - (t.shanProb || 0.5)) : 0.5;
 				const lowHp = t ? ((t.hp || 3) <= 1) : false;
 				return lowHp ? 74 : (hit > 0.6 ? 66 : 42);
@@ -127,7 +127,7 @@ export function basePriority(id, ctx) {
 				return 55;
 			}
 			if (id === 'zhujin') return (t && (t.hp || 3) <= 1) ? 80 : 45;     // 必中伤害，优先补刀
-			if (id === 'huogong') return canFireGui(ctx) ? 52 : 12;            // 能弃同花色且目标可算明牌才用
+			if (id === 'huogong') return canFireGui(ctx, t) ? 52 : 12;            // 能弃同花色且目标可算明牌才用
 			if (id === 'nanman' || id === 'wanjian') {
 				const resp = id === 'nanman' ? 'sha' : 'shan';
 				const net = aoeNet(ctx, resp);
@@ -212,8 +212,11 @@ export function decideCard(id, ctx, targetIndex) {
 			priority: 0, targetIndex: targetIndex, reason: '否决：' + v.reason,
 		};
 	}
-	const p = basePriority(id, ctx);
-	const tk = pickTarget(id, ctx);
+	const p = basePriority(id, ctx, tgt);
+	const locked = ctx.targetLocked === true;
+	const tk = locked
+		? { index: (typeof targetIndex === 'number' ? targetIndex : -1), score: 0, reason: tgt ? '沿用候选已绑定目标' : '无外部目标' }
+		: pickTarget(id, ctx);
 	return {
 		card: id, category: classifyCard(id),
 		veto: false, vetoReason: '',
@@ -241,14 +244,14 @@ function allyLowHpCount(ctx) {
 	(ctx.targets || []).forEach(function (t) { if (t.isAlly && (t.hp || 3) <= 1) n++; });
 	return n;
 }
-function goodControlTarget(ctx) {
+function goodControlTarget(ctx, targetOverride) {
 	// 控制牌：需要有威胁/即将行动/手满的目标才值得贴
-	const t = bestTargetOf(ctx);
+	const t = targetOverride || bestTargetOf(ctx);
 	if (!t || t.isAlly) return false;
 	return (t.handCount >= 4) || !!t.nextToAct || (t.threat || 0) >= 2;
 }
-function canKill(ctx) {
-	const targets = ctx.targets || [];
+function canKill(ctx, targetOverride) {
+	const targets = targetOverride ? [targetOverride] : (ctx.targetLocked === true ? [] : (ctx.targets || []));
 	for (let i = 0; i < targets.length; i++) {
 		const t = targets[i];
 		if (!t || t.isAlly) continue;
@@ -256,11 +259,11 @@ function canKill(ctx) {
 	}
 	return false;
 }
-function canFireGui(ctx) {
+function canFireGui(ctx, targetOverride) {
 	// 火攻：能弃同花色且目标有明牌/高血才用
 	let suit = false;
 	if (ctx.me && ctx.me.hasSuit) suit = true;
-	const t = bestTargetOf(ctx);
+	const t = targetOverride || bestTargetOf(ctx);
 	if (!t || t.isAlly) return false;
 	return suit && !t.tengjia;   // 打藤甲无效
 }
