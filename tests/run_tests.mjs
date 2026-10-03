@@ -4346,6 +4346,57 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(snap45.stages[1].choiceType, 'target', '10.45 snapshot stage1=target');
     eq(snap45.stages[2].choiceType, 'control', '10.45 snapshot stage2=control');
 
+    /* transaction 隔离：不同 owner / 不同 skill / close 后重开都不能串状态。 */
+    const isoOwner1_45 = {};
+    const isoOwner2_45 = {};
+    const iso1_45 = tx45.beginSkillChoiceStage(me45, { id: 'iso_skill_45', event: isoOwner1_45 }, 'card', {});
+    const iso2_45 = tx45.beginSkillChoiceStage(me45, { id: 'iso_skill_45', event: isoOwner2_45 }, 'card', {});
+    ok(iso1_45.transactionId !== iso2_45.transactionId,
+        '10.45 相同 skillId 但不同 owner event → transaction 隔离');
+    const isoOtherSkill45 = tx45.beginSkillChoiceStage(me45, { id: 'iso_other_45', event: isoOwner1_45 }, 'target', {});
+    ok(isoOtherSkill45.transactionId !== iso1_45.transactionId,
+        '10.45 同 owner event 切换到另一个真实 skillId → 新 transaction，不串技能');
+    const closeCtx45 = { id: 'close_skill_45', event: {} };
+    const close0_45 = tx45.beginSkillChoiceStage(me45, closeCtx45, 'card', {});
+    ok(tx45.closeSkillChoiceTransaction(closeCtx45, me45), '10.45 transaction 可显式关闭');
+    const close1_45 = tx45.beginSkillChoiceStage(me45, closeCtx45, 'target', {});
+    ok(close1_45.transactionId !== close0_45.transactionId,
+        '10.45 已关闭 transaction 再进入新阶段 → 创建新 transaction');
+
+    /* bounded provenance：未知宿主 result 不原样传播。 */
+    const boundedOwner45 = {};
+    const boundedCtx45 = { id: 'bounded_skill_45', event: boundedOwner45 };
+    const boundedStage45 = tx45.beginSkillChoiceStage(me45, boundedCtx45, 'button', {});
+    const unknownResult45 = { privateInternalObject: { secret: 45 } };
+    ok(tx45.completeSkillChoiceStage(boundedStage45, unknownResult45),
+        '10.45 unknown result 仍可标记阶段完成');
+    eq(boundedStage45.selection, null,
+        '10.45 unknown result 不原样进入 transaction，只保留白名单 selection 摘要');
+
+    /* active skill context 规范化：子事件复制同一 skill/sourceSkill 时收敛到最外层 owner。 */
+    const oldLibSkill45 = host45.lib.skill;
+    host45.lib.skill = Object.assign({}, oldLibSkill45);
+    host45.lib.skill.ctx_same_45 = {};
+    host45.lib.skill.ctx_outer_45 = {};
+    host45.lib.skill.ctx_inner_45 = {};
+    const outerSame45 = { skill: 'ctx_same_45' };
+    const childSame45 = { sourceSkill: 'ctx_same_45', parent: outerSame45 };
+    const leafSame45 = { name: 'chooseTarget', parent: childSame45 };
+    const resolvedSame45 = ao45.resolveActiveSkillContext(me45, leafSame45);
+    eq(resolvedSame45.id, 'ctx_same_45',
+        '10.45 resolveActiveSkillContext 识别同一 skillId');
+    eq(resolvedSame45.event, outerSame45,
+        '10.45 同一 skillId 沿父链收敛到最外层 owner event');
+
+    const outerOther45 = { skill: 'ctx_outer_45' };
+    const innerOther45 = { skill: 'ctx_inner_45', parent: outerOther45 };
+    const resolvedOther45 = ao45.resolveActiveSkillContext(me45, innerOther45);
+    eq(resolvedOther45.id, 'ctx_inner_45',
+        '10.45 嵌套另一个真实技能时保留最近的 inner skill');
+    eq(resolvedOther45.event, innerOther45,
+        '10.45 遇到不同真实 skillId 即停止向外串 transaction');
+    host45.lib.skill = oldLibSkill45;
+
     /* D. 独立 chooseCard：只做有界机会成本 tie-break。 */
     host45.get.owner = function () { return me45; };
     host45.get.value = function (card) { return card && card.v; };
@@ -4364,6 +4415,14 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(Math.abs(low45 - high45) <= 0.4, '10.45 独立 chooseCard：机会成本偏置保持有界');
     eq(cardChoice45.__djscSkillCardStageDecision.transactionId, cardStage45.transactionId,
         '10.45 chooseCard bridge 决策携带 transaction provenance');
+
+    const foreign45 = {};
+    host45.get.owner = function (card) { return card && card.owner; };
+    const ownedCardScore45 = cardChoice45.ai({ name: 'owned45', v: 2, owner: me45 });
+    const foreignCardScore45 = cardChoice45.ai({ name: 'foreign45', v: 2, owner: foreign45 });
+    ok(ownedCardScore45 < 5 && foreignCardScore45 === 5,
+        '10.45 独立 chooseCard 只对明确属于当前玩家的牌加机会成本；外部/未知所有者 fail-open');
+    host45.get.owner = function () { return me45; };
 
     const noCardBridgeNative45 = function () { return 5; };
     const noCardBridge45 = {
@@ -4452,6 +4511,12 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         && txSrc45.indexOf('__djscSkillChoiceTransaction') >= 0
         && txSrc45.indexOf('__djscSkillChoiceStage') >= 0,
         '10.45 transaction 显式记录 owner/stage/priorSelections provenance');
+    ok(src45.indexOf('localId === foundId') >= 0
+        && src45.indexOf('遇到另一个真实技能') >= 0,
+        '10.45 active skill context 对同技能父链规范化，遇到嵌套不同技能即截断');
+    ok(txSrc45.indexOf('stage.selection = _selectionSummary(result)') >= 0
+        && txSrc45.indexOf('|| result || null') < 0,
+        '10.45 transaction 不保留未知原始 result 对象');
 }
 
 /* ---------- 汇总 ---------- */
