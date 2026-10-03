@@ -4759,6 +4759,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.47 对局回放按“最终选择/原因/调整过程”展示');
     eq(replay47.indexOf('🎯 总线：') < 0, true,
         '10.47 回放默认不再用“总线 winner”内部术语作为主说明');
+
+    const conflict47 = fs47.readFileSync(join(_pkg, 'score', 'decision', 'analysis', 'conflictDetector.js'), 'utf8');
+    ok(conflict47.indexOf('这里只记录意见不同，不代表模型已接管') >= 0,
+        '10.47 对局冲突提示明确说明“分歧≠模型接管”');
 }
 
 /* ---------- 汇总 ---------- */
