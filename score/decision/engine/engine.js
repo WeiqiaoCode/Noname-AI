@@ -2175,6 +2175,30 @@ function applyBasicCardPlayRules(me, acts, bestT) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
+/* ★ Skill Decision Kernel V2：宿主合法目标过滤
+ * 只在可以安全静态判定时排除非法目标；复杂/依赖选牌/事件态的 filterTarget 一律 fail-open。
+ */
+function _skillTargetDependsOnCard(filterTarget) {
+	try {
+		if (typeof filterTarget !== 'function') return false;
+		const src = filterTarget.toString();
+		const body = src.indexOf('=>') >= 0 ? src.slice(src.indexOf('=>') + 2) : src.slice(src.indexOf('{') + 1);
+		return /\bcard\b/.test(body);
+	} catch (e) { return true; }
+}
+
+function _isLegalSkillTarget(sid, me, target) {
+	try {
+		const sk = lib.skill && lib.skill[sid];
+		if (!sk || typeof sk.filterTarget !== 'function') return true;
+		const dependsOnCard = _skillTargetDependsOnCard(sk.filterTarget);
+		let r;
+		try { r = sk.filterTarget(null, me, target); } catch (e) { return true; }
+		if (r === false && dependsOnCard) return true;   /* 选牌前无法确证非法 */
+		return r !== false;
+	} catch (e) { return true; }
+}
+
 /* ★ 基本技能决策标准接入层
  * 在 acts.sort 之前对 skill 候选应用 skillPlayBrain 的三段式标准：
  *   - 硬否决（负收益/自伤/时机不符/无可控敌）→ 压到接近结束回合
@@ -2231,7 +2255,32 @@ function applyBasicSkillRules(me, acts) {
 			let prof = null;
 			try { prof = skillProfileOf(sid); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 			if (!prof) return;
-			const d = decideSkill(sid, prof, ctx);
+
+			/* 每个技能都用自己的 filterTarget 生成合法候选，禁止“全体玩家池”直接复用。
+			 * 例如炜烈 target.isDamaged()：满血角色不会再进入推荐目标。 */
+			const skillTargets = targets.filter(function (t) {
+				return t && t.pp && _isLegalSkillTarget(sid, me, t.pp);
+			});
+			const skillCtx = Object.assign({}, ctx, { targets: skillTargets });
+			const d = decideSkill(sid, prof, skillCtx);
+
+			/* 高置信单方向技能没有合法/合理目标时，直接压制本轮发动；
+			 * mixed/低置信技能仍 fail-open 交给宿主。 */
+			const ti = prof.targets && prof.targets.intent;
+			const tc = prof.targets ? Number(prof.targets.confidence || 0) : 0;
+			const directional = (ti === 'support' || ti === 'offense') && tc >= 0.55;
+			if (!d.veto && directional && d.targetIndex < 0 && skillTargets.length > 0) {
+				a.score = Math.min(a.score, -6);
+				a.reason = (a.reason || '') + '（[技能目标否决] 无合法' + (ti === 'support' ? '友方' : '敌方') + '目标）';
+				a.rule = 'veto-target';
+				return;
+			}
+			if (!d.veto && directional && skillTargets.length === 0) {
+				a.score = Math.min(a.score, -6);
+				a.reason = (a.reason || '') + '（[技能目标否决] 无合法目标）';
+				a.rule = 'veto-target';
+				return;
+			}
 			if (d.veto) {
 				a.score = Math.min(a.score, -6);
 				a.reason = (a.reason || '') + '（[技能否决] ' + d.vetoReason + '）';
@@ -2243,7 +2292,7 @@ function applyBasicSkillRules(me, acts) {
 				/* ★ 按技能自身类别写回【专属目标】：敌方技→真敌，己方辅助/增益→真友
 				 *   修复此前技能 act 从不携带 target，导致"限制敌方技能"与"给己方摸牌技能"都落到同一无名目标 */
 				if (typeof d.targetIndex === 'number' && d.targetIndex >= 0) {
-					const tk = targets[d.targetIndex];
+					const tk = skillTargets[d.targetIndex];
 					if (tk && tk.pp) {
 						a.target = tk.pp.name1 || tk.pp.name || '';
 						a.targetObj = tk.pp;
@@ -2261,7 +2310,7 @@ function applyBasicSkillRules(me, acts) {
 				if (Array.isArray(d.targetIndexes)) {
 					const list = [];
 					d.targetIndexes.forEach(function (ti) {
-						const tt = targets[ti];
+						const tt = skillTargets[ti];
 						if (tt && tt.pp && list.indexOf(tt.pp) < 0) list.push(tt.pp);
 					});
 					if (list.length) {
