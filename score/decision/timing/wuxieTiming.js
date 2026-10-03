@@ -28,23 +28,24 @@ import { evaluateWuxie } from '../response/wuxieEvaluator.js';
  */
 export function wuxieTiming(me, target, spellId) {
 	try {
-		if (!me || !spellId) return { use: false, reason: '缺少上下文，交回原生' };
+		if (!me || !spellId) return { resolved: false, use: null, reason: '缺少上下文，交回原生' };
 		const r = evaluateWuxie(me, null, { originalSpellId: spellId, target: target || null });
-		if (!r.resolved) return { use: false, reason: '上下文待定：' + r.reason };
-		return { use: !!r.use, reason: r.reason };
+		if (!r.resolved) return { resolved: false, use: null, reason: '上下文待定：' + r.reason };
+		return { resolved: true, use: !!r.use, reason: r.reason };
 	} catch (e) {
-		return { use: false, reason: '出错了' };
+		return { resolved: false, use: null, reason: '出错，交回原生' };
 	}
 }
 
-/* ★ 无懈可击使用评分加成（只影响打分，不构成最终政策） */
+/* ★ 无懈可击使用评分加成（只影响打分，不构成最终政策）。
+ * unresolved 必须结构化 fail-open，禁止再靠中文 reason 文本判断。 */
 export function wuxieBonus(me, act) {
 	try {
 		if (!act || act.id !== 'wuxie') return 1.0;
 
 		const timing = wuxieTiming(me, act.target, act.spellId);
+		if (!timing.resolved) return 1.0;
 		if (timing.use) return 1.5;
-		if (timing.reason && timing.reason.indexOf('待定') >= 0) return 1.0;   /* fail-open：不做惩罚 */
 		return 0.5;   /* resolved 且建议保留 → 打分提示留牌 */
 	} catch (e) {
 		return 1.0;
