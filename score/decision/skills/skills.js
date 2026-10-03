@@ -159,6 +159,10 @@ function _mergeTagsMax(a, b) {
 			} else {
 				out[k] = av + bv;
 			}
+		} else if (k === '__targetIntent' || k === '__targetInferred') {
+			/* scanner 的非数值目标语义也必须保留；ID 表只负责显式标签，
+			 * 不应把源码推断的 provenance 静默丢掉。 */
+			if (b[k] !== null && b[k] !== undefined) out[k] = b[k];
 		}
 	}
 	return out;
