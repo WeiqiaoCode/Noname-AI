@@ -18,8 +18,9 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
+import { skillProfileOf } from '../skills/skills.js';
 import { cfg } from '../../foundation/config/util.js';
-import { isAllyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
+import { isAllyOf, dispositionOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 
 const SKILL_ID = '_djsc_engine';
 
@@ -35,8 +36,12 @@ export function isRecastRecommended(ba) {
 const CACHE = new Map();          // player → { key, value }
 let _installed = false;
 let _protoHooked = false;
-/* ★ M09：备份被换装的三个底层方法原引用，卸载时原样还原，避免热重载残留 */
-const _protoBackup = { addSkill: null, getSkills: null, gameCheck: null };
+let _skillTargetHooked = false;
+/* ★ M09：备份被换装的底层方法原引用，卸载时原样还原，避免热重载残留 */
+const _protoBackup = {
+	addSkill: null, getSkills: null, gameCheck: null,
+	chooseTarget: null, chooseCardTarget: null,
+};
 
 /* ================= ★ 软接管打点（决策级去重） ================= */
 const _softCounted = new Map();  // player → round标记
@@ -129,6 +134,276 @@ function _cardMatches(card, player, rule) {
 	} catch (e) { return false; }
 }
 
+/* ================= ★ Skill Decision Kernel V2 · 宿主目标桥 =================
+ * 内部 engine 已经决定“哪个技能 + 哪个目标”后，把该高置信方向作为有限偏置
+ * 注入真实 chooseTarget / chooseCardTarget 事件。
+ * 不修改 filterTarget，不制造非法目标；无法解析技能/目标时完全 fail-open。
+ */
+
+function _samePlayer(a, b) {
+	if (!a || !b) return false;
+	if (a === b) return true;
+	try {
+		const ak = a.playerid || a.name1 || a.name || '';
+		const bk = b.playerid || b.name1 || b.name || '';
+		return !!ak && ak === bk;
+	} catch (e) { return false; }
+}
+
+function _parentEventOf(ev) {
+	try {
+		if (!ev) return null;
+		if (typeof ev.getParent === 'function') {
+			const p = ev.getParent();
+			if (p && p !== ev) return p;
+		}
+		return ev.parent || null;
+	} catch (e) { return null; }
+}
+
+export function resolveActiveSkillContext(player, startEvent) {
+	try {
+		let ev = startEvent || (_status && _status.event) || null;
+		for (let depth = 0; ev && depth < 7; depth++) {
+			const cand = [ev.skill, ev.sourceSkill, ev.skillName, ev.name];
+			for (const id of cand) {
+				if (typeof id !== 'string' || !id || id === SKILL_ID) continue;
+				/* 真正 lib.skill 条目是技能对象；普通事件名 chooseTarget/phaseUse 等
+				 * 即使某些测试/扩展 Proxy 对未知 key 返回函数，也不能误认成技能。 */
+				const info = lib.skill && lib.skill[id];
+				if (info && typeof info === 'object') return { id: id, event: ev };
+			}
+			ev = _parentEventOf(ev);
+		}
+		return null;
+	} catch (e) { return null; }
+}
+
+export function resolveActiveSkillId(player, startEvent) {
+	const ctx = resolveActiveSkillContext(player, startEvent);
+	return ctx ? ctx.id : null;
+}
+
+function _findActionTarget(ba) {
+	try {
+		if (!ba) return null;
+		if (ba.targetObj && typeof ba.targetObj === 'object') return ba.targetObj;
+		const name = Array.isArray(ba.target) ? ba.target[0] : ba.target;
+		if (!name) return null;
+		for (const p of (game.players || [])) {
+			if (!p) continue;
+			if ((p.playerid || '') === name || (p.name1 || p.name || '') === name) return p;
+		}
+		return null;
+	} catch (e) { return null; }
+}
+
+export function getSkillTargetBridgeDecision(player, sid, baOverride) {
+	try {
+		if (!player || !sid) return null;
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
+		/* 只桥接真正经过 kernel 合法目标池解析成功的高置信单目标动作。
+		 * 手工 ID 表（confidence=1）与源码推断都可进入；旧 action / mixed / 多目标均 fail-open。 */
+		const confidence = Number(ba.targetConfidence || 0);
+		if (ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55) return null;
+		const target = _findActionTarget(ba);
+		if (!target) return null;
+		const purpose = ba.purpose || ((ba.rule === 'attack' || ba.rule === 'control') ? 'attack'
+			: ((ba.rule === 'defense' || ba.rule === 'aux') ? 'support' : null));
+		if (purpose !== 'attack' && purpose !== 'support') return null;
+		if (ba.targetIntent === 'support' && purpose !== 'support') return null;
+		if (ba.targetIntent === 'offense' && purpose !== 'attack') return null;
+		if (ba.targetIntent !== 'support' && ba.targetIntent !== 'offense') return null;
+		return {
+			skillId: sid,
+			target: target,
+			targetName: target.playerid || target.name1 || target.name || '',
+			purpose: purpose,
+			intent: ba.targetIntent,
+			confidence: confidence,
+			score: Number(ba.score || 0),
+		};
+	} catch (e) { return null; }
+}
+
+export function wrapSkillTargetAI(original, player, decision) {
+	if (!decision || !player) return original;
+	if (original && original.__djscSkillTargetBridge === decision.skillId + '|' + decision.targetName) return original;
+	const wrapped = function (target) {
+		let nativeScore = 0;
+		try {
+			if (typeof original === 'function') {
+				const n = Number(original.apply(this, arguments));
+				if (Number.isFinite(n)) nativeScore = n;
+			}
+		} catch (e) {}
+		try {
+			if (!target) return nativeScore;
+			if (_samePlayer(target, decision.target)) return Math.max(nativeScore, 12);
+			const rel = dispositionOf(player, target);
+			if (decision.purpose === 'support') {
+				if (rel < 0) return Math.min(nativeScore, -12);
+				if (rel > 0) return nativeScore + 1.5;
+				return nativeScore - 1;
+			}
+			if (decision.purpose === 'attack') {
+				if (rel > 0) return Math.min(nativeScore, -12);
+				if (rel < 0) return nativeScore + 1.5;
+				return nativeScore - 1;
+			}
+		} catch (e) {}
+		return nativeScore;
+	};
+	try {
+		Object.defineProperty(wrapped, '__djscSkillTargetBridge', {
+			value: decision.skillId + '|' + decision.targetName,
+			configurable: true,
+		});
+	} catch (e) {}
+	return wrapped;
+}
+
+function _eventFilterDependsOnCard(filterTarget) {
+	try {
+		if (typeof filterTarget !== 'function') return false;
+		const src = filterTarget.toString();
+		const body = src.indexOf('=>') >= 0 ? src.slice(src.indexOf('=>') + 2) : src.slice(src.indexOf('{') + 1);
+		return /\bcard\b/.test(body);
+	} catch (e) { return true; }
+}
+
+export function eventAcceptsSkillTarget(next, player, target) {
+	try {
+		if (!next || !target) return false;
+		const ft = next.filterTarget;
+		if (typeof ft !== 'function') return true;
+		/* chooseCardTarget 的合法性如果依赖尚未选定的 card，就不猜。 */
+		if (_eventFilterDependsOnCard(ft)) return false;
+		try { return ft(null, player, target) !== false; } catch (e) { return false; }
+	} catch (e) { return false; }
+}
+
+export function bridgeSkillTargetChoiceOnce(next, player, skillContext, field, baOverride) {
+	try {
+		if (!skillContext || !skillContext.id) return next;
+		const ownerEvent = skillContext.event || null;
+		if (ownerEvent && ownerEvent.__djscSkillTargetBridgeConsumed) return next;
+		const out = bridgeSkillTargetEvent(next, player, skillContext.id, field, baOverride);
+		if (out && out.__djscSkillTargetDecision && ownerEvent) {
+			try {
+				ownerEvent.__djscSkillTargetBridgeConsumed = {
+					skillId: skillContext.id,
+					target: out.__djscSkillTargetDecision.targetName,
+				};
+			} catch (e) {}
+		}
+		return out;
+	} catch (e) { return next; }
+}
+
+export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
+	try {
+		if (!next || !player || !sid || !field) return next;
+		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
+		if (!decision) return next;
+		if (!eventAcceptsSkillTarget(next, player, decision.target)) return next;
+		if (typeof next[field] === 'function') next[field] = wrapSkillTargetAI(next[field], player, decision);
+
+		/* 很多本体技能是 chooseTarget(...).set('ai', fn)：
+		 * 拦截这个“后写 ai”，否则刚桥接完又会被技能自己的 set 覆盖。 */
+		if (typeof next.set === 'function' && !next.__djscSkillTargetSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === field && typeof value === 'function') {
+					value = wrapSkillTargetAI(value, player, decision);
+				}
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillTargetSetBridge = true; } catch (e) {}
+		}
+		try {
+			next.__djscSkillTargetDecision = decision;
+			_softStat(player);
+		} catch (e) {}
+		return next;
+	} catch (e) { return next; }
+}
+
+function _hookSkillTargetChoice() {
+	if (_skillTargetHooked) return;
+	try {
+		const proto = lib.element && lib.element.Player && lib.element.Player.prototype;
+		if (!proto) return;
+
+		const origChooseTarget = proto.chooseTarget;
+		if (typeof origChooseTarget === 'function') {
+			_protoBackup.chooseTarget = origChooseTarget;
+			proto.chooseTarget = function () {
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
+				const next = origChooseTarget.apply(this, arguments);
+				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai') : next;
+			};
+		}
+
+		const origChooseCardTarget = proto.chooseCardTarget;
+		if (typeof origChooseCardTarget === 'function') {
+			_protoBackup.chooseCardTarget = origChooseCardTarget;
+			proto.chooseCardTarget = function () {
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
+				const next = origChooseCardTarget.apply(this, arguments);
+				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2') : next;
+			};
+		}
+		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget);
+	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+}
+
+/* ================= ★ 原生 skill effect 方向守卫 =================
+ * 与 bestAction 无关：当无名杀原生 AI 自己评估某个主动技能目标时，也统一消费
+ * Skill Decision Kernel 的 target intent，防止“内部认为不该资敌，但原生技能 AI 绕过”。
+ */
+
+export function skillTargetDirectionAdjustment(intent, confidence, relation) {
+	const c = Number(confidence || 0);
+	if (c < 0.55) return 0;
+	if (intent === 'support') {
+		if (relation < 0) return -12;
+		if (relation > 0) return 1.5;
+		return -1;
+	}
+	if (intent === 'offense') {
+		if (relation > 0) return -12;
+		if (relation < 0) return 1.5;
+		return -1;
+	}
+	return 0;
+}
+
+function _skillIdFromEffectSubject(subject) {
+	try {
+		if (typeof subject !== 'string' || !subject) return null;
+		const sk = lib.skill && lib.skill[subject];
+		return sk && typeof sk === 'object' ? subject : null;
+	} catch (e) { return null; }
+}
+
+export function skillDirectionEffectModifier(subject, player, target) {
+	try {
+		const sid = _skillIdFromEffectSubject(subject);
+		if (!sid || !player || !target) return null;
+		const prof = skillProfileOf(sid);
+		if (!prof || !prof.targets) return null;
+		const intent = prof.targets.intent;
+		const confidence = Number(prof.targets.confidence || 0);
+		if (intent !== 'support' && intent !== 'offense') return null;
+		const rel = dispositionOf(player, target);
+		const delta = skillTargetDirectionAdjustment(intent, confidence, rel);
+		if (!delta) return null;
+		return [1, delta];
+	} catch (e) { return null; }
+}
+
 /* ---------- 安装 ---------- */
 export function installAIOverride() {
 	if (_installed || lib.skill[SKILL_ID]) return;
@@ -196,6 +471,12 @@ export function installAIOverride() {
 					player(card, player, target) {
 						try {
 							if (get.itemtype(target) !== 'player') return;
+
+							/* ★ 技能方向先于 bestAction：原生技能 AI 评估也必须遵守统一敌友语义。
+							 * 这样即使该技能被 engine 降权、没有成为 bestAction，也不能绕过去资敌。 */
+							const skillDir = skillDirectionEffectModifier(card, player, target);
+							if (skillDir) return skillDir;
+
 							const ba = _getBA(player);
 							if (!ba) return;
 
@@ -256,6 +537,7 @@ export function installAIOverride() {
 
 		_hookAddSkill();
 		_hookRoundChange();
+		_hookSkillTargetChoice();
 
 		_installed = true;
 		try { if (game.log) game.log('决策积分引擎：原生 AI 软接管层已安装（aiOrder + aiValue + effect + useful）'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -318,12 +600,14 @@ function _hookRoundChange() {
 /* ---------- 卸载 ---------- */
 export function uninstallAIOverride() {
 	try { _clearCache(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-	/* ★ M09：还原被换装的三个底层方法（仅当仍是我们的包装时才还原，避免误伤第三方） */
+	/* ★ M09：还原被换装的底层方法（仅当仍是我们的包装时才还原，避免热重载残留） */
 	try {
 		var proto = (lib && lib.element && lib.element.Player) ? lib.element.Player.prototype : null;
 		if (proto) {
 			if (_protoBackup.addSkill && proto.addSkill !== _protoBackup.addSkill) proto.addSkill = _protoBackup.addSkill;
 			if (_protoBackup.getSkills && proto.getSkills !== _protoBackup.getSkills) proto.getSkills = _protoBackup.getSkills;
+			if (_protoBackup.chooseTarget && proto.chooseTarget !== _protoBackup.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
+			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget !== _protoBackup.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
 		}
 		var g = (typeof game !== 'undefined') ? game : null;
 		if (g && _protoBackup.gameCheck && g.check !== _protoBackup.gameCheck) g.check = _protoBackup.gameCheck;
@@ -333,6 +617,7 @@ export function uninstallAIOverride() {
 		if (typeof game !== 'undefined') game.__djsc_check_hooked = false;
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	_protoHooked = false;
+	_skillTargetHooked = false;
 	try { delete lib.skill[SKILL_ID]; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	(game.players || []).forEach(function (p) {
 		try { p.removeSkill(SKILL_ID); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }

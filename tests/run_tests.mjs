@@ -3397,6 +3397,342 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.42 engine 缺少实时 spell context 时 wuxieBonus 保持中性 1.0');
 }
 
+
+/* ================= 10.43 Skill Decision Kernel V2 =================
+ * A. 裸 target 不再等价于敌人：效果语义决定 support/offense；
+ * B. 未登记的新技能能自动生成 __targets / intent / confidence；
+ * C. 每技能先过宿主 filterTarget，复杂依赖选牌时 fail-open；
+ * D. support/offense 只在正确关系目标中推荐；
+ * E. chooseTarget / chooseCardTarget 宿主桥可承接推荐目标，且 .set('ai') 后写不会覆盖；
+ * F. 无高置信/不匹配 skill action 时完全 fail-open。
+ */
+{
+    const fs43 = await import('node:fs');
+    const sc43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillScanner.js')).href);
+    const sk43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skills.js')).href);
+    const sp43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js')).href);
+    const eng43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'engine', 'engine.js')).href);
+    const ao43 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js')).href);
+    const host43 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'host.js')).href);
+
+    /* A1. 增益作用于 target → support/ally，不再误判“资敌”。 */
+    const supportSrc43 = `
+        async function content(event, trigger, player) {
+            const { target } = event;
+            await target.recover();
+            if (target.isDamaged()) await target.draw(2);
+        }
+    `;
+    const support43 = sc43.scanObjectMethod(supportSrc43, { skill: { enable: 'phaseUse' } });
+    ok((support43.recover || 0) > 0, '10.43 target.recover → 正向 recover');
+    ok((support43.draw || 0) > 0, '10.43 target.draw → 正向 draw');
+    eq(Number(support43.feedRecover || 0), 0, '10.43 target.recover 不再默认 feedRecover');
+    eq(Number(support43.feedDraw || 0), 0, '10.43 target.draw 不再默认 feedDraw');
+    eq(support43.__targetIntent, 'support', '10.43 增益 target 自动识别 support');
+    eq((support43.__targets || [])[0], 'ally', '10.43 增益 target 自动生成 ally 目标');
+    ok((support43.__targetConfidence || 0) >= 0.7 && (support43.__targetConfidence || 0) < 1,
+        '10.43 自动 support 推断为高但非满置信度');
+
+    /* A2. 负面作用于 target → offense/enemy。 */
+    const offense43 = sc43.scanObjectMethod(`
+        function content(event, trigger, player) {
+            event.target.damage();
+            event.target.discard();
+        }
+    `, { skill: { enable: 'phaseUse' } });
+    ok((offense43.damage || 0) > 0, '10.43 target.damage → 对敌正收益 damage');
+    ok((offense43.discardEnemy || 0) > 0, '10.43 target.discard → 对敌正收益 discardEnemy');
+    eq(offense43.__targetIntent, 'offense', '10.43 负面 target 自动识别 offense');
+    eq((offense43.__targets || [])[0], 'enemy', '10.43 负面 target 自动生成 enemy 目标');
+
+    /* A3. 同时有明显正负目标效果 → mixed，不强行单方向。 */
+    const mixed43 = sc43.scanObjectMethod(`
+        function content(event) {
+            event.target.recover();
+            event.target.damage();
+        }
+    `, { skill: { enable: 'phaseUse' } });
+    eq(mixed43.__targetIntent, 'mixed', '10.43 正负目标效果并存 → mixed');
+    ok((mixed43.__targets || []).includes('ally') && (mixed43.__targets || []).includes('enemy'),
+        '10.43 mixed 同时保留 ally/enemy');
+
+    /* A4. 语义本身有歧义的效果不能仅凭 target 名字强推敌友。 */
+    const ambiguous43 = sc43.scanObjectMethod(`
+        function content(event) {
+            event.target.addSkill('some_skill');
+            event.target.turnOver();
+        }
+    `, { skill: { enable: 'phaseUse' } });
+    eq(ambiguous43.__targetIntent, undefined,
+        '10.43 addSkill/turnOver 等歧义效果无显式关系证据 → 不自动定向');
+    eq((ambiguous43.__targets || []).length, 0,
+        '10.43 歧义目标效果保持 fail-open，不生成 ally/enemy 目标');
+
+    /* B. 模拟“炜烈类”未知技能：不写 ID 特判，源码扫描自动形成 ally/support profile。 */
+    const SID43 = 'kernel_support_fixture_alpha';
+    host43.lib.skill[SID43] = {
+        enable: 'phaseUse',
+        filterTarget: (card, player, target) => target.isDamaged(),
+        filterCard: true,
+        content: async function (event, trigger, player) {
+            const target = event.target;
+            await target.recover();
+            if (target.isDamaged()) await target.draw(2);
+        },
+    };
+    host43.lib.translate[SID43 + '_info'] = '弃置一张牌，令一名已受伤角色回复体力，若仍受伤则摸牌。';
+    sk43.scanReset();
+    const tags43 = sk43.skillTagsOf(SID43);
+    const prof43 = sk43.skillProfileOf(SID43);
+    eq((tags43.__targets || [])[0], 'ally', '10.43 未登记技能自动得到 ally targets');
+    eq(tags43.__targetIntent, 'support', '10.43 未登记技能自动得到 support intent');
+    eq(prof43.targets.category, 'ally', '10.43 profile 目标类别=ally');
+    eq(prof43.targets.intent, 'support', '10.43 profile 保留 support intent');
+    ok(prof43.targets.confidence >= 0.7 && prof43.targets.confidence < 1,
+        '10.43 profile 保留自动推断置信度且不冒充手工 1.0');
+
+    /* C. filterTarget 合法性：已受伤可选，满血不可选。 */
+    const me43 = { name: 'me43', name1: 'me43', playerid: 'me43' };
+    const allyDamaged43 = {
+        name: 'allyDamaged43', name1: 'allyDamaged43', playerid: 'allyDamaged43',
+        hp: 2, maxHp: 4, isDamaged: () => true,
+    };
+    const allyFull43 = {
+        name: 'allyFull43', name1: 'allyFull43', playerid: 'allyFull43',
+        hp: 4, maxHp: 4, isDamaged: () => false,
+    };
+    const enemyDamaged43 = {
+        name: 'enemyDamaged43', name1: 'enemyDamaged43', playerid: 'enemyDamaged43',
+        hp: 2, maxHp: 4, isDamaged: () => true,
+    };
+    eq(eng43._isLegalSkillTarget(SID43, me43, allyDamaged43), true,
+        '10.43 filterTarget：受伤角色合法');
+    eq(eng43._isLegalSkillTarget(SID43, me43, allyFull43), false,
+        '10.43 filterTarget：满血角色非法');
+
+    /* 依赖所选卡牌的 filterTarget：预选阶段不能确证非法 → fail-open。 */
+    const CARD_DEP43 = 'kernel_carddep_fixture_alpha';
+    host43.lib.skill[CARD_DEP43] = {
+        enable: 'phaseUse',
+        filterCard: true,
+        filterTarget: function (card, player, target) { return !!card && target.isDamaged(); },
+        content: function () {},
+    };
+    eq(eng43._isLegalSkillTarget(CARD_DEP43, me43, allyDamaged43), true,
+        '10.43 card-dependent filterTarget 在无 card 快照时 fail-open');
+
+    /* C2. self-only 技能不能被“无外部目标”规则误伤；target intent 高于粗分类。 */
+    eq(eng43._skillNeedsExternalTarget('self_only_43', { tags: { __targets: ['self'] } }), false,
+        '10.43 self-only 技能不要求外部目标');
+    eq(eng43._skillNeedsExternalTarget('ally_skill_43', { tags: { __targets: ['ally'] } }), true,
+        '10.43 ally 技能要求外部目标');
+    eq(eng43._skillPurposeFromIntent('support', 'draw', 0.75), 'support',
+        '10.43 support intent 覆盖 category=draw，避免把给牌/摸牌辅助误映射 attack');
+    eq(eng43._skillPurposeFromIntent('support', 'draw', 0.4), null,
+        '10.43 低置信 support intent 不生成宿主强方向');
+    eq(eng43._skillPurposeFromIntent('mixed', 'attack', 1), null,
+        '10.43 mixed intent 不被粗分类强制成单方向');
+
+    /* C3. 原生 skill effect 方向守卫不依赖 bestAction。 */
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.75, -1), -12,
+        '10.43 原生技能评估：support→敌方 强负修正');
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.75, 1), 1.5,
+        '10.43 原生技能评估：support→友方 正修正');
+    eq(ao43.skillTargetDirectionAdjustment('offense', 0.75, 1), -12,
+        '10.43 原生技能评估：offense→友方 强负修正');
+    eq(ao43.skillTargetDirectionAdjustment('offense', 0.75, -1), 1.5,
+        '10.43 原生技能评估：offense→敌方 正修正');
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.4, -1), 0,
+        '10.43 低置信 intent 不干预原生技能 effect');
+    eq(eng43._isSingleTargetSkillProfile({
+        tags: { __targets: ['enemy', 'multi'], __scope: 'any1' },
+        targets: { category: 'enemy' },
+    }, { targetIndexes: [0] }), false,
+        '10.43 multi 语义技能即使当前只剩一个目标也不能进入单目标宿主桥');
+    eq(eng43._isSingleTargetSkillProfile({
+        tags: { __targets: ['ally'], __scope: 'any1' },
+        targets: { category: 'ally' },
+    }, { targetIndexes: [0] }), true,
+        '10.43 明确单目标 support profile 可进入单目标桥');
+
+    const SELF43 = 'kernel_self_fixture_alpha';
+    host43.lib.skill[SELF43] = {
+        enable: 'phaseUse',
+        filterTarget: function (card, player, target) { return player === target; },
+        content: function () {},
+    };
+    eq(eng43._canConfirmSelfSkillTarget(SELF43, me43, {
+        tags: { __targets: ['ally', 'self'] },
+        targets: { intent: 'support' },
+    }), true, '10.43 ally+self 技能可确证 self 合法时纳入候选池');
+
+    /* D. support profile 只推荐真友；只有敌方合法目标时 targetIndex=-1。 */
+    const ctxAlly43 = {
+        me: { hp: 4, maxHp: 4 },
+        targets: [{ pp: allyDamaged43, isAlly: true, isEnemy: false, hp: 2, maxHp: 4, threat: 1 }],
+    };
+    const ctxEnemy43 = {
+        me: { hp: 4, maxHp: 4 },
+        targets: [{ pp: enemyDamaged43, isAlly: false, isEnemy: true, hp: 2, maxHp: 4, threat: 2 }],
+    };
+    eq(sp43.decideSkill(SID43, prof43, ctxAlly43).targetIndex, 0,
+        '10.43 support 技能存在合法友方 → 推荐友方');
+    eq(sp43.decideSkill(SID43, prof43, ctxEnemy43).targetIndex, -1,
+        '10.43 support 技能只有敌方 → 不推荐资敌目标');
+
+    /* E. 宿主桥：推荐目标获得强正分；技能随后 .set('ai', ...) 也不会覆盖桥。 */
+    host43.game.players = [me43, allyDamaged43, enemyDamaged43];
+    const ba43 = {
+        type: 'skill', id: SID43, targetObj: allyDamaged43,
+        target: 'allyDamaged43', purpose: 'support', rule: 'defense', score: 8,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+        skillTargetResolved: true, skillTargetSingle: true,
+    };
+    const event43 = {
+        ai: function () { return 0; },
+        filterTarget: function (card, player, target) { return target.isDamaged(); },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(event43, me43, SID43, 'ai', ba43);
+    ok(event43.ai(allyDamaged43) >= 12,
+        '10.43 chooseTarget bridge 把内部推荐目标真正映射到宿主 ai');
+    event43.set('ai', function () { return 0; });
+    ok(event43.ai(allyDamaged43) >= 12,
+        '10.43 技能后续 .set(\'ai\') 仍保留目标桥');
+
+    const eventCardTarget43 = {
+        ai2: function () { return 0; },
+        filterTarget: function (_card, player, target) { return target.isDamaged(); },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(eventCardTarget43, me43, SID43, 'ai2', ba43);
+    ok(eventCardTarget43.ai2(allyDamaged43) >= 12,
+        '10.43 chooseCardTarget 的 ai2 同样桥接推荐目标');
+
+    /* E2. 当前具体选择事件不接受推荐目标 → 不桥接。 */
+    const rejectedNative43 = function () { return 4; };
+    const rejectedEvent43 = {
+        ai: rejectedNative43,
+        filterTarget: function (_card, _player, target) { return target !== allyDamaged43; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(rejectedEvent43, me43, SID43, 'ai', ba43);
+    eq(rejectedEvent43.ai, rejectedNative43,
+        '10.43 当前 chooseTarget filterTarget 拒绝推荐目标 → 原生 AI 完全不改');
+
+    /* E3. mixed / 低置信 / 未经 kernel 解析 → 一律 fail-open。 */
+    const lowNative43 = function () { return 2; };
+    const lowEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(lowEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetConfidence: 0.4,
+    }));
+    eq(lowEvent43.ai, lowNative43, '10.43 低置信目标策略 → 不桥接');
+
+    const mixedEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(mixedEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetIntent: 'mixed', targetConfidence: 1,
+    }));
+    eq(mixedEvent43.ai, lowNative43, '10.43 mixed 技能 → 不桥接');
+
+    const unprovenEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(unprovenEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        skillTargetResolved: false,
+    }));
+    eq(unprovenEvent43.ai, lowNative43, '10.43 未经 kernel 合法目标解析 → 不桥接');
+
+    /* E4. 手工 ID 表等显式高置信策略也可桥接，不要求 inferred=true。 */
+    const explicitEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(explicitEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetConfidence: 1, targetInferred: false,
+        skillTargetResolved: true, skillTargetSingle: true,
+    }));
+    ok(explicitEvent43.ai(allyDamaged43) >= 12,
+        '10.43 显式已知技能的高置信已解析目标也可进入宿主桥');
+
+    /* E5. 同一次技能发动只消费一次通用目标桥，后续选择回原生。 */
+    const ownerEvent43 = { skill: SID43 };
+    const onceCtx43 = { id: SID43, event: ownerEvent43 };
+    const firstOnce43 = {
+        ai: function () { return 0; },
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetChoiceOnce(firstOnce43, me43, onceCtx43, 'ai', ba43);
+    ok(firstOnce43.ai(allyDamaged43) >= 12,
+        '10.43 同次技能第一次目标事件消费通用桥');
+    ok(!!ownerEvent43.__djscSkillTargetBridgeConsumed,
+        '10.43 第一次桥接后在技能事件记录 consumed');
+    const secondNative43 = function () { return 6; };
+    const secondOnce43 = {
+        ai: secondNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetChoiceOnce(secondOnce43, me43, onceCtx43, 'ai', ba43);
+    eq(secondOnce43.ai, secondNative43,
+        '10.43 同次技能第二次目标事件 fail-open，不重复绑定第一目标');
+
+    /* F1. 不匹配当前 best skill → 原生 AI 引用不动。 */
+    const native43 = function () { return 3; };
+    const noBridge43 = { ai: native43, set: function (k, v) { this[k] = v; return this; } };
+    ao43.bridgeSkillTargetEvent(noBridge43, me43, SID43, 'ai', {
+        type: 'skill', id: 'other_skill_43', targetObj: allyDamaged43, purpose: 'support',
+    });
+    eq(noBridge43.ai, native43, '10.43 bestAction 技能不匹配 → 宿主 AI 完全不改');
+
+    /* F2. active skill 解析只使用公开事件链中的 skill/name，不读目标隐藏信息。 */
+    eq(ao43.resolveActiveSkillId(me43, { name: SID43 }), SID43,
+        '10.43 从当前公开 skill event 解析技能 ID');
+    eq(ao43.resolveActiveSkillId(me43, { name: 'chooseTarget', parent: { skill: SID43 } }), SID43,
+        '10.43 可沿 parent 解析 skill ID');
+
+    /* 源码结构守卫。 */
+    const scannerSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillScanner.js'), 'utf8');
+    const skillsSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skills.js'), 'utf8');
+    const engineSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const overrideSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js'), 'utf8');
+    eq(scannerSrc43.indexOf("if (_match(expr, TARGET_RE)) return -1") < 0, true,
+        '10.43 scanner 不再硬编码 target=enemy');
+    ok(scannerSrc43.indexOf("out.__targetIntent = 'support'") >= 0
+        && scannerSrc43.indexOf("out.__targetIntent = 'offense'") >= 0,
+        '10.43 scanner 输出通用 support/offense 目标画像');
+    ok(skillsSrc43.indexOf('__targetConfidence') >= 0 && skillsSrc43.indexOf('__targetInferred') >= 0,
+        '10.43 skill profile 保留目标方向置信度/来源');
+    ok(engineSrc43.indexOf('_isLegalSkillTarget(sid, me, t.pp)') >= 0,
+        '10.43 engine 每技能目标先过 filterTarget');
+    ok(overrideSrc43.indexOf('proto.chooseTarget = function') >= 0
+        && overrideSrc43.indexOf('proto.chooseCardTarget = function') >= 0,
+        '10.43 宿主桥覆盖 chooseTarget + chooseCardTarget');
+    ok(overrideSrc43.indexOf("if (key === field && typeof value === 'function')") >= 0,
+        '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
+    ok(overrideSrc43.indexOf("ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55") >= 0,
+        '10.43 宿主桥只接受 kernel 已解析的高置信单目标');
+    ok(overrideSrc43.indexOf("__djscSkillTargetBridgeConsumed") >= 0,
+        '10.43 同次技能发动的通用目标桥只消费一次');
+    ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
+        '10.43 宿主桥再次校验当前选择事件合法目标');
+    const skillDirPos43 = overrideSrc43.indexOf('const skillDir = skillDirectionEffectModifier(card, player, target)');
+    const bestActionPos43 = overrideSrc43.indexOf('const ba = _getBA(player)', skillDirPos43);
+    ok(skillDirPos43 >= 0 && bestActionPos43 > skillDirPos43,
+        '10.43 原生 skill effect 方向守卫先于 bestAction，避免被降权技能绕过');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {

@@ -8,11 +8,12 @@
  */
 
 /* ================= 技能扫描器 · 对象-方法交叉判定 =================
- * 核心：符号由"对谁做"决定，不由"做了什么"决定
- *   player.draw(2)  → draw: +2      （自己摸牌）
- *   target.draw(2)  → feedDraw: -2  （资敌摸牌）
- *   target.damage() → damage: +2    （对敌伤害）
- *   player.damage() → selfDamage:-2 （自伤）
+ * 核心：先识别“效果是什么”，再结合对象/关系判断价值方向。
+ *   player.draw(2)   → draw          （自己摸牌）
+ *   target.draw(2)   → 默认 support  （目标摸牌，不再假定 target=敌人）
+ *   target.damage()  → 默认 offense  （目标受伤）
+ *   player.damage()  → selfDamage    （自伤）
+ * 对语义有歧义的 addSkill/link/turnOver/remove 等，若没有显式关系证据则 fail-open。
  */
 
 const METHOD_POLARITY = {
@@ -24,6 +25,17 @@ const METHOD_POLARITY = {
     turnOver: -1, link: -1, skip: -1,
     die: -1, out: -1,
     changeHp: 0,  // 参数符号决定
+};
+
+/* 只有这些方法的“对目标好/坏”方向足够稳定，才允许在无显式关系证据时
+ * 自动推断 support/offense。其余方法仍可在 get.attitude / friends/enemies 明示后分类。 */
+const TARGET_SEMANTIC_SAFE = {
+    draw: +1, gain: +1, gainPlayerCard: +1, gainMultiple: +1,
+    recover: +1, gainMaxHp: +1, revive: +1, addShan: +1,
+    damage: -1, loseHp: -1, loseMaxHp: -1,
+    discard: -1, lose: -1, loseCard: -1, skip: -1,
+    die: -1, out: -1,
+    changeHp: 0,
 };
 
 const DUAL_TAGS = {
@@ -65,15 +77,26 @@ const ALL_RE = [/^(game\.players|players)$/];
 
 function _match(expr, res) { for (let i = 0; i < res.length; i++) if (res[i].test(expr)) return true; return false; }
 
+function _normalizeObjExpr(expr) {
+    return String(expr || '').replace(/\s+/g, '').replace(/^(event|trigger|evt)\./, '');
+}
+
+function _isSemanticTarget(expr) {
+    const n = _normalizeObjExpr(expr);
+    return _match(n, TARGET_RE) || _match(n, TARGETS_RE) || _match(n, DYING_RE);
+}
+
 function _objAllegiance(expr) {
     if (!expr) return null;
-    expr = String(expr).replace(/\s+/g, '').replace(/^(event|trigger|evt)\./, '');
-    if (_match(expr, TEAM_RE)) return +2;   // 队友
+    expr = _normalizeObjExpr(expr);
+    if (_match(expr, TEAM_RE)) return +2;   // 显式队友集合
     if (_match(expr, SELF_RE)) return +1;   // 自己
-    if (_match(expr, ENEMY_RE)) return -1;
-    if (_match(expr, TARGET_RE)) return -1;
-    if (_match(expr, TARGETS_RE)) return -1;
-    if (_match(expr, DYING_RE)) return -1;
+    if (_match(expr, ENEMY_RE)) return -1;  // 显式敌人集合
+    /* ★ Skill Decision Kernel V2：
+     * target/targets/dying 只是“技能作用对象”，绝不等于敌人。
+     * 其敌友方向必须由 effect 语义（recover/draw vs damage/discard）
+     * 或显式 get.attitude 约束推断。 */
+    if (_match(expr, TARGET_RE) || _match(expr, TARGETS_RE) || _match(expr, DYING_RE)) return 0;
     if (_match(expr, SOURCE_RE)) return 0;
     if (_match(expr, ALL_RE)) return 0;
     const root = /^([A-Za-z_$][\w$]*)/.exec(expr);
@@ -215,8 +238,8 @@ function _collectEv(call, src, attMap) {
         if (a2 !== null && a2 !== 0) ev.push({ type: 'outer', sign: a2, weight: 0.7 });
     }
 
-    /* E3 态度映射 */
-    const varKey = String(call.object).replace(/\s+/g, '').replace(/^(event|trigger|evt)\./, '');
+    /* E3 态度映射（源码显式写出的关系约束优先） */
+    const varKey = _normalizeObjExpr(call.object);
     const atts = attMap[varKey];
     if (atts && atts.length) {
         const near = atts.slice().sort(function (a, b) {
@@ -229,9 +252,30 @@ function _collectEv(call, src, attMap) {
     }
 
     /* E4 参数符号 */
+    let argSign = 0;
     if (METHOD_POLARITY[call.method] === 0 && call.argIndex !== undefined) {
-        const s = _argSignForChangeHp(src, call.argIndex);
-        if (s !== 0) ev.push({ type: 'param', sign: s, weight: 0.6 });
+        argSign = _argSignForChangeHp(src, call.argIndex);
+        if (argSign !== 0) ev.push({ type: 'param', sign: argSign, weight: 0.6 });
+    }
+
+    /* E5 ★ 通用目标语义：
+     * 裸 target 并不知道阵营；当源码没有显式 attitude/队伍集合时，
+     * 根据作用效果推断“正常使用方向”：
+     *   recover/draw/gain/... → 应给友方
+     *   damage/loseHp/discard/... → 应给敌方
+     * changeHp 由参数正负决定。
+     * 这不是身份推断，只是技能效果方向。 */
+    const semanticTarget = _isSemanticTarget(call.object)
+        || (call.kind === 'foreach' && _isSemanticTarget(call.outerExpr));
+    const hasRelationEvidence = ev.some(function (e) {
+        return e.type === 'object' || e.type === 'outer' || e.type === 'attitude';
+    });
+    if (semanticTarget && !hasRelationEvidence) {
+        let effectSign = TARGET_SEMANTIC_SAFE[call.method];
+        if (effectSign === 0) effectSign = argSign;
+        if (effectSign > 0) ev.push({ type: 'target-semantic', sign: +2, weight: 0.85 });
+        else if (effectSign < 0) ev.push({ type: 'target-semantic', sign: -1, weight: 0.85 });
+        /* undefined = 语义有歧义，保持无关系证据并在下游 fail-open。 */
     }
 
     return ev;
@@ -329,6 +373,8 @@ export function scanObjectMethod(source, ctx) {
 
     const attMap = _buildAttMap(source);
     const timingW = _timingWeight(ctx);
+    let allyTargetVotes = 0;
+    let enemyTargetVotes = 0;
 
     for (const call of calls) {
         const pol = METHOD_POLARITY[call.method];
@@ -358,6 +404,15 @@ export function scanObjectMethod(source, ctx) {
 
         out[tag] = (out[tag] || 0) + sign * w;
 
+        /* 仅对真正的 target/targets 作用记录方向票，不把 player/self 算进目标类型。 */
+        const semanticTarget = _isSemanticTarget(call.object)
+            || (call.kind === 'foreach' && _isSemanticTarget(call.outerExpr));
+        if (semanticTarget) {
+            const weight = Math.max(0.5, Math.abs(effPol)) * timingW;
+            if (alleg === +2) allyTargetVotes += weight;
+            else if (alleg === -1) enemyTargetVotes += weight;
+        }
+
         /* ★ 团队维度叠加 */
         if (alleg === +2) {
             if (effPol > 0) {
@@ -375,12 +430,32 @@ export function scanObjectMethod(source, ctx) {
     if (_hasAoeNoFilter(source)) out.teamRisk = (out.teamRisk || 0) - 0.5;
     if (_hasTeamChain(source)) out.teamChain = (out.teamChain || 0) + 0.9;
 
-    /* 饱和化 + 舍入 */
+    /* 饱和化 + 舍入（仅数值标签） */
     for (const k in out) {
+        if (typeof out[k] !== 'number') continue;
         if (Math.abs(out[k]) > 3) {
             out[k] = Math.sign(out[k]) * (3 + Math.log(Math.abs(out[k]) - 2));
         }
         out[k] = Math.round(out[k] * 100) / 100;
+    }
+
+    /* ★ 自动目标方向画像。显式 ID 表仍可在 skills.js 合并阶段覆盖这里。 */
+    const voteTotal = allyTargetVotes + enemyTargetVotes;
+    if (voteTotal > 0.01) {
+        const delta = Math.abs(allyTargetVotes - enemyTargetVotes) / voteTotal;
+        /* 源码语义属于启发式证据，最高 0.75；手工 ID 表在 skills.js 中仍为 1.0。 */
+        out.__targetConfidence = Math.round(delta * 0.75 * 100) / 100;
+        out.__targetInferred = true;
+        if (allyTargetVotes > enemyTargetVotes * 1.25) {
+            out.__targets = ['ally'];
+            out.__targetIntent = 'support';
+        } else if (enemyTargetVotes > allyTargetVotes * 1.25) {
+            out.__targets = ['enemy'];
+            out.__targetIntent = 'offense';
+        } else {
+            out.__targets = ['ally', 'enemy'];
+            out.__targetIntent = 'mixed';
+        }
     }
 
     return out;

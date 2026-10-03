@@ -2175,6 +2175,78 @@ function applyBasicCardPlayRules(me, acts, bestT) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
+/* ★ Skill Decision Kernel V2：宿主合法目标过滤
+ * 只在可以安全静态判定时排除非法目标；复杂/依赖选牌/事件态的 filterTarget 一律 fail-open。
+ */
+function _skillTargetDependsOnCard(filterTarget) {
+	try {
+		if (typeof filterTarget !== 'function') return false;
+		const src = filterTarget.toString();
+		const body = src.indexOf('=>') >= 0 ? src.slice(src.indexOf('=>') + 2) : src.slice(src.indexOf('{') + 1);
+		return /\bcard\b/.test(body);
+	} catch (e) { return true; }
+}
+
+function _isLegalSkillTarget(sid, me, target) {
+	try {
+		const sk = lib.skill && lib.skill[sid];
+		if (!sk || typeof sk.filterTarget !== 'function') return true;
+		const dependsOnCard = _skillTargetDependsOnCard(sk.filterTarget);
+		let r;
+		try { r = sk.filterTarget(null, me, target); } catch (e) { return true; }
+		if (r === false && dependsOnCard) return true;   /* 选牌前无法确证非法 */
+		return r !== false;
+	} catch (e) { return true; }
+}
+
+function _skillNeedsExternalTarget(sid, prof) {
+	try {
+		const cats = (prof && prof.tags && prof.tags.__targets) || [];
+		/* 纯 self 技能不进入“找不到友/敌目标”的否决。 */
+		if (cats.length === 1 && cats[0] === 'self') return false;
+		if (cats.indexOf('ally') >= 0 || cats.indexOf('enemy') >= 0 || cats.indexOf('multi') >= 0) return true;
+		const sk = lib.skill && lib.skill[sid];
+		return !!(sk && typeof sk.filterTarget === 'function');
+	} catch (e) { return false; }
+}
+
+function _canConfirmSelfSkillTarget(sid, me, prof) {
+	try {
+		const cats = (prof && prof.tags && prof.tags.__targets) || [];
+		const sk = lib.skill && lib.skill[sid];
+		const explicitSelf = cats.indexOf('self') >= 0;
+		if (!sk || typeof sk.filterTarget !== 'function') return explicitSelf;
+		if (_skillTargetDependsOnCard(sk.filterTarget) && !explicitSelf) return false;
+		let r;
+		try { r = sk.filterTarget(null, me, me); } catch (e) { return explicitSelf; }
+		return r !== false && (explicitSelf || (prof && prof.targets && prof.targets.intent === 'support'));
+	} catch (e) { return false; }
+}
+
+function _skillPurposeFromIntent(intent, category, confidence) {
+	const c = (confidence === undefined || confidence === null) ? 1 : Number(confidence || 0);
+	if (intent === 'offense') return c >= 0.55 ? 'attack' : null;
+	if (intent === 'support') return c >= 0.55 ? 'support' : null;
+	if (intent === 'mixed') return null;
+	if (category === 'attack' || category === 'control') return 'attack';
+	if (category === 'defense' || category === 'aux') return 'support';
+	return null;
+}
+
+function _isSingleTargetSkillProfile(prof, decision) {
+	try {
+		const tags = (prof && prof.tags) || {};
+		const cats = tags.__targets || [];
+		const scope = tags.__scope || null;
+		if (cats.indexOf('multi') >= 0) return false;
+		if (prof && prof.targets && prof.targets.category === 'all') return false;
+		if (scope === 'all' || scope === 'all_others' || scope === 'anyN'
+			|| scope === 'enemyN' || scope === 'allyN' || scope === 'selfN') return false;
+		if (decision && Array.isArray(decision.targetIndexes) && decision.targetIndexes.length > 1) return false;
+		return true;
+	} catch (e) { return false; }
+}
+
 /* ★ 基本技能决策标准接入层
  * 在 acts.sort 之前对 skill 候选应用 skillPlayBrain 的三段式标准：
  *   - 硬否决（负收益/自伤/时机不符/无可控敌）→ 压到接近结束回合
@@ -2231,7 +2303,46 @@ function applyBasicSkillRules(me, acts) {
 			let prof = null;
 			try { prof = skillProfileOf(sid); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 			if (!prof) return;
-			const d = decideSkill(sid, prof, ctx);
+
+			/* 每个技能都用自己的 filterTarget 生成合法候选，禁止“全体玩家池”直接复用。
+			 * 例如炜烈 target.isDamaged()：满血角色不会再进入推荐目标。 */
+			const skillTargets = targets.filter(function (t) {
+				return t && t.pp && _isLegalSkillTarget(sid, me, t.pp);
+			});
+			/* 明确允许 self 的辅助技能，把自己作为真实候选加入；
+			 * 未显式 self 时，仅在 filterTarget 可无卡牌上下文确证允许且 intent=support 时加入。 */
+			if (_canConfirmSelfSkillTarget(sid, me, prof)) {
+				skillTargets.unshift({
+					pp: me, isAlly: true, isEnemy: false,
+					hp: (me.hp !== undefined ? me.hp : 3),
+					maxHp: (me.maxHp || 3), threat: 0, handCount: 0,
+				});
+			}
+			const skillCtx = Object.assign({}, ctx, { targets: skillTargets });
+			const d = decideSkill(sid, prof, skillCtx);
+
+			/* 高置信单方向技能没有合法/合理目标时，直接压制本轮发动；
+			 * mixed/低置信技能仍 fail-open 交给宿主。 */
+			const ti = prof.targets && prof.targets.intent;
+			const tc = prof.targets ? Number(prof.targets.confidence || 0) : 0;
+			const inferredTargetIntent = !!(prof.targets && prof.targets.inferred);
+			a.targetIntent = ti || null;
+			a.targetConfidence = tc;
+			a.targetInferred = inferredTargetIntent;
+			const directional = (ti === 'support' || ti === 'offense') && tc >= 0.55
+				&& _skillNeedsExternalTarget(sid, prof);
+			if (!d.veto && directional && d.targetIndex < 0 && skillTargets.length > 0) {
+				a.score = Math.min(a.score, -6);
+				a.reason = (a.reason || '') + '（[技能目标否决] 无合法' + (ti === 'support' ? '友方' : '敌方') + '目标）';
+				a.rule = 'veto-target';
+				return;
+			}
+			if (!d.veto && directional && skillTargets.length === 0) {
+				a.score = Math.min(a.score, -6);
+				a.reason = (a.reason || '') + '（[技能目标否决] 无合法目标）';
+				a.rule = 'veto-target';
+				return;
+			}
 			if (d.veto) {
 				a.score = Math.min(a.score, -6);
 				a.reason = (a.reason || '') + '（[技能否决] ' + d.vetoReason + '）';
@@ -2243,17 +2354,23 @@ function applyBasicSkillRules(me, acts) {
 				/* ★ 按技能自身类别写回【专属目标】：敌方技→真敌，己方辅助/增益→真友
 				 *   修复此前技能 act 从不携带 target，导致"限制敌方技能"与"给己方摸牌技能"都落到同一无名目标 */
 				if (typeof d.targetIndex === 'number' && d.targetIndex >= 0) {
-					const tk = targets[d.targetIndex];
+					const tk = skillTargets[d.targetIndex];
 					if (tk && tk.pp) {
 						a.target = tk.pp.name1 || tk.pp.name || '';
 						a.targetObj = tk.pp;
+						/* provenance：只有真正经过 kernel 合法目标池 + decideSkill 解析出的目标，
+						 * 才允许后续宿主桥消费。防止旧 action 上恰好存在 target 字段被误接管。 */
+						a.skillTargetResolved = true;
+						a.skillTargetSingle = _isSingleTargetSkillProfile(prof, d);
 						a.targetRule = d.rule + '→' + a.target + '(' + d.reason + ')';
 						a.reason = (a.reason || '') + '（对象：' + a.target + '）';
 						/* ★ 技能方向(purpose)：按技能类别映射，供统一收益守卫 actionValue 强判方向
 						 *   attack/control → 敌向；defense/aux(辅助/增益) → 友向；其余由守卫回退。 */
 						const _cat = d.category || d.rule || '';
-						if (_cat === 'attack' || _cat === 'control' || _cat === 'draw') a.purpose = 'attack';
-						else if (_cat === 'defense' || _cat === 'aux') a.purpose = 'support';
+						/* 目标 intent 高于技能大类：target.draw() 可能是辅助技，不能因 category=draw
+						 * 又被翻译成 attack。mixed 则刻意不设 purpose，交回原生/专属策略。 */
+						const _purpose = _skillPurposeFromIntent(ti, _cat, tc);
+						if (_purpose) a.purpose = _purpose;
 					}
 				}
 				/* ★ 多目标技能：写回 targetList（全部真敌/真友玩家对象），
@@ -2261,7 +2378,7 @@ function applyBasicSkillRules(me, acts) {
 				if (Array.isArray(d.targetIndexes)) {
 					const list = [];
 					d.targetIndexes.forEach(function (ti) {
-						const tt = targets[ti];
+						const tt = skillTargets[ti];
 						if (tt && tt.pp && list.indexOf(tt.pp) < 0) list.push(tt.pp);
 					});
 					if (list.length) {
@@ -5280,7 +5397,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _isSingleTargetSkillProfile };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
