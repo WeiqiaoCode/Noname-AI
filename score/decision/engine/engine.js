@@ -147,7 +147,7 @@ import { shunshouBonus } from '../timing/shunshouTiming.js';
 import { deepValueBonus, deepCardValue, deepTargetValue, deepSituationValue } from '../../model/net/deepValue.js';
 import { recordTrigger, getDecayMultiplier, applyDecay, clearDecayLog, getDecayStats } from '../tuning/decayOpt.js';
 import { clearCompensation } from './scoreUnify.js';
-import { makeActionCandidate, runtimeScore, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
+import { makeActionCandidate, runtimeScore, applyRelativeUtilityDelta, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
 import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
@@ -3247,15 +3247,15 @@ function bestAction() {
 					if (cardTarget) {
 						const mood = analyzeOpponentMood(cardTarget);
 						if (mood) {
-							const bonus = moodStrategyBonus(me, cardTarget, { id: id });
-							if (bonus) s *= bonus;
+							const moodDelta = moodStrategyBonus(me, cardTarget, { id: id });
+							s = applyRelativeUtilityDelta(s, moodDelta);
 						}
 					}
 
 					/* ④ 武将克制：根据克制关系调整 */
 					if (cardTarget) {
-						const relBonus = counterRelationBonus(me, cardTarget, { id: id });
-						if (relBonus) s *= relBonus;
+						const relationDelta = counterRelationBonus(me, cardTarget, { id: id });
+						s = applyRelativeUtilityDelta(s, relationDelta);
 					}
 
 					/* ⑤ 出牌顺序：根据优先级调整 */
@@ -3264,27 +3264,27 @@ function bestAction() {
 
 					/* ⑥ 铁索连环：考虑伤害转移 */
 					if (id === 'tiesuo' || id === 'sha' || id === 'juedou') {
-						const transferBonus = damageTransferBonus(me, cardTarget, { id: id });
-						if (transferBonus) s *= transferBonus;
+						const transferDelta = damageTransferBonus(me, cardTarget, { id: id });
+						s = applyRelativeUtilityDelta(s, transferDelta);
 					}
 
 					/* ⑦ 概率树搜索：考虑后续影响 */
 					if (cardTarget && (id === 'sha' || id === 'juedou')) {
-						const treeBonus = treeSearchBonus(me, cardTarget, { id: id });
-						if (treeBonus) s *= treeBonus;
+						const treeDelta = treeSearchBonus(me, cardTarget, { id: id });
+						s = applyRelativeUtilityDelta(s, treeDelta);
 					}
 
 					/* ⑧ 牌堆顶预测：考虑牌堆顶的牌 */
-					const deckBonus = deckTopBonus(me, { id: id });
-					if (deckBonus) s *= deckBonus;
+					const deckDelta = deckTopBonus(me, { id: id });
+					s = applyRelativeUtilityDelta(s, deckDelta);
 
 					/* ⑨ 博弈论：根据游戏阶段调整 */
-					const gameBonus = gameTheoryBonus(me, { id: id });
-					if (gameBonus) s *= gameBonus;
+					const gameDelta = gameTheoryBonus(me, { id: id });
+					s = applyRelativeUtilityDelta(s, gameDelta);
 
 					/* ⑩ 局面策略：根据局面估值调整 */
-					const sitBonus = situationStrategyBonus(me, { id: id });
-					if (sitBonus) s *= sitBonus;
+					const situationDelta = situationStrategyBonus(me, { id: id });
+					s = applyRelativeUtilityDelta(s, situationDelta);
 				} catch (e24) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e24); }
 
 					/* ===== ★ v1.7.0 新增 5 个优化模块 ===== */
