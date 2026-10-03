@@ -3551,7 +3551,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const ba43 = {
         type: 'skill', id: SID43, targetObj: allyDamaged43,
         target: 'allyDamaged43', purpose: 'support', rule: 'defense', score: 8,
-        targetIntent: 'support', targetConfidence: 1, targetInferred: true,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+        skillTargetResolved: true, skillTargetSingle: true,
     };
     const event43 = {
         ai: function () { return 0; },
@@ -3585,7 +3586,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(rejectedEvent43.ai, rejectedNative43,
         '10.43 当前 chooseTarget filterTarget 拒绝推荐目标 → 原生 AI 完全不改');
 
-    /* E3. mixed / 低置信 / 无推断来源 → 一律 fail-open。 */
+    /* E3. mixed / 低置信 / 未经 kernel 解析 → 一律 fail-open。 */
     const lowNative43 = function () { return 2; };
     const lowEvent43 = {
         ai: lowNative43,
@@ -3613,9 +3614,45 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         set: function (k, v) { this[k] = v; return this; },
     };
     ao43.bridgeSkillTargetEvent(unprovenEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
-        targetInferred: false,
+        skillTargetResolved: false,
     }));
-    eq(unprovenEvent43.ai, lowNative43, '10.43 无 scanner provenance → 不桥接');
+    eq(unprovenEvent43.ai, lowNative43, '10.43 未经 kernel 合法目标解析 → 不桥接');
+
+    /* E4. 手工 ID 表等显式高置信策略也可桥接，不要求 inferred=true。 */
+    const explicitEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(explicitEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetConfidence: 1, targetInferred: false,
+        skillTargetResolved: true, skillTargetSingle: true,
+    }));
+    ok(explicitEvent43.ai(allyDamaged43) >= 12,
+        '10.43 显式已知技能的高置信已解析目标也可进入宿主桥');
+
+    /* E5. 同一次技能发动只消费一次通用目标桥，后续选择回原生。 */
+    const ownerEvent43 = { skill: SID43 };
+    const onceCtx43 = { id: SID43, event: ownerEvent43 };
+    const firstOnce43 = {
+        ai: function () { return 0; },
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetChoiceOnce(firstOnce43, me43, onceCtx43, 'ai', ba43);
+    ok(firstOnce43.ai(allyDamaged43) >= 12,
+        '10.43 同次技能第一次目标事件消费通用桥');
+    ok(!!ownerEvent43.__djscSkillTargetBridgeConsumed,
+        '10.43 第一次桥接后在技能事件记录 consumed');
+    const secondNative43 = function () { return 6; };
+    const secondOnce43 = {
+        ai: secondNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetChoiceOnce(secondOnce43, me43, onceCtx43, 'ai', ba43);
+    eq(secondOnce43.ai, secondNative43,
+        '10.43 同次技能第二次目标事件 fail-open，不重复绑定第一目标');
 
     /* F1. 不匹配当前 best skill → 原生 AI 引用不动。 */
     const native43 = function () { return 3; };
@@ -3650,8 +3687,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 宿主桥覆盖 chooseTarget + chooseCardTarget');
     ok(overrideSrc43.indexOf("if (key === field && typeof value === 'function')") >= 0,
         '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
-    ok(overrideSrc43.indexOf("ba.targetInferred !== true || confidence < 0.55") >= 0,
-        '10.43 宿主桥只接受高置信 scanner 推断');
+    ok(overrideSrc43.indexOf("ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55") >= 0,
+        '10.43 宿主桥只接受 kernel 已解析的高置信单目标');
+    ok(overrideSrc43.indexOf("__djscSkillTargetBridgeConsumed") >= 0,
+        '10.43 同次技能发动的通用目标桥只消费一次');
     ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
         '10.43 宿主桥再次校验当前选择事件合法目标');
 }
