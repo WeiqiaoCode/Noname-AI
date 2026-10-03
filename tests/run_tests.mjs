@@ -3455,7 +3455,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 mixed 同时保留 ally/enemy');
 
     /* B. 模拟“炜烈类”未知技能：不写 ID 特判，源码扫描自动形成 ally/support profile。 */
-    const SID43 = 'kernel_support_fixture_43';
+    const SID43 = 'kernel_support_fixture_alpha';
     hostStub.lib.skill[SID43] = {
         enable: 'phaseUse',
         filterTarget: (card, player, target) => target.isDamaged(),
@@ -3497,7 +3497,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 filterTarget：满血角色非法');
 
     /* 依赖所选卡牌的 filterTarget：预选阶段不能确证非法 → fail-open。 */
-    const CARD_DEP43 = 'kernel_carddep_fixture_43';
+    const CARD_DEP43 = 'kernel_carddep_fixture_alpha';
     hostStub.lib.skill[CARD_DEP43] = {
         enable: 'phaseUse',
         filterCard: true,
