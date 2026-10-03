@@ -3456,6 +3456,18 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok((mixed43.__targets || []).includes('ally') && (mixed43.__targets || []).includes('enemy'),
         '10.43 mixed 同时保留 ally/enemy');
 
+    /* A4. 语义本身有歧义的效果不能仅凭 target 名字强推敌友。 */
+    const ambiguous43 = sc43.scanObjectMethod(`
+        function content(event) {
+            event.target.addSkill('some_skill');
+            event.target.turnOver();
+        }
+    `, { skill: { enable: 'phaseUse' } });
+    eq(ambiguous43.__targetIntent, undefined,
+        '10.43 addSkill/turnOver 等歧义效果无显式关系证据 → 不自动定向');
+    eq((ambiguous43.__targets || []).length, 0,
+        '10.43 歧义目标效果保持 fail-open，不生成 ally/enemy 目标');
+
     /* B. 模拟“炜烈类”未知技能：不写 ID 特判，源码扫描自动形成 ally/support profile。 */
     const SID43 = 'kernel_support_fixture_alpha';
     host43.lib.skill[SID43] = {
@@ -3521,6 +3533,28 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(eng43._skillPurposeFromIntent('mixed', 'attack', 1), null,
         '10.43 mixed intent 不被粗分类强制成单方向');
 
+    /* C3. 原生 skill effect 方向守卫不依赖 bestAction。 */
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.75, -1), -12,
+        '10.43 原生技能评估：support→敌方 强负修正');
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.75, 1), 1.5,
+        '10.43 原生技能评估：support→友方 正修正');
+    eq(ao43.skillTargetDirectionAdjustment('offense', 0.75, 1), -12,
+        '10.43 原生技能评估：offense→友方 强负修正');
+    eq(ao43.skillTargetDirectionAdjustment('offense', 0.75, -1), 1.5,
+        '10.43 原生技能评估：offense→敌方 正修正');
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.4, -1), 0,
+        '10.43 低置信 intent 不干预原生技能 effect');
+    eq(eng43._isSingleTargetSkillProfile({
+        tags: { __targets: ['enemy', 'multi'], __scope: 'any1' },
+        targets: { category: 'enemy' },
+    }, { targetIndexes: [0] }), false,
+        '10.43 multi 语义技能即使当前只剩一个目标也不能进入单目标宿主桥');
+    eq(eng43._isSingleTargetSkillProfile({
+        tags: { __targets: ['ally'], __scope: 'any1' },
+        targets: { category: 'ally' },
+    }, { targetIndexes: [0] }), true,
+        '10.43 明确单目标 support profile 可进入单目标桥');
+
     const SELF43 = 'kernel_self_fixture_alpha';
     host43.lib.skill[SELF43] = {
         enable: 'phaseUse',
@@ -3551,7 +3585,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const ba43 = {
         type: 'skill', id: SID43, targetObj: allyDamaged43,
         target: 'allyDamaged43', purpose: 'support', rule: 'defense', score: 8,
-        targetIntent: 'support', targetConfidence: 1, targetInferred: true,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+        skillTargetResolved: true, skillTargetSingle: true,
     };
     const event43 = {
         ai: function () { return 0; },
@@ -3585,7 +3620,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(rejectedEvent43.ai, rejectedNative43,
         '10.43 当前 chooseTarget filterTarget 拒绝推荐目标 → 原生 AI 完全不改');
 
-    /* E3. mixed / 低置信 / 无推断来源 → 一律 fail-open。 */
+    /* E3. mixed / 低置信 / 未经 kernel 解析 → 一律 fail-open。 */
     const lowNative43 = function () { return 2; };
     const lowEvent43 = {
         ai: lowNative43,
@@ -3613,9 +3648,45 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         set: function (k, v) { this[k] = v; return this; },
     };
     ao43.bridgeSkillTargetEvent(unprovenEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
-        targetInferred: false,
+        skillTargetResolved: false,
     }));
-    eq(unprovenEvent43.ai, lowNative43, '10.43 无 scanner provenance → 不桥接');
+    eq(unprovenEvent43.ai, lowNative43, '10.43 未经 kernel 合法目标解析 → 不桥接');
+
+    /* E4. 手工 ID 表等显式高置信策略也可桥接，不要求 inferred=true。 */
+    const explicitEvent43 = {
+        ai: lowNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetEvent(explicitEvent43, me43, SID43, 'ai', Object.assign({}, ba43, {
+        targetConfidence: 1, targetInferred: false,
+        skillTargetResolved: true, skillTargetSingle: true,
+    }));
+    ok(explicitEvent43.ai(allyDamaged43) >= 12,
+        '10.43 显式已知技能的高置信已解析目标也可进入宿主桥');
+
+    /* E5. 同一次技能发动只消费一次通用目标桥，后续选择回原生。 */
+    const ownerEvent43 = { skill: SID43 };
+    const onceCtx43 = { id: SID43, event: ownerEvent43 };
+    const firstOnce43 = {
+        ai: function () { return 0; },
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetChoiceOnce(firstOnce43, me43, onceCtx43, 'ai', ba43);
+    ok(firstOnce43.ai(allyDamaged43) >= 12,
+        '10.43 同次技能第一次目标事件消费通用桥');
+    ok(!!ownerEvent43.__djscSkillTargetBridgeConsumed,
+        '10.43 第一次桥接后在技能事件记录 consumed');
+    const secondNative43 = function () { return 6; };
+    const secondOnce43 = {
+        ai: secondNative43,
+        filterTarget: function () { return true; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao43.bridgeSkillTargetChoiceOnce(secondOnce43, me43, onceCtx43, 'ai', ba43);
+    eq(secondOnce43.ai, secondNative43,
+        '10.43 同次技能第二次目标事件 fail-open，不重复绑定第一目标');
 
     /* F1. 不匹配当前 best skill → 原生 AI 引用不动。 */
     const native43 = function () { return 3; };
@@ -3650,12 +3721,17 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 宿主桥覆盖 chooseTarget + chooseCardTarget');
     ok(overrideSrc43.indexOf("if (key === field && typeof value === 'function')") >= 0,
         '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
-    ok(overrideSrc43.indexOf("ba.targetInferred !== true || confidence < 0.55") >= 0,
-        '10.43 宿主桥只接受高置信 scanner 推断');
-    ok(overrideSrc43.indexOf("eventAcceptsSkillTargetPlan(next, player, decision)") >= 0,
-        '10.43 宿主桥再次校验当前选择事件合法目标/目标组');
+    ok(overrideSrc43.indexOf("ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55") >= 0,
+        '10.43 宿主桥只接受 kernel 已解析的高置信单目标');
+    ok(overrideSrc43.indexOf("__djscSkillTargetBridgeConsumed") >= 0,
+        '10.43 同次技能发动的通用目标桥只消费一次');
+    ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
+        '10.43 宿主桥再次校验当前选择事件合法目标');
+    const skillDirPos43 = overrideSrc43.indexOf('const skillDir = skillDirectionEffectModifier(card, player, target)');
+    const bestActionPos43 = overrideSrc43.indexOf('const ba = _getBA(player)', skillDirPos43);
+    ok(skillDirPos43 >= 0 && bestActionPos43 > skillDirPos43,
+        '10.43 原生 skill effect 方向守卫先于 bestAction，避免被降权技能绕过');
 }
-
 
 /* ================= 10.44 Skill Decision Kernel V2 · Stage 2 =================
  * A. 多目标技能遵守宿主 selectTarget 数量，不再“全阵营全选”；
