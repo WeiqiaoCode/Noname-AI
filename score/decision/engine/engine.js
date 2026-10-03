@@ -2210,6 +2210,19 @@ function _skillNeedsExternalTarget(sid, prof) {
 	} catch (e) { return false; }
 }
 
+function _canConfirmSelfSkillTarget(sid, me, prof) {
+	try {
+		const cats = (prof && prof.tags && prof.tags.__targets) || [];
+		const sk = lib.skill && lib.skill[sid];
+		const explicitSelf = cats.indexOf('self') >= 0;
+		if (!sk || typeof sk.filterTarget !== 'function') return explicitSelf;
+		if (_skillTargetDependsOnCard(sk.filterTarget) && !explicitSelf) return false;
+		let r;
+		try { r = sk.filterTarget(null, me, me); } catch (e) { return explicitSelf; }
+		return r !== false && (explicitSelf || (prof && prof.targets && prof.targets.intent === 'support'));
+	} catch (e) { return false; }
+}
+
 function _skillPurposeFromIntent(intent, category) {
 	if (intent === 'offense') return 'attack';
 	if (intent === 'support') return 'support';
@@ -2281,6 +2294,15 @@ function applyBasicSkillRules(me, acts) {
 			const skillTargets = targets.filter(function (t) {
 				return t && t.pp && _isLegalSkillTarget(sid, me, t.pp);
 			});
+			/* 明确允许 self 的辅助技能，把自己作为真实候选加入；
+			 * 未显式 self 时，仅在 filterTarget 可无卡牌上下文确证允许且 intent=support 时加入。 */
+			if (_canConfirmSelfSkillTarget(sid, me, prof)) {
+				skillTargets.unshift({
+					pp: me, isAlly: true, isEnemy: false,
+					hp: (me.hp !== undefined ? me.hp : 3),
+					maxHp: (me.maxHp || 3), threat: 0, handCount: 0,
+				});
+			}
 			const skillCtx = Object.assign({}, ctx, { targets: skillTargets });
 			const d = decideSkill(sid, prof, skillCtx);
 
@@ -5356,7 +5378,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _skillPurposeFromIntent };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
