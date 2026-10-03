@@ -485,8 +485,12 @@ export function wrapSkillCardOpportunityAI(original, player, stage) {
 			/* 独立 chooseCard 阶段不猜卡牌后续语义，只在原生 AI 基本同分时
 			 * 加一个有界的机会成本 tie-break：低价值自有牌略优。 */
 			let owner = null;
-			try { owner = get.owner ? get.owner(card) : null; } catch (e) {}
-			if (owner && owner !== player) return nativeScore;
+			try {
+				if (typeof get.owner !== 'function') return nativeScore;
+				owner = get.owner(card);
+			} catch (e) { return nativeScore; }
+			/* 独立 chooseCard 只评价明确属于当前玩家的牌；来源/所有者不明则 fail-open。 */
+			if (owner !== player) return nativeScore;
 			const v = Number(get.value(card, player));
 			if (!Number.isFinite(v)) return nativeScore;
 			const tie = Math.max(-0.2, Math.min(0.2, -v * 0.02));
