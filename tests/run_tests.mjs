@@ -4031,6 +4031,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         getSkills: protoLife44.getSkills,
         gameCheck: host44.game.check,
         players: host44.game.players,
+        libSkill: host44.lib.skill,
         checkHooked: host44.game.__djsc_check_hooked,
     };
     const nativeChooseButtonLife44 = function () { return { ai: function () { return 0; } }; };
@@ -4038,6 +4039,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const nativeGetSkillsLife44 = function () { return []; };
     const nativeCheckLife44 = function () { return 'native-check'; };
     host44.game.players = [];
+    /* Node 的通用 Proxy 宿主桩会在读取 lib.skill[id] 时自动生成 truthy 函数，
+     * 会触发 installAIOverride 的“已存在”守卫；本段改用普通对象模拟真实 lib.skill。 */
+    host44.lib.skill = {};
     protoLife44.chooseButton = nativeChooseButtonLife44;
     protoLife44.addSkill = nativeAddSkillLife44;
     protoLife44.getSkills = nativeGetSkillsLife44;
@@ -4098,6 +4102,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     protoLife44.getSkills = savedLife44.getSkills;
     host44.game.check = savedLife44.gameCheck;
     host44.game.players = savedLife44.players;
+    host44.lib.skill = savedLife44.libSkill;
     if (savedLife44.checkHooked === undefined) delete host44.game.__djsc_check_hooked;
     else host44.game.__djsc_check_hooked = savedLife44.checkHooked;
 
