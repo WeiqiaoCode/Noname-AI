@@ -3507,6 +3507,16 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(eng43._isLegalSkillTarget(CARD_DEP43, me43, allyDamaged43), true,
         '10.43 card-dependent filterTarget 在无 card 快照时 fail-open');
 
+    /* C2. self-only 技能不能被“无外部目标”规则误伤；target intent 高于粗分类。 */
+    eq(eng43._skillNeedsExternalTarget('self_only_43', { tags: { __targets: ['self'] } }), false,
+        '10.43 self-only 技能不要求外部目标');
+    eq(eng43._skillNeedsExternalTarget('ally_skill_43', { tags: { __targets: ['ally'] } }), true,
+        '10.43 ally 技能要求外部目标');
+    eq(eng43._skillPurposeFromIntent('support', 'draw'), 'support',
+        '10.43 support intent 覆盖 category=draw，避免把给牌/摸牌辅助误映射 attack');
+    eq(eng43._skillPurposeFromIntent('mixed', 'attack'), null,
+        '10.43 mixed intent 不被粗分类强制成单方向');
+
     /* D. support profile 只推荐真友；只有敌方合法目标时 targetIndex=-1。 */
     const ctxAlly43 = {
         me: { hp: 4, maxHp: 4 },
