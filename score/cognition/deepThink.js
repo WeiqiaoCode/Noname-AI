@@ -22,6 +22,7 @@
 import { FEATURE_DIM } from '../model/features/features.js';
 import { isReady as weightsReady } from '../model/weights/weights.js';
 import { normalizedMargin, candidateSpread, DECISION_MARGIN } from '../decision/state/decisionMargin.js';
+import { isCandidateEligible, candidatePriorityRank } from '../decision/state/actionCandidate.js';
 
 const TOP_N = 3;           /* 深度辨析的候选数量上限（防放大算力开销） */
 const MODEL_SPREAD_SHARE = 0.35;  /* 模型证据最多只占当前候选 spread 的一部分 */
@@ -88,8 +89,10 @@ export function criticBest(me, acts, best, ctx) {
 		}
 
 		/* 候选按规则分排序，取次优作对照 */
+		const bestTier = candidatePriorityRank(best);
 		const sorted = acts.slice().filter(function (a) {
-			return a && a !== best && typeof a.score === 'number';
+			return a && a !== best && isCandidateEligible(a) &&
+				candidatePriorityRank(a) === bestTier && typeof a.score === 'number';
 		}).sort(function (a, b) { return (b.score || -Infinity) - (a.score || -Infinity); });
 		if (!sorted.length) {
 			out.thinking.push('无对照候选，跳过深度思考');
