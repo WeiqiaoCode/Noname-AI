@@ -2351,8 +2351,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 远距离击杀序列显式先 push equip step');
     ok(/type:\s*planBest\.action\.type === 'equip' \? 'equip' : 'card'/.test(src35),
         '10.35 planner 第一动作是装备时返回 equip 类型');
-    ok(/target:\s*planBest\.action\.type === 'equip' \? null : planBest\.target/.test(src35),
-        '10.35 装备动作不错误携带敌方 player target');
+    ok(/if \(planBest\.action\.type === 'equip'\) \{\s*out\.target = null;\s*out\.targetObj = null;/.test(src35),
+        '10.35 装备动作同时清空 target/targetObj，不错误携带敌方 player target');
 
     const eng35 = fs35.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
     ok(/if \(best && best\.type === 'equip'\)\s*_finalTarget = null;/.test(eng35),
@@ -4763,6 +4763,79 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const conflict47 = fs47.readFileSync(join(_pkg, 'score', 'decision', 'analysis', 'conflictDetector.js'), 'utf8');
     ok(conflict47.indexOf('这里只记录意见不同，不代表模型已接管') >= 0,
         '10.47 对局冲突提示明确说明“分歧≠模型接管”');
+}
+
+/* ================= 10.48 统一决策边际与评分边界 ================= */
+{
+    const fs48 = await import('node:fs');
+    const dm48 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'decisionMargin.js')).href);
+
+    const mSmall48 = dm48.normalizedMargin(8, 6);
+    const mLarge48 = dm48.normalizedMargin(80, 60);
+    ok(Math.abs(mSmall48 - mLarge48) < 1e-12,
+        '10.48 normalized margin 对整体评分缩放保持不变');
+    ok(dm48.isCloseDecision(8, 7.5), '10.48 接近候选按相对边际识别');
+    ok(!dm48.isCloseDecision(8, 2), '10.48 明显领先候选不会误判为接近');
+    const impA48 = dm48.signedNormalizedImprovement(6, 8);
+    const impB48 = dm48.signedNormalizedImprovement(60, 80);
+    ok(Math.abs(impA48 - impB48) < 1e-12,
+        '10.48 planner 相对提升对整体评分缩放保持不变');
+    const spread48 = dm48.candidateSpread([{ score: 8 }, { score: 6 }, { score: 2 }]);
+    eq(spread48.absolute, 6, '10.48 candidateSpread 返回真实候选跨度');
+    ok(spread48.normalized > 0 && spread48.normalized <= 1,
+        '10.48 candidateSpread 同时提供归一化跨度');
+
+    const champ48 = fs48.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
+    ok(champ48.indexOf('normalizedMargin') >= 0 && champ48.indexOf('DECISION_MARGIN.CLOSE') >= 0,
+        '10.48 Champion 使用统一 normalized margin');
+    eq(/gapLimit\s*[:=]\s*14/.test(champ48), false,
+        '10.48 Champion 不再依赖旧绝对 gapLimit=14');
+    eq(champ48.indexOf('Math.round((a.score || 0) + bonus)') < 0, true,
+        '10.48 Champion 不再把 float utility 直接整数化');
+    const champCommit48 = champ48.indexOf('winner.a.score =');
+    const champReject48 = champ48.indexOf('winner.a === best');
+    ok(champCommit48 > champReject48 && champReject48 >= 0,
+        '10.48 Champion 仅在确认改判后提交分数修正，未改判不污染 candidates');
+
+    const deep48 = fs48.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+    eq(deep48.indexOf('GAP_THRESHOLD = 6') < 0, true,
+        '10.48 DeepThink 删除旧绝对 gap 阈值');
+    eq(deep48.indexOf('MODEL_W = 28') < 0, true,
+        '10.48 DeepThink 删除固定 28 分模型注入');
+    ok(deep48.indexOf('candidateSpread(cands)') >= 0 &&
+       deep48.indexOf('MODEL_SPREAD_SHARE') >= 0 &&
+       deep48.indexOf('RISK_SPREAD_SHARE') >= 0,
+        '10.48 DeepThink 模型/风险影响受当前候选 spread 约束');
+    eq(/modelP\s*>\s*_stats\.lastGap/.test(deep48), false,
+        '10.48 DeepThink 不再比较概率与 utility gap 两种不同单位');
+
+    const planner48 = fs48.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    ok(planner48.indexOf('signedNormalizedImprovement') >= 0 &&
+       planner48.indexOf('DECISION_MARGIN.PLANNER_REPLACE') >= 0,
+        '10.48 Planner 改判门槛使用相对提升');
+    eq(planner48.indexOf('(best.score || 0) + 1.5') < 0, true,
+        '10.48 Planner 删除旧固定 +1.5 改判门槛');
+    ok(planner48.indexOf('canonicalOf(planTop)') >= 0 &&
+       planner48.indexOf('canonicalOf(planBest.action)') >= 0,
+        '10.48 Planner 普通规划与残局规划都回到 canonical candidate');
+
+    const eng48 = fs48.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    eq(/gapLimit\s*:\s*14/.test(eng48), false,
+        '10.48 engine 不再向 Champion 传绝对 gapLimit');
+    eq(/aN\.score\s*<=\s*-8/.test(eng48), false,
+        '10.48 负样本不再依赖旧绝对 -8 阈值');
+    ok(eng48.indexOf('aN.score < 0') >= 0 && eng48.indexOf('negativePool[0]') >= 0,
+        '10.48 每个决策点记录相对最差的真实负收益候选');
+    ok(eng48.indexOf('normalizedMargin(c[0].score || 0, c[1].score || 0)') >= 0,
+        '10.48 决策质量统计使用 normalized margin');
+    ok(eng48.indexOf('Object.assign(canonical, refined)') >= 0,
+        '10.48 Planner winner 在进入后续层前归并回 canonical candidate');
+
+    const bus48 = fs48.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'strategyBus.js'), 'utf8');
+    eq(/Math\.abs\(scoreGap\)\s*>=\s*5/.test(bus48), false,
+        '10.48 StrategyBus 不保留旧绝对分差 5');
+    ok(bus48.indexOf('normalizedMargin') >= 0 && bus48.indexOf('DECISION_MARGIN.CLEAR') >= 0,
+        '10.48 StrategyBus 即使未来重新启用也复用统一 margin 契约');
 }
 
 /* ---------- 汇总 ---------- */

@@ -12,6 +12,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { log } from '../../foundation/diag/logger.js';
+import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
 
 // Autor: Feisheng Original | Licencia: GPL-3.0
 const BUS_STATS = {
@@ -93,9 +94,10 @@ function _tryPlanner(me, ruleBest, modelPick, candidates) {
         }
 
         const scoreGap = (ruleAction.score || 0) - (modelAction.score || 0);
-        if (Math.abs(scoreGap) >= 5) {
-            if (scoreGap > 0) return { winner: 'rule', picked: ruleAction, reason: '规则分差 ' + scoreGap.toFixed(1) };
-            return { winner: 'model', picked: modelAction, reason: '模型分差 ' + Math.abs(scoreGap).toFixed(1) };
+        const margin = normalizedMargin(ruleAction.score || 0, modelAction.score || 0);
+        if (margin >= DECISION_MARGIN.CLEAR) {
+            if (scoreGap > 0) return { winner: 'rule', picked: ruleAction, reason: '规则相对边际 ' + margin.toFixed(3) };
+            return { winner: 'model', picked: modelAction, reason: '模型相对边际 ' + margin.toFixed(3) };
         }
 
         if (planFn) {

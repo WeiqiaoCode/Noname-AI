@@ -21,6 +21,8 @@ import { log } from '../../foundation/diag/logger.js';
 import { isEnemyOf, probHasShan, seatPressure, threatOf } from '../threat/threat.js';
 import { isAllyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 import { baseEquipValue } from '../basic/equipBrain.js';
+import { signedNormalizedImprovement, DECISION_MARGIN } from '../state/decisionMargin.js';
+import { targetKey } from '../state/actionCandidate.js';
 
 const PLAN_TIMEOUT = 350;
 const LOOKAHEAD_DISCOUNT = 0.7;
@@ -565,30 +567,53 @@ export function refineBestWithPlan(me, best, bestT) {
 
 		const planBest = plan.best;
 
+		const liveCandidates = (_status.djsc_lastCandidates || []);
+		function canonicalOf(action) {
+			if (!action) return null;
+			const actionType = action.type === 'equip' ? 'equip'
+				: (action.type === 'skill' ? 'skill' : 'card');
+			return liveCandidates.find(function (c) {
+				if (!c || c.id !== action.id) return false;
+				if ((c.type || 'card') !== actionType) return false;
+				if (action.target != null && c.target != null && c.target !== action.target) return false;
+				return true;
+			}) || null;
+		}
+
 		if (plan.isKill && planBest.action) {
-			return {
-				/* ★ 先装武器再杀：第一步必须保持 equip 类型，不能伪装成普通 card。 */
+			const canonicalKill = canonicalOf(planBest.action);
+			const out = canonicalKill || {
 				type: planBest.action.type === 'equip' ? 'equip' : 'card',
 				id: planBest.action.id,
-				score: planBest.total,
-				reason: '★ 残局解：' + planBest.steps.map(function (s) { return s.id; }).join(' → ') + '（' + planBest.steps.reduce(function (s, x) { return s + (x.dmg || 0); }, 0) + ' 点伤害）',
-				killTarget: planBest.target,
-				/* 装备动作本身没有玩家目标；真正攻击目标保留在 killTarget，下一决策点会重新规划。 */
-				target: planBest.action.type === 'equip' ? null : planBest.target,
-				isKill: true,
 			};
+			out.score = planBest.total;
+			out.reason = '★ 残局解：' + planBest.steps.map(function (s) { return s.id; }).join(' → ') +
+				'（' + planBest.steps.reduce(function (sum, x) { return sum + (x.dmg || 0); }, 0) + ' 点伤害）';
+			out.killTarget = planBest.target;
+			if (planBest.action.type === 'equip') {
+				out.target = null;
+				out.targetObj = null;
+			} else {
+				out.targetObj = planBest.target || out.targetObj || null;
+				out.target = targetKey(out.targetObj) || out.target || null;
+			}
+			out.isKill = true;
+			out.planned = true;
+			return out;
 		}
 
 		const planTop = planBest.action;
-		if (planTop && planTop.id && planBest.total > (best.score || 0) + 1.5) {
-			return {
-				type: planTop.type || 'card',
-				id: planTop.id,
-				score: planBest.total,
-				reason: '规划：' + planTop.id + '（基础 ' + planBest.baseScore + ' + 展望 ' + planBest.futureScore + '）',
-				planned: true,
-				target: planTop.target || (planBest.target || null),
-			};
+		const improvement = planTop && planTop.id
+			? signedNormalizedImprovement(best.score || 0, planBest.total)
+			: 0;
+		if (planTop && planTop.id && improvement > DECISION_MARGIN.PLANNER_REPLACE) {
+			const canonical = canonicalOf(planTop) || planTop;
+			canonical.score = planBest.total;
+			canonical.reason = '规划：' + planTop.id + '（基础 ' + planBest.baseScore +
+				' + 展望 ' + planBest.futureScore + '，相对提升 ' + improvement.toFixed(3) + '）';
+			canonical.planned = true;
+			canonical.target = planTop.target || (planBest.target || null);
+			return canonical;
 		}
 
 		return best;
