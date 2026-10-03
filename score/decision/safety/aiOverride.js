@@ -357,14 +357,20 @@ export function eventAcceptsSkillTargetPlan(next, player, decision) {
 	try {
 		if (!decision || !decision.target) return false;
 		const planned = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
-		/* 组合合法性依赖实时已选目标时，连第一目标也不预执行 filterTarget，
-		 * 直接 fail-open，避免拿“空选择态”误证明整组合法。 */
-		if (planned.length > 1 && _eventFilterDependsOnSelection(next && next.filterTarget)) return false;
+		/* 合法性只要依赖实时已选对象，就不能在事件创建阶段静态证明。
+		 * 单目标也可能发生在 chooseButtonTarget/多阶段技能里，并依赖已选 button/card。 */
+		if (_eventFilterDependsOnSelection(next && next.filterTarget)) return false;
 		if (!eventAcceptsSkillTarget(next, player, planned[0])) return false;
-		if (planned.length <= 1) return true;
-		if (decision.targetRangeResolved !== true) return false;
+
+		/* 当前事件若声明固定目标数，必须与计划数量一致；这个兼容性约束同样适用于单目标，
+		 * 防止同一技能里的“单目标计划”误桥到另一个固定2目标阶段。 */
 		const fixed = _eventFixedTargetCount(next);
-		if (fixed !== planned.length) return false;
+		if (fixed !== null && fixed !== planned.length) return false;
+		if (planned.length <= 1) return true;
+
+		/* 多目标整组只有在 engine 已解析数量、且当前事件本身也是相同固定 N 时才可桥接。 */
+		if (decision.targetRangeResolved !== true) return false;
+		if (fixed === null) return false;
 		for (const t of planned) {
 			if (!eventAcceptsSkillTarget(next, player, t)) return false;
 		}
