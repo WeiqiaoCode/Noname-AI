@@ -147,7 +147,7 @@ import { shunshouBonus } from '../timing/shunshouTiming.js';
 import { deepValueBonus, deepCardValue, deepTargetValue, deepSituationValue } from '../../model/net/deepValue.js';
 import { recordTrigger, getDecayMultiplier, applyDecay, clearDecayLog, getDecayStats } from '../tuning/decayOpt.js';
 import { clearCompensation } from './scoreUnify.js';
-import { makeActionCandidate, runtimeScore, targetKey, candidateTargetValue, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
+import { makeActionCandidate, runtimeScore, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
 import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
@@ -4204,14 +4204,9 @@ function bestAction() {
 			if (refined && refined !== best) {
 				/* Planner 后续仍要经过 Champion / DeepThink / Guard，因此 winner 必须回到
 				 * acts 中的 canonical candidate，禁止同一动作以两个不同对象继续参与排序。 */
-				let canonical = acts.find(function (a) { return a === refined; }) || null;
-				if (!canonical) {
-					canonical = acts.find(function (a) {
-						if (!a || a.id !== refined.id || a.type !== refined.type) return false;
-						if (refined.target != null && a.target != null && a.target !== refined.target) return false;
-						return true;
-					}) || null;
-				}
+				let canonical = acts.find(function (a) {
+					return a && isCandidateEligible(a) && sameCandidateAction(a, refined);
+				}) || null;
 				if (canonical && canonical !== refined) {
 					Object.assign(canonical, refined);
 					best = canonical;
@@ -4550,16 +4545,15 @@ function bestAction() {
 				/* 触碰红线：用兜底动作替换 */
 				if (_guardRes.fallback) {
 					best = _guardRes.fallback;
-					/* ★ 衔接修复：护栏替换动作后，若兜底动作带目标则同步 bestT，
-					 * 避免"已换动作但目标仍是原目标"的字段自相矛盾。 */
+					/* 护栏 fallback 已经是 canonical candidate，禁止再按相同 id 改写目标。
+					 * 这里只同步 bestT 供后续日志/特征使用。 */
 					try {
-						if (best.target) {
-							for (const _a2 of acts) {
-								if (_a2.id === best.id && _a2.target && _a2.target !== best.target) {
-									best.target = _a2.target;
-									break;
-								}
-							}
+						if (best.targetObj) {
+							bestT = best.targetObj;
+						} else if (best.target && !Array.isArray(best.target)) {
+							bestT = (game.players || []).find(function (p) {
+								return p && (p.name1 || p.name || '') === best.target;
+							}) || bestT;
 						}
 					} catch (eSyncT) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSyncT); }
 				} else {
