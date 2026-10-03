@@ -3532,6 +3532,18 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 低置信 support intent 不生成宿主强方向');
     eq(eng43._skillPurposeFromIntent('mixed', 'attack', 1), null,
         '10.43 mixed intent 不被粗分类强制成单方向');
+
+    /* C3. 原生 skill effect 方向守卫不依赖 bestAction。 */
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.75, -1), -12,
+        '10.43 原生技能评估：support→敌方 强负修正');
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.75, 1), 1.5,
+        '10.43 原生技能评估：support→友方 正修正');
+    eq(ao43.skillTargetDirectionAdjustment('offense', 0.75, 1), -12,
+        '10.43 原生技能评估：offense→友方 强负修正');
+    eq(ao43.skillTargetDirectionAdjustment('offense', 0.75, -1), 1.5,
+        '10.43 原生技能评估：offense→敌方 正修正');
+    eq(ao43.skillTargetDirectionAdjustment('support', 0.4, -1), 0,
+        '10.43 低置信 intent 不干预原生技能 effect');
     eq(eng43._isSingleTargetSkillProfile({
         tags: { __targets: ['enemy', 'multi'], __scope: 'any1' },
         targets: { category: 'enemy' },
@@ -3715,6 +3727,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 同次技能发动的通用目标桥只消费一次');
     ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
         '10.43 宿主桥再次校验当前选择事件合法目标');
+    const skillDirPos43 = overrideSrc43.indexOf('const skillDir = skillDirectionEffectModifier(card, player, target)');
+    const bestActionPos43 = overrideSrc43.indexOf('const ba = _getBA(player)', skillDirPos43);
+    ok(skillDirPos43 >= 0 && bestActionPos43 > skillDirPos43,
+        '10.43 原生 skill effect 方向守卫先于 bestAction，避免被降权技能绕过');
 }
 
 /* ---------- 汇总 ---------- */
