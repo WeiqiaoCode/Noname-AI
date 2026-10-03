@@ -40,7 +40,15 @@
  */
 import { game, get } from '../../foundation/adapt/host.js';
 import { getModeStrategy } from '../strategy/modeStrategy.js';
-import { isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, identityOfFor, beliefOfFor, hardIdentityOf, isRolePossibleFor } from '../../perception/observer/identity.js';
+import { currentMode, isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, identityOfFor, beliefOfFor, hardIdentityOf, isRolePossibleFor } from '../../perception/observer/identity.js';
+
+function _isIdentityMode() {
+	try {
+		if (currentMode() === 'identity') return true;
+		const strategy = getModeStrategy();
+		return !!(strategy && (strategy.name === 'identity' || strategy.name === 'connect'));
+	} catch (e) { return false; }
+}
 
 /* ================= 暴露系统（exposureOf） =================
  * 返回对 target 的“认知状态”，只记录，不下敌友结论。
@@ -54,8 +62,7 @@ import { isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, iden
 function exposureOf(me, t) {
 	try {
 		if (!t) return { shown: false, known: 0, source: 'none', inferConfidence: 0 };
-		const strategy = getModeStrategy();
-		const identityMode = !!(strategy && (strategy.name === 'identity' || strategy.name === 'connect'));
+		const identityMode = _isIdentityMode();
 		/* 身份局严格只认公开身份；国战等其它模式保留原有“公开 group”语义。 */
 		let shown = identityMode
 			? (!!t.identityShown || t === game.zhu || t.identity === 'mingzhong')
@@ -218,9 +225,7 @@ function _identityDisposition(me, t) {
 function dispositionOf(me, t) {
 	if (!me || !t || t === me) return 0;
 	try {
-		const strategy = getModeStrategy();
-		const identityMode = !!(strategy && (strategy.name === 'identity' || strategy.name === 'connect'));
-		if (identityMode) return _identityDisposition(me, t);
+		if (_isIdentityMode()) return _identityDisposition(me, t);
 	} catch (eMode) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eMode); }
 
 	/* 非身份模式保留宿主关系逻辑。 */
