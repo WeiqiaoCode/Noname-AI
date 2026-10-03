@@ -4563,7 +4563,7 @@ function bestAction() {
 						}
 					} catch (eSyncT) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSyncT); }
 				} else {
-					best = { type: 'end', id: 'end', score: 0, reason: '护栏拦截降级：' + _guardRes.reason };
+					best = makeActionCandidate({ type: 'end', id: 'end', score: 0, reason: '护栏拦截降级：' + _guardRes.reason });
 				}
 				applyGuardPenalty('chooseToUse', _guardRes.rule);
 				best.reason = (best.reason || '') + '（🛡️护栏：' + _guardRes.reason + '）';
@@ -4581,7 +4581,8 @@ function bestAction() {
 		if (best && best.type === 'equip') _finalTarget = null;
 		const _finalResult = {
 			action: action,
-			reason: best.reason + "（评分" + best.score + "，" + sit.mode + "×" + sit.tempo + "，阶段=" + stageLabel + "，性格=" + riskLabel + teamTip + seatTip + econTip + styleTip + forecastTip + mtTip + trendTip + (comboLen ? "，联动" + comboLen + "条" : "") + "）",
+			reason: best.reason + "（真实收益" + runtimeScore(best.score) + "，策略优先级=" + ensureCandidatePolicy(best).priorityTier +
+				"，" + sit.mode + "×" + sit.tempo + "，阶段=" + stageLabel + "，性格=" + riskLabel + teamTip + seatTip + econTip + styleTip + forecastTip + mtTip + trendTip + (comboLen ? "，联动" + comboLen + "条" : "") + "）",
 			strat: best.type === "skill" ? "chooseToUse" : (best.type === "equip" ? "equipAfter" : (best.type === "end" ? "switchToAuto" : "useCardAfter")),
 			rule: best.id,
 			target: _finalTarget,
