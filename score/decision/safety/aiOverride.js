@@ -37,10 +37,31 @@ const CACHE = new Map();          // player → { key, value }
 let _installed = false;
 let _protoHooked = false;
 let _skillTargetHooked = false;
+/* 每次安装使用独立 token。旧 wrapper 即使被后装扩展包在调用链内，
+ * 卸载后也永久退化为透明 passthrough；重新安装不会让旧 wrapper 复活。 */
+let _activeHookToken = null;
+
+function _markOwnedWrapper(fn, token) {
+	try {
+		Object.defineProperty(fn, '__djscHookActive', {
+			value: function () { return !!token && _activeHookToken === token; },
+			configurable: true,
+		});
+	} catch (e) {}
+	return fn;
+}
 /* ★ M09：备份被换装的底层方法原引用，卸载时原样还原，避免热重载残留 */
 const _protoBackup = {
 	addSkill: null, getSkills: null, gameCheck: null,
-	chooseTarget: null, chooseCardTarget: null,
+	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
+	chooseButton: null, chooseControl: null,
+};
+/* 记录“我们实际安装进去的 wrapper”本身。卸载时只有当前方法仍严格等于
+ * 该 wrapper 才恢复原引用；若后装扩展又包了一层，则绝不覆盖别人的修改。 */
+const _protoOwned = {
+	addSkill: null, getSkills: null, gameCheck: null,
+	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
+	chooseButton: null, chooseControl: null,
 };
 
 /* ================= ★ 软接管打点（决策级去重） ================= */
@@ -198,17 +219,33 @@ function _findActionTarget(ba) {
 	} catch (e) { return null; }
 }
 
+function _findActionTargets(ba) {
+	try {
+		const out = [];
+		if (ba && Array.isArray(ba.targetList)) {
+			for (const p of ba.targetList) {
+				if (p && typeof p === 'object' && out.indexOf(p) < 0) out.push(p);
+			}
+		}
+		const primary = _findActionTarget(ba);
+		if (primary && out.indexOf(primary) < 0) out.unshift(primary);
+		return out;
+	} catch (e) { return []; }
+}
+
 export function getSkillTargetBridgeDecision(player, sid, baOverride) {
 	try {
 		if (!player || !sid) return null;
 		const ba = baOverride || _getBA(player);
 		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
-		/* 只桥接真正经过 kernel 合法目标池解析成功的高置信单目标动作。
-		 * 手工 ID 表（confidence=1）与源码推断都可进入；旧 action / mixed / 多目标均 fail-open。 */
+		/* 必须经过 kernel 合法目标池解析；Stage 2 允许“同一次 chooseTarget 事件内”的
+		 * 同方向多目标组合，但 mixed / 无 provenance / 低置信仍 fail-open。 */
 		const confidence = Number(ba.targetConfidence || 0);
-		if (ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55) return null;
-		const target = _findActionTarget(ba);
-		if (!target) return null;
+		if (ba.skillTargetResolved !== true || confidence < 0.55) return null;
+		if (ba.skillTargetSingle !== true && (!Array.isArray(ba.targetList) || !ba.targetList.length)) return null;
+		const targets = _findActionTargets(ba);
+		if (!targets.length) return null;
+		const target = targets[0];
 		const purpose = ba.purpose || ((ba.rule === 'attack' || ba.rule === 'control') ? 'attack'
 			: ((ba.rule === 'defense' || ba.rule === 'aux') ? 'support' : null));
 		if (purpose !== 'attack' && purpose !== 'support') return null;
@@ -218,7 +255,9 @@ export function getSkillTargetBridgeDecision(player, sid, baOverride) {
 		return {
 			skillId: sid,
 			target: target,
+			targets: targets,
 			targetName: target.playerid || target.name1 || target.name || '',
+			targetRangeResolved: ba.targetRangeResolved !== false,
 			purpose: purpose,
 			intent: ba.targetIntent,
 			confidence: confidence,
@@ -240,7 +279,8 @@ export function wrapSkillTargetAI(original, player, decision) {
 		} catch (e) {}
 		try {
 			if (!target) return nativeScore;
-			if (_samePlayer(target, decision.target)) return Math.max(nativeScore, 12);
+			const plannedTargets = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
+			if (plannedTargets.some(function (p) { return _samePlayer(target, p); })) return Math.max(nativeScore, 12);
 			const rel = dispositionOf(player, target);
 			if (decision.purpose === 'support') {
 				if (rel < 0) return Math.min(nativeScore, -12);
@@ -284,6 +324,60 @@ export function eventAcceptsSkillTarget(next, player, target) {
 	} catch (e) { return false; }
 }
 
+function _eventFilterDependsOnSelection(filterTarget) {
+	try {
+		if (typeof filterTarget !== 'function') return false;
+		const src = filterTarget.toString();
+		const body = src.indexOf('=>') >= 0 ? src.slice(src.indexOf('=>') + 2) : src.slice(src.indexOf('{') + 1);
+		/* 多目标组合合法性若依赖已选目标/实时事件，不能通过逐目标静态调用证明。
+		 * 这里故意偏保守：漏判会把“不合法组合”错误桥接进宿主；误判最多只是回退原生 AI。 */
+		if (/ui\s*\.\s*selected\b|_status\s*\.\s*event\b|get\s*\.\s*event\b/.test(body)) return true;
+		if (/\b(?:event|evt|currentEvent|chooseEvent|trigger|parent)\s*\.\s*(?:targets|cards|buttons|selected|selectedTargets|selectedCards)\b/.test(body)) return true;
+		if (/\bthis\s*\.\s*(?:targets|cards|buttons|selected|selectedTargets|selectedCards)\b/.test(body)) return true;
+		return false;
+	} catch (e) { return true; }
+}
+
+function _eventFixedTargetCount(next) {
+	try {
+		if (!next) return null;
+		const st = next.selectTarget;
+		if (typeof st === 'number') return st >= 0 ? st : null;
+		if (Array.isArray(st) && st.length >= 2) {
+			const a = Number(st[0]), b = Number(st[1]);
+			if (Number.isFinite(a) && Number.isFinite(b) && a >= 0 && a === b) return a;
+			return null;
+		}
+		if (st == null && typeof next.filterTarget === 'function') return 1;
+		return null;
+	} catch (e) { return null; }
+}
+
+export function eventAcceptsSkillTargetPlan(next, player, decision) {
+	try {
+		if (!decision || !decision.target) return false;
+		const planned = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
+		/* 合法性只要依赖实时已选对象，就不能在事件创建阶段静态证明。
+		 * 单目标也可能发生在 chooseButtonTarget/多阶段技能里，并依赖已选 button/card。 */
+		if (_eventFilterDependsOnSelection(next && next.filterTarget)) return false;
+		if (!eventAcceptsSkillTarget(next, player, planned[0])) return false;
+
+		/* 当前事件若声明固定目标数，必须与计划数量一致；这个兼容性约束同样适用于单目标，
+		 * 防止同一技能里的“单目标计划”误桥到另一个固定2目标阶段。 */
+		const fixed = _eventFixedTargetCount(next);
+		if (fixed !== null && fixed !== planned.length) return false;
+		if (planned.length <= 1) return true;
+
+		/* 多目标整组只有在 engine 已解析数量、且当前事件本身也是相同固定 N 时才可桥接。 */
+		if (decision.targetRangeResolved !== true) return false;
+		if (fixed === null) return false;
+		for (const t of planned) {
+			if (!eventAcceptsSkillTarget(next, player, t)) return false;
+		}
+		return true;
+	} catch (e) { return false; }
+}
+
 export function bridgeSkillTargetChoiceOnce(next, player, skillContext, field, baOverride) {
 	try {
 		if (!skillContext || !skillContext.id) return next;
@@ -307,7 +401,7 @@ export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 		if (!next || !player || !sid || !field) return next;
 		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
 		if (!decision) return next;
-		if (!eventAcceptsSkillTarget(next, player, decision.target)) return next;
+		if (!eventAcceptsSkillTargetPlan(next, player, decision)) return next;
 		if (typeof next[field] === 'function') next[field] = wrapSkillTargetAI(next[field], player, decision);
 
 		/* 很多本体技能是 chooseTarget(...).set('ai', fn)：
@@ -330,32 +424,265 @@ export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 	} catch (e) { return next; }
 }
 
+export function wrapSkillCostCardAI(original, player, decision) {
+	if (!decision || !player) return original;
+	const tag = decision.skillId + '|' + decision.targetName;
+	if (original && original.__djscSkillCostBridge === tag) return original;
+	const wrapped = function (card) {
+		let nativeScore = 0;
+		try {
+			if (typeof original === 'function') {
+				const n = Number(original.apply(this, arguments));
+				if (Number.isFinite(n)) nativeScore = n;
+			}
+		} catch (e) {}
+		try {
+			let owner = null;
+			try { owner = get.owner ? get.owner(card) : null; } catch (e) {}
+			if (owner && owner !== player) return nativeScore;
+			const v = Number(get.value(card, player));
+			if (!Number.isFinite(v)) return nativeScore;
+			const tie = Math.max(-0.2, Math.min(0.2, -v * 0.02));
+			return nativeScore + tie;
+		} catch (e) { return nativeScore; }
+	};
+	try { Object.defineProperty(wrapped, '__djscSkillCostBridge', { value: tag, configurable: true }); } catch (e) {}
+	return wrapped;
+}
+
+export function bridgeSkillCardCostEvent(next, player, sid, field, baOverride) {
+	try {
+		if (!next || !player || !sid || !field || next.processAI) return next;
+		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
+		if (!decision) return next;
+		/* 联合选牌只跟随“同一个 chooseCardTarget 事件里已经成功桥接的目标计划”。
+		 * 若目标桥因 consumed / stage mismatch / card-dependent filter 而 fail-open，
+		 * 牌半边也必须一起 fail-open。 */
+		const attached = next.__djscSkillTargetDecision;
+		if (!attached || attached.skillId !== sid) return next;
+		if (!eventAcceptsSkillTargetPlan(next, player, decision)) return next;
+		if (typeof next[field] === 'function') next[field] = wrapSkillCostCardAI(next[field], player, decision);
+		if (typeof next.set === 'function' && !next.__djscSkillCostSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === field && typeof value === 'function') value = wrapSkillCostCardAI(value, player, decision);
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillCostSetBridge = true; } catch (e) {}
+		}
+		return next;
+	} catch (e) { return next; }
+}
+
+function _skillExplicitButtonDecision(player, sid, baOverride) {
+	try {
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
+		if (ba.rule === 'veto' || ba.rule === 'veto-target') return null;
+		if (ba.buttonChoice === undefined || ba.buttonChoice === null) return null;
+		return ba.buttonChoice;
+	} catch (e) { return null; }
+}
+
+export function wrapExplicitSkillButtonAI(original, planned) {
+	if (planned === null || planned === undefined) return original;
+	const wrapped = function (button) {
+		let nativeScore = 0;
+		try {
+			if (typeof original === 'function') {
+				const n = Number(original.apply(this, arguments));
+				if (Number.isFinite(n)) nativeScore = n;
+			}
+		} catch (e) {}
+		try {
+			if (!button) return nativeScore;
+			if (button.link === planned || button === planned) return Math.max(nativeScore, 12);
+		} catch (e) {}
+		return nativeScore;
+	};
+	return wrapped;
+}
+
+export function bridgeSkillButtonEvent(next, player, sid, field, baOverride) {
+	try {
+		if (!next || !player || !sid || !field || next.processAI) return next;
+		/* button.link 即使恰好是玩家，也可能表示技能内部另一种角色/分支语义。
+		 * 只有 planner 明确产出 buttonChoice 才允许接管；否则完全原生。 */
+		const planned = _skillExplicitButtonDecision(player, sid, baOverride);
+		if (planned === null) return next;
+		let bridged = false;
+		if (typeof next[field] === 'function') {
+			next[field] = wrapExplicitSkillButtonAI(next[field], planned);
+			bridged = true;
+		}
+		if (typeof next.set === 'function' && !next.__djscSkillButtonSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === field && typeof value === 'function') value = wrapExplicitSkillButtonAI(value, planned);
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillButtonSetBridge = true; } catch (e) {}
+			bridged = true;
+		}
+		if (bridged) {
+			try { next.__djscSkillButtonDecision = { skillId: sid, choice: planned }; } catch (e) {}
+		}
+		return next;
+	} catch (e) { return next; }
+}
+
+export function bridgeSkillButtonChoiceOnce(next, player, skillContext, field, baOverride) {
+	try {
+		if (!skillContext || !skillContext.id) return next;
+		const ownerEvent = skillContext.event || null;
+		if (ownerEvent && ownerEvent.__djscSkillButtonBridgeConsumed) return next;
+		const out = bridgeSkillButtonEvent(next, player, skillContext.id, field, baOverride);
+		if (out && out.__djscSkillButtonDecision && ownerEvent) {
+			try {
+				ownerEvent.__djscSkillButtonBridgeConsumed = {
+					skillId: skillContext.id,
+				};
+			} catch (e) {}
+		}
+		return out;
+	} catch (e) { return next; }
+}
+
+function _skillExplicitControlDecision(player, sid, baOverride) {
+	try {
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
+		if (ba.rule === 'veto' || ba.rule === 'veto-target') return null;
+		/* chooseControl 的语义高度技能特化。只有 planner 明确产出 controlChoice
+		 * 才允许桥接；“唯一非取消项”本身不代表继续子效果一定更优。 */
+		if (ba.controlChoice === undefined || ba.controlChoice === null) return null;
+		return ba.controlChoice;
+	} catch (e) { return null; }
+}
+
+export function bridgeSkillControlEvent(next, player, sid, baOverride) {
+	try {
+		if (!next || !player || !sid || next.processAI) return next;
+		const planned = _skillExplicitControlDecision(player, sid, baOverride);
+		if (planned === null) return next;
+		const wrap = function (original) {
+			return function () {
+				try {
+					const controls = Array.isArray(next.controls) ? next.controls : [];
+					if (typeof planned === 'number' && planned >= 0 && planned < controls.length) return planned;
+					const idx = controls.indexOf(planned);
+					if (idx >= 0) return idx;
+				} catch (e) {}
+				try { return typeof original === 'function' ? original.apply(this, arguments) : 0; } catch (e) { return 0; }
+			};
+		};
+		next.ai = wrap(typeof next.ai === 'function' ? next.ai : null);
+		if (typeof next.set === 'function' && !next.__djscSkillControlSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === 'ai' && typeof value === 'function') value = wrap(value);
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillControlSetBridge = true; } catch (e) {}
+		}
+		try { next.__djscSkillControlDecision = { skillId: sid, choice: planned }; } catch (e) {}
+		return next;
+	} catch (e) { return next; }
+}
+
+export function bridgeSkillControlChoiceOnce(next, player, skillContext, baOverride) {
+	try {
+		if (!skillContext || !skillContext.id) return next;
+		const ownerEvent = skillContext.event || null;
+		if (ownerEvent && ownerEvent.__djscSkillControlBridgeConsumed) return next;
+		const out = bridgeSkillControlEvent(next, player, skillContext.id, baOverride);
+		if (out && out.__djscSkillControlDecision && ownerEvent) {
+			try {
+				ownerEvent.__djscSkillControlBridgeConsumed = {
+					skillId: skillContext.id,
+				};
+			} catch (e) {}
+		}
+		return out;
+	} catch (e) { return next; }
+}
+
 function _hookSkillTargetChoice() {
 	if (_skillTargetHooked) return;
 	try {
 		const proto = lib.element && lib.element.Player && lib.element.Player.prototype;
 		if (!proto) return;
+		const hookToken = _activeHookToken;
+		if (!hookToken) return;
 
 		const origChooseTarget = proto.chooseTarget;
 		if (typeof origChooseTarget === 'function') {
 			_protoBackup.chooseTarget = origChooseTarget;
-			proto.chooseTarget = function () {
+			proto.chooseTarget = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseTarget.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseTarget.apply(this, arguments);
 				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai') : next;
-			};
+			}, hookToken);
+			_protoOwned.chooseTarget = proto.chooseTarget;
 		}
 
 		const origChooseCardTarget = proto.chooseCardTarget;
 		if (typeof origChooseCardTarget === 'function') {
 			_protoBackup.chooseCardTarget = origChooseCardTarget;
-			proto.chooseCardTarget = function () {
+			proto.chooseCardTarget = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseCardTarget.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseCardTarget.apply(this, arguments);
-				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2') : next;
-			};
+				if (!skillCtx) return next;
+				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2');
+				bridgeSkillCardCostEvent(next, this, skillCtx.id, 'ai1');
+				return next;
+			}, hookToken);
+			_protoOwned.chooseCardTarget = proto.chooseCardTarget;
 		}
-		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget);
+
+		const origChooseButtonTarget = proto.chooseButtonTarget;
+		if (typeof origChooseButtonTarget === 'function') {
+			_protoBackup.chooseButtonTarget = origChooseButtonTarget;
+			proto.chooseButtonTarget = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseButtonTarget.apply(this, arguments);
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
+				const next = origChooseButtonTarget.apply(this, arguments);
+				if (!skillCtx) return next;
+				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2');
+				bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai1');
+				return next;
+			}, hookToken);
+			_protoOwned.chooseButtonTarget = proto.chooseButtonTarget;
+		}
+
+		const origChooseButton = proto.chooseButton;
+		if (typeof origChooseButton === 'function') {
+			_protoBackup.chooseButton = origChooseButton;
+			proto.chooseButton = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseButton.apply(this, arguments);
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
+				const next = origChooseButton.apply(this, arguments);
+				return skillCtx ? bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai') : next;
+			}, hookToken);
+			_protoOwned.chooseButton = proto.chooseButton;
+		}
+
+		const origChooseControl = proto.chooseControl;
+		if (typeof origChooseControl === 'function') {
+			_protoBackup.chooseControl = origChooseControl;
+			proto.chooseControl = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseControl.apply(this, arguments);
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
+				const next = origChooseControl.apply(this, arguments);
+				return skillCtx ? bridgeSkillControlChoiceOnce(next, this, skillCtx) : next;
+			}, hookToken);
+			_protoOwned.chooseControl = proto.chooseControl;
+		}
+
+		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget
+			|| _protoBackup.chooseButtonTarget || _protoBackup.chooseButton || _protoBackup.chooseControl);
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
@@ -535,6 +862,7 @@ export function installAIOverride() {
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		});
 
+		_activeHookToken = {};
 		_hookAddSkill();
 		_hookRoundChange();
 		_hookSkillTargetChoice();
@@ -542,6 +870,7 @@ export function installAIOverride() {
 		_installed = true;
 		try { if (game.log) game.log('决策积分引擎：原生 AI 软接管层已安装（aiOrder + aiValue + effect + useful）'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	} catch (e) {
+		_activeHookToken = null;
 		try { console.error('[决策积分引擎] installAIOverride 失败：', e); } catch (e2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e2); }
 	}
 }
@@ -550,10 +879,13 @@ function _hookAddSkill() {
 	if (_protoHooked) return;
 	try {
 		const proto = lib.element.Player.prototype;
+		const hookToken = _activeHookToken;
+		if (!hookToken) return;
 		const orig = proto.addSkill;
 		if (typeof orig !== 'function') return;
 		_protoBackup.addSkill = orig;   /* ★ M09：存下原生 addSkill，卸载时还原 */
-		proto.addSkill = function () {
+		proto.addSkill = _markOwnedWrapper(function () {
+			if (_activeHookToken !== hookToken) return orig.apply(this, arguments);
 			const r = orig.apply(this, arguments);
 			try {
 				if (this !== game.me && !this.hasSkill(SKILL_ID) && lib.skill[SKILL_ID]) {
@@ -561,14 +893,16 @@ function _hookAddSkill() {
 				}
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 			return r;
-		};
+		}, hookToken);
+		_protoOwned.addSkill = proto.addSkill;
 		_protoHooked = true;
 
 		/* ★ 修复左慈死亡 temp 报错：过滤掉 lib.skill[sid] 为 undefined 的残留技能 */
 		const origGetSkills = proto.getSkills;
 		if (typeof origGetSkills === 'function') {
 			_protoBackup.getSkills = origGetSkills;   /* ★ M09：存下原生 getSkills，卸载时还原 */
-			proto.getSkills = function () {
+			proto.getSkills = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origGetSkills.apply(this, arguments);
 				const skills = origGetSkills.apply(this, arguments);
 				try {
 					if (Array.isArray(skills) && skills.length > 0) {
@@ -578,7 +912,8 @@ function _hookAddSkill() {
 					}
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				return skills;
-			};
+			}, hookToken);
+			_protoOwned.getSkills = proto.getSkills;
 		}
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
@@ -586,31 +921,40 @@ function _hookAddSkill() {
 function _hookRoundChange() {
 	try {
 		if (game.__djsc_check_hooked) return;
+		const hookToken = _activeHookToken;
+		if (!hookToken) return;
 		game.__djsc_check_hooked = true;
 		const orig = game.check;
 		if (typeof orig !== 'function') return;
 		_protoBackup.gameCheck = orig;   /* ★ M09：存下原生 game.check，卸载时还原 */
-		game.check = function () {
+		game.check = _markOwnedWrapper(function () {
+			if (_activeHookToken !== hookToken) return orig.apply(this, arguments);
 			try { _clearCache(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 			return orig.apply(this, arguments);
-		};
+		}, hookToken);
+		_protoOwned.gameCheck = game.check;
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
 /* ---------- 卸载 ---------- */
 export function uninstallAIOverride() {
+	/* 先失效本代 wrapper；即使它被第三方 wrapper 包在内部，也只能透明调用旧原函数。 */
+	_activeHookToken = null;
 	try { _clearCache(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ M09：还原被换装的底层方法（仅当仍是我们的包装时才还原，避免热重载残留） */
 	try {
 		var proto = (lib && lib.element && lib.element.Player) ? lib.element.Player.prototype : null;
 		if (proto) {
-			if (_protoBackup.addSkill && proto.addSkill !== _protoBackup.addSkill) proto.addSkill = _protoBackup.addSkill;
-			if (_protoBackup.getSkills && proto.getSkills !== _protoBackup.getSkills) proto.getSkills = _protoBackup.getSkills;
-			if (_protoBackup.chooseTarget && proto.chooseTarget !== _protoBackup.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
-			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget !== _protoBackup.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
+			if (_protoBackup.addSkill && proto.addSkill === _protoOwned.addSkill) proto.addSkill = _protoBackup.addSkill;
+			if (_protoBackup.getSkills && proto.getSkills === _protoOwned.getSkills) proto.getSkills = _protoBackup.getSkills;
+			if (_protoBackup.chooseTarget && proto.chooseTarget === _protoOwned.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
+			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget === _protoOwned.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
+			if (_protoBackup.chooseButtonTarget && proto.chooseButtonTarget === _protoOwned.chooseButtonTarget) proto.chooseButtonTarget = _protoBackup.chooseButtonTarget;
+			if (_protoBackup.chooseButton && proto.chooseButton === _protoOwned.chooseButton) proto.chooseButton = _protoBackup.chooseButton;
+			if (_protoBackup.chooseControl && proto.chooseControl === _protoOwned.chooseControl) proto.chooseControl = _protoBackup.chooseControl;
 		}
 		var g = (typeof game !== 'undefined') ? game : null;
-		if (g && _protoBackup.gameCheck && g.check !== _protoBackup.gameCheck) g.check = _protoBackup.gameCheck;
+		if (g && _protoBackup.gameCheck && g.check === _protoOwned.gameCheck) g.check = _protoBackup.gameCheck;
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ M09：复位标志，允许下次 install 重新正确地换装 */
 	try {
@@ -618,6 +962,7 @@ export function uninstallAIOverride() {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	_protoHooked = false;
 	_skillTargetHooked = false;
+	for (const k of Object.keys(_protoOwned)) _protoOwned[k] = null;
 	try { delete lib.skill[SKILL_ID]; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	(game.players || []).forEach(function (p) {
 		try { p.removeSkill(SKILL_ID); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
