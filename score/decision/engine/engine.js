@@ -2477,8 +2477,11 @@ function applyBasicJudgeRules(me, acts) {
 			if (a.type !== 'card') return;
 			const id = a.id;
 			if (id !== 'lebu' && id !== 'bingliang' && id !== 'shandian') return;
-			const tk = pickTargetByPurpose('control', targets);
-			const t = tk.index >= 0 ? targets[tk.index] : null;
+			let t = null;
+			if (a.targetObj) {
+				t = targets.find(function (cand) { return cand && cand.pp === a.targetObj; }) || null;
+			}
+			/* 闪电等无单外部目标牌允许 target=null；其余目标牌若候选未绑定则只做保守规则判断。 */
 			const d = decideJudge(id, { me: { hp: me.hp }, target: t, targets: targets, hasRejudge: hasRejudge });
 			if (d.veto) {
 				a.score = Math.min(a.score, -8);
@@ -3068,8 +3071,8 @@ function bestAction() {
 
 				/* ★ 记忆驱动：根据 cardTarget 的风格调整卡牌价值 */
 				try {
-					if (cardTarget && bestTStyle) {
-						const sStyle = bestTStyle;
+					if (cardTarget && cardTargetStyle) {
+						const sStyle = cardTargetStyle;
 						if (sStyle.tag === "aggressive") {
 							/* 面对激进敌人：防御牌价值提高 */
 							if (['shan', 'tao', 'jiu', 'wuxie', 'exjiu'].indexOf(id) >= 0) {
@@ -3833,6 +3836,7 @@ function bestAction() {
 				 * 在同一层比较 RECAST / 单目标 / 双目标（含「解队友 + 链敌人」）。 */
 				let targetNames = null;
 				let targetDesc = '';
+				let tieTargets = null;
 				let recast = false;
 				let actScore = s;
 				if (id === 'tiesuo') {
@@ -3899,7 +3903,8 @@ function bestAction() {
 						 * 禁止 use 继续沿用普通卡 s、recast 却只拿 1.2，避免尺度断层。 */
 						actScore = tiesuoUtilityToEngineRaw(tieUtility);
 						if (tieBest && tieBest.type === 'use' && tieBest.targets && tieBest.targets.length) {
-							targetNames = tieBest.targets.map(function (p) { return p.name || p.name1; });
+							tieTargets = tieBest.targets.slice();
+							targetNames = tieTargets.map(function (p) { return p.name || p.name1; });
 							targetDesc = '→' + targetNames.join('+') + '（连' + targetNames.length + '个，ΔU' + tieBest.delta
 								+ '，门槛' + tieRes.useThreshold + '，raw' + actScore + '）';
 						} else {
@@ -3920,8 +3925,7 @@ function bestAction() {
 					id: id,
 					target: targetNames,
 					targetObj: (id === 'tiesuo') ? null : cardTarget,
-					targetList: (id === 'tiesuo' && !recast && Array.isArray(targetNames))
-						? ((tieBest && tieBest.targets) || null) : null,
+					targetList: (id === 'tiesuo' && !recast) ? tieTargets : null,
 					targetResolved: id === 'tiesuo' ? true : boundTarget.resolved,
 					recast: recast,
 					targetScore: id === 'tiesuo' ? runtimeScore(bestTs) : runtimeScore(boundTarget.score || 0),
