@@ -3992,6 +3992,12 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         && src44.indexOf('_protoBackup.chooseButton') >= 0
         && src44.indexOf('_protoBackup.chooseControl') >= 0,
         '10.44 stage2 hook 有对称备份/卸载');
+    ok(src44.indexOf('proto.chooseTarget === _protoOwned.chooseTarget') >= 0
+        && src44.indexOf('proto.chooseButton === _protoOwned.chooseButton') >= 0
+        && src44.indexOf('proto.chooseControl === _protoOwned.chooseControl') >= 0,
+        '10.44 卸载只还原自己仍持有的 wrapper，不覆盖后装扩展');
+    ok(src44.indexOf('const _protoOwned = {') >= 0,
+        '10.44 记录实际安装 wrapper 所有权');
     ok(brainSrc44.indexOf('ctx.selectTargetRange') >= 0
         && brainSrc44.indexOf('targetRangeResolved') >= 0,
         '10.44 多目标 planner 消费宿主数量契约');
