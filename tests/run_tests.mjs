@@ -3430,7 +3430,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(Number(support43.feedDraw || 0), 0, '10.43 target.draw 不再默认 feedDraw');
     eq(support43.__targetIntent, 'support', '10.43 增益 target 自动识别 support');
     eq((support43.__targets || [])[0], 'ally', '10.43 增益 target 自动生成 ally 目标');
-    ok((support43.__targetConfidence || 0) >= 0.9, '10.43 单方向 support 置信度高');
+    ok((support43.__targetConfidence || 0) >= 0.7 && (support43.__targetConfidence || 0) < 1,
+        '10.43 自动 support 推断为高但非满置信度');
 
     /* A2. 负面作用于 target → offense/enemy。 */
     const offense43 = sc43.scanObjectMethod(`
@@ -3475,7 +3476,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(tags43.__targetIntent, 'support', '10.43 未登记技能自动得到 support intent');
     eq(prof43.targets.category, 'ally', '10.43 profile 目标类别=ally');
     eq(prof43.targets.intent, 'support', '10.43 profile 保留 support intent');
-    ok(prof43.targets.confidence >= 0.9, '10.43 profile 保留高目标方向置信度');
+    ok(prof43.targets.confidence >= 0.7 && prof43.targets.confidence < 1,
+        '10.43 profile 保留自动推断置信度且不冒充手工 1.0');
 
     /* C. filterTarget 合法性：已受伤可选，满血不可选。 */
     const me43 = { name: 'me43', name1: 'me43', playerid: 'me43' };
@@ -3512,9 +3514,11 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 self-only 技能不要求外部目标');
     eq(eng43._skillNeedsExternalTarget('ally_skill_43', { tags: { __targets: ['ally'] } }), true,
         '10.43 ally 技能要求外部目标');
-    eq(eng43._skillPurposeFromIntent('support', 'draw'), 'support',
+    eq(eng43._skillPurposeFromIntent('support', 'draw', 0.75), 'support',
         '10.43 support intent 覆盖 category=draw，避免把给牌/摸牌辅助误映射 attack');
-    eq(eng43._skillPurposeFromIntent('mixed', 'attack'), null,
+    eq(eng43._skillPurposeFromIntent('support', 'draw', 0.4), null,
+        '10.43 低置信 support intent 不生成宿主强方向');
+    eq(eng43._skillPurposeFromIntent('mixed', 'attack', 1), null,
         '10.43 mixed intent 不被粗分类强制成单方向');
 
     const SELF43 = 'kernel_self_fixture_alpha';
