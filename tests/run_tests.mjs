@@ -2673,9 +2673,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             const zhu = P38('zhu38b', 'zhu', true);
             const me = P38('me38b', 'zhong', false);
             const x = P38('x38b', 'fan', false);
-            const others = Array.from({ length: 7 }, function (_, i) { return P38('u38b' + i, '', false); });
+            const others = Array.from({ length: 17 }, function (_, i) { return P38('u38b' + i, '', false); });
             install38([zhu, me, x].concat(others), me, zhu,
-                ['zhu','zhong','zhong','zhong','zhong','zhong','zhong','zhong','zhong','fan']);
+                ['zhu'].concat(Array.from({ length: 18 }, function () { return 'zhong'; }), ['fan']));
             host38.get.attitude = function () { return 0; };
             obs38.resetObs();
             id38.resetBelief();
@@ -2750,6 +2750,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         const relSrc38 = fs38.readFileSync(join(_pkg, 'score', 'decision', 'relations', 'relations.js'), 'utf8');
         const identityRelBlock38 = relSrc38.slice(
             relSrc38.indexOf('function _identitySpyDisposition'),
+            relSrc38.indexOf('function dispositionOf')
+        );
+        const dispositionBlock38 = relSrc38.slice(
+            relSrc38.indexOf('function dispositionOf'),
             relSrc38.indexOf('function isAllyOf')
         );
         eq(/get\.attitude\s*\(\s*zhu\s*,\s*p\s*\)/.test(idSrc38), false,
@@ -2757,7 +2761,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         eq(identityRelBlock38.indexOf('get.attitude') >= 0, false,
             '10.38 identity disposition 分支不调用宿主 get.attitude');
         eq(identityRelBlock38.indexOf('.isFriend(') >= 0, false,
-            '10.38 identity disposition 分支不调用宿主 isFriend');
+            '10.38 identity disposition helper 不调用宿主 isFriend');
+        ok(dispositionBlock38.indexOf("if (_isIdentityMode()) return _identityDisposition(me, t);") >= 0,
+            '10.38 disposition 在宿主 isFriend/get.attitude 之前先返回身份模式公平路径');
         ok(idSrc38.indexOf('isRolePossibleFor') >= 0,
             '10.38 逻辑可能性由 role slots 独立表达');
         eq(/\(b\.fan \|\| 0\) === 0|\(b\.zhong \|\| 0\) === 0/.test(relSrc38), false,
