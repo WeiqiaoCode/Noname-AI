@@ -7,7 +7,8 @@
  * ============================================
  */
 import { safeGet as _lsGet, safeSet as _lsSet, safeRemove as _lsRemove } from '../../foundation/storage/storage.js';
-import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
+import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
+import { isCandidateEligible, candidatePriorityRank } from '../state/actionCandidate.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
 
 /* ================= 决策点嵌入固定（逐决策点 → 一条最强嵌入） =================
  * 训练后把每个"决策点"(heroId + action + id) 定型为一条嵌入条。
@@ -320,8 +321,12 @@ export function applyChampionRule(acts, best, boost, ctx) {
         if (!STORE.embeds) return { best: best, replaced: false, hit: 0, sim: 0 };
         const heroId = (ctx && ctx.heroId) ? String(ctx.heroId) : '';
 
-        const rankedBase = acts.slice().filter(function (a) {
-            return a && typeof a.score === 'number';
+        const bestTier = candidatePriorityRank(best);
+        const policyActs = acts.slice().filter(function (a) {
+            return a && isCandidateEligible(a) && candidatePriorityRank(a) === bestTier;
+        });
+        const rankedBase = policyActs.filter(function (a) {
+            return typeof a.score === 'number';
         }).sort(function (x, y) {
             return y.score - x.score;
         });
@@ -333,7 +338,7 @@ export function applyChampionRule(acts, best, boost, ctx) {
         }
 
         let hitCount = 0, bestSim = 0, appliedSim = false;
-        const evaluated = acts.map(function (a) {
+        const evaluated = policyActs.map(function (a) {
             if (!a || typeof a.score !== 'number') return { a: a, score: a && a.score || 0, bonus: 0, champion: false, sim: 0 };
             const bridged = Number(boost) || 0;
             let bonus = 0, usedSim = 0;
