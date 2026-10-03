@@ -185,7 +185,7 @@ function _removalOptions(tgt, tgtRel, srcRel, isSteal) {
 		if (h > 0) {
 			/* 手牌身份不可见，只按“可失去一张未知手牌”的期望价值估计。 */
 			let handValue = 0.9;
-			if (_hpOf(tgt) <= 1) handValue += 1.5;
+			if (_hpOf(tgt) <= 1) handValue += 2.5;
 			out.push(_targetRemovalValue(tgtRel, handValue) + gain);
 		}
 
@@ -593,6 +593,9 @@ export function evaluateWuxie(player, event, context) {
 			r.originalSpellId = ctx.originalSpellId;
 			r.source = ctx.source;
 			r.target = ctx.target;
+			r.targets = ctx.targets || [];
+			r.hostState = ctx.hostState;
+			r.inWuxieChain = !!ctx.inWuxieChain;
 			_recordDiagnostics(r);
 			return r;
 		}
