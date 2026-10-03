@@ -3656,6 +3656,160 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 宿主桥再次校验当前选择事件合法目标');
 }
 
+
+/* ================= 10.44 Skill Decision Kernel V2 · Stage 2 =================
+ * A. 多目标技能遵守宿主 selectTarget 数量，不再“全阵营全选”；
+ * B. 动态数量 / mixed 组合 fail-open；
+ * C. chooseCardTarget = 目标计划 + 低机会成本牌轻量 tie-break；
+ * D. chooseButton 仅在 button.link 真的是推荐玩家时桥接；
+ * E. chooseControl 仅处理“唯一有效选项 vs cancel2”；
+ * F. chooseButtonTarget/chooseControl 新 hook 必须可卸载。
+ */
+{
+    const fs44 = await import('node:fs');
+    const sp44 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js')).href);
+    const eng44 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'engine', 'engine.js')).href);
+    const ao44 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js')).href);
+    const host44 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'host.js')).href);
+
+    const me44 = { name: 'me44', name1: 'me44', playerid: 'me44' };
+    const a1_44 = { name: 'a1_44', name1: 'a1_44', playerid: 'a1_44' };
+    const a2_44 = { name: 'a2_44', name1: 'a2_44', playerid: 'a2_44' };
+    const a3_44 = { name: 'a3_44', name1: 'a3_44', playerid: 'a3_44' };
+    const e1_44 = { name: 'e1_44', name1: 'e1_44', playerid: 'e1_44' };
+
+    /* A. 固定 2 目标：3 个友方候选只能规划收益最高的 2 个。 */
+    const profMulti44 = {
+        tags: { __targets: ['multi'], recover: 1 },
+        targets: { intent: 'support', confidence: 0.75, inferred: true },
+        classify: 'aux',
+        profit: { base: 2, cost: { net: 0 }, multi: { final: 2 } },
+    };
+    const ctxMulti44 = {
+        me: { hp: 4, maxHp: 4 },
+        selectTargetRange: [2, 2],
+        targets: [
+            { pp: a1_44, isAlly: true, isEnemy: false, hp: 1, maxHp: 4, threat: 1 },
+            { pp: a2_44, isAlly: true, isEnemy: false, hp: 2, maxHp: 4, threat: 4 },
+            { pp: a3_44, isAlly: true, isEnemy: false, hp: 4, maxHp: 4, threat: 0 },
+            { pp: e1_44, isAlly: false, isEnemy: true, hp: 1, maxHp: 4, threat: 5 },
+        ],
+    };
+    const dm44 = sp44.decideSkill('multi44', profMulti44, ctxMulti44);
+    eq(dm44.targetIndexes.length, 2, '10.44 selectTarget=[2,2] → 恰好规划2个目标');
+    ok(dm44.targetIndexes.includes(0) && dm44.targetIndexes.includes(1),
+        '10.44 多目标 support 按友方收益排序选前2，不把敌方/满血低价值目标塞入');
+    eq(dm44.targetRangeResolved, true, '10.44 固定目标数量标记 resolved');
+
+    const dyn44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: null,
+    }));
+    eq(dyn44.targetIndexes.length, 1, '10.44 动态 selectTarget → 只推荐主目标');
+    eq(dyn44.targetRangeResolved, false, '10.44 动态数量不猜剩余组合');
+
+    const mixedProf44 = Object.assign({}, profMulti44, {
+        targets: { intent: 'mixed', confidence: 0.7, inferred: true },
+    });
+    const mixed44 = sp44.decideSkill('mixed44', mixedProf44, ctxMulti44);
+    eq(mixed44.targetIndex, -1, '10.44 mixed 多目标 → 不强制单方向组合');
+
+    /* A2. engine 直接读取宿主 selectTarget 契约。 */
+    host44.lib.skill.range_num_44 = { filterTarget: function () { return true; }, selectTarget: 2 };
+    host44.lib.skill.range_arr_44 = { filterTarget: function () { return true; }, selectTarget: [1, 3] };
+    host44.lib.skill.range_dyn_44 = { filterTarget: function () { return true; }, selectTarget: function () { return [1, 2]; } };
+    eq(JSON.stringify(eng44._skillTargetRange('range_num_44')), JSON.stringify([2, 2]),
+        '10.44 数字 selectTarget → 固定区间');
+    eq(JSON.stringify(eng44._skillTargetRange('range_arr_44')), JSON.stringify([1, 3]),
+        '10.44 数组 selectTarget → 保留区间');
+    eq(eng44._skillTargetRange('range_dyn_44'), null,
+        '10.44 函数 selectTarget → 预规划 fail-open');
+
+    /* B. 多目标 action 传入宿主 target bridge 时，整组推荐目标都可获得正分。 */
+    host44.game.players = [me44, a1_44, a2_44, a3_44, e1_44];
+    const baMulti44 = {
+        type: 'skill', id: 'stage2_skill_44',
+        targetObj: a1_44, target: 'a1_44', targetList: [a1_44, a2_44],
+        targetRangeResolved: true,
+        purpose: 'support', rule: 'aux', score: 9,
+        targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
+    };
+    const decMulti44 = ao44.getSkillTargetBridgeDecision(me44, 'stage2_skill_44', baMulti44);
+    eq(decMulti44.targets.length, 2, '10.44 host target decision 保留多目标组合');
+    const targetAI44 = ao44.wrapSkillTargetAI(function () { return 0; }, me44, decMulti44);
+    ok(targetAI44(a1_44) >= 12 && targetAI44(a2_44) >= 12,
+        '10.44 规划组合中的两个目标都获得宿主正分');
+
+    /* C. chooseCardTarget card half：原生同分时低价值牌略优，但只做很小 tie-break。 */
+    host44.get.owner = function () { return me44; };
+    host44.get.value = function (card) { return card && card.v; };
+    const costAI44 = ao44.wrapSkillCostCardAI(function () { return 5; }, me44, decMulti44);
+    const low44 = costAI44({ name: 'low44', v: 1 });
+    const high44 = costAI44({ name: 'high44', v: 8 });
+    ok(low44 > high44, '10.44 选牌成本 tie-break：低价值牌优先');
+    ok(Math.abs(low44 - high44) <= 0.4, '10.44 选牌桥偏置有限，不覆盖技能原生 ai1');
+
+    const cardDepNative44 = function () { return 3; };
+    const cardDepEvt44 = {
+        ai1: cardDepNative44,
+        ai2: function () { return 0; },
+        filterTarget: function (card, player, target) { return !!card && target === a1_44; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillCardCostEvent(cardDepEvt44, me44, 'stage2_skill_44', 'ai1', baMulti44);
+    eq(cardDepEvt44.ai1, cardDepNative44,
+        '10.44 target 合法性依赖所选 card → card half 完全 fail-open');
+
+    /* D. chooseButton：只有 link 本身就是推荐玩家才加分；普通卡牌/控制按钮不猜含义。 */
+    const buttonAI44 = ao44.wrapSkillButtonAI(function () { return 2; }, decMulti44);
+    ok(buttonAI44({ link: a2_44 }) >= 12, '10.44 玩家按钮命中推荐多目标 → 加分');
+    eq(buttonAI44({ link: { name: 'sha' } }), 2,
+        '10.44 非玩家 button.link → 保留原生评分');
+
+    /* E. chooseControl：仅唯一有效项+cancel2时推进；多选项保持原生。 */
+    const ctlOne44 = {
+        controls: ['continue44', 'cancel2'],
+        ai: function () { return 1; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlEvent(ctlOne44, me44, 'stage2_skill_44', baMulti44);
+    eq(ctlOne44.ai(), 0, '10.44 唯一有效 control vs cancel2 → 选择有效项');
+
+    const nativeCtl44 = function () { return 2; };
+    const ctlMany44 = {
+        controls: ['modeA44', 'modeB44', 'cancel2'],
+        ai: nativeCtl44,
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlEvent(ctlMany44, me44, 'stage2_skill_44', baMulti44);
+    eq(ctlMany44.ai, nativeCtl44, '10.44 多个有效 control 含义不明 → 完全原生');
+
+    const ctlList44 = {
+        controls: ['cancel2'],
+        choiceList: ['唯一选项'],
+        ai: function () { return 1; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlEvent(ctlList44, me44, 'stage2_skill_44', baMulti44);
+    /* chooseControl content 会先扩成 [选项一,cancel2]；这里模拟扩展后的调用。 */
+    ctlList44.controls = ['选项一', 'cancel2'];
+    eq(ctlList44.ai(), 0, '10.44 choiceList 单项+取消 → 选择唯一有效项');
+
+    /* F. 结构守卫：新增宿主 hook + 对称卸载。 */
+    const src44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js'), 'utf8');
+    const brainSrc44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js'), 'utf8');
+    ok(src44.indexOf('proto.chooseButtonTarget = function') >= 0
+        && src44.indexOf('proto.chooseButton = function') >= 0
+        && src44.indexOf('proto.chooseControl = function') >= 0,
+        '10.44 stage2 hook 覆盖 chooseButtonTarget / chooseButton / chooseControl');
+    ok(src44.indexOf('_protoBackup.chooseButtonTarget') >= 0
+        && src44.indexOf('_protoBackup.chooseButton') >= 0
+        && src44.indexOf('_protoBackup.chooseControl') >= 0,
+        '10.44 stage2 hook 有对称备份/卸载');
+    ok(brainSrc44.indexOf('ctx.selectTargetRange') >= 0
+        && brainSrc44.indexOf('targetRangeResolved') >= 0,
+        '10.44 多目标 planner 消费宿主数量契约');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
