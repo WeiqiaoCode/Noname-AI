@@ -2909,7 +2909,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
                 '10.39 relations 内奸敌友 = identityStance 统一结果');
 
             const centralBonus = stance39.spyAttackBonus(spy, f1);
-            const modeBonus = mode39.getModeStrategy().decisionBoost(spy, {
+            const modeBonus = mode39.MODE_STRATEGIES.identity.decisionBoost(spy, {
                 type: 'card', id: 'sha', target: f1.name1,
             });
             eq(modeBonus, centralBonus,
