@@ -3904,6 +3904,45 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(selectedDepEvt44.ai, selectedDepNative44,
         '10.44 多目标 filterTarget 依赖 ui.selected → 组合合法性不可静态证明，完全原生');
 
+    const eventStateNative44 = function () { return 5; };
+    const eventStateEvt44 = {
+        ai: eventStateNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return !event.targets.length || target !== event.targets[0];
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(eventStateEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(eventStateEvt44.ai, eventStateNative44,
+        '10.44 多目标 filterTarget 依赖 event.targets → 保守 fail-open，不执行未定义事件态');
+
+    const thisStateNative44 = function () { return 6; };
+    const thisStateEvt44 = {
+        ai: thisStateNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return !this.selected || target !== this.selected[0];
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(thisStateEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(thisStateEvt44.ai, thisStateNative44,
+        '10.44 多目标 filterTarget 依赖 this.selected → 保守 fail-open');
+
+    const getEventNative44 = function () { return 7; };
+    const getEventEvt44 = {
+        ai: getEventNative44,
+        selectTarget: [2, 2],
+        filterTarget: function (_card, _player, target) {
+            return get.event().targets.indexOf(target) < 0;
+        },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillTargetEvent(getEventEvt44, me44, 'stage2_skill_44', 'ai', baMulti44);
+    eq(getEventEvt44.ai, getEventNative44,
+        '10.44 多目标 filterTarget 依赖 get.event() → 保守 fail-open');
+
     /* C. chooseCardTarget card half：原生同分时低价值牌略优，但只做很小 tie-break。 */
     host44.get.owner = function () { return me44; };
     host44.get.value = function (card) { return card && card.v; };
