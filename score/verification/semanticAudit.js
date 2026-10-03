@@ -5,14 +5,14 @@
  */
 export const AUDIT = {
 	"generated": "2026-10-03",
-	"files": 212,
+	"files": 213,
 	"cleanFiles": 88,
-	"legacyFiles": 124,
-	"hits": 3458,
-	"cleanRate": 42,
+	"legacyFiles": 125,
+	"hits": 3454,
+	"cleanRate": 41,
 	"byDomain": {
 		"cognition": 120,
-		"decision": 1871,
+		"decision": 1867,
 		"foundation": 50,
 		"knowledge": 218,
 		"model": 285,
@@ -38,20 +38,20 @@ export const AUDIT = {
 			"count": 135
 		},
 		{
-			"file": "score/decision/strategy/modeStrategy.js",
-			"count": 92
-		},
-		{
-			"file": "score/decision/relations/relations.js",
-			"count": 91
-		},
-		{
 			"file": "score/decision/skills/skills.js",
 			"count": 87
 		},
 		{
+			"file": "score/decision/strategy/modeStrategy.js",
+			"count": 85
+		},
+		{
 			"file": "score/decision/cardplay/cardPlayBrain.js",
 			"count": 84
+		},
+		{
+			"file": "score/decision/relations/relations.js",
+			"count": 81
 		},
 		{
 			"file": "score/decision/strategy/planner.js",
