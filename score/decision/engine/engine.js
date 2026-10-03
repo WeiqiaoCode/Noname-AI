@@ -2199,6 +2199,17 @@ function _isLegalSkillTarget(sid, me, target) {
 	} catch (e) { return true; }
 }
 
+function _skillNeedsExternalTarget(sid, prof) {
+	try {
+		const cats = (prof && prof.tags && prof.tags.__targets) || [];
+		/* 纯 self 技能不进入“找不到友/敌目标”的否决。 */
+		if (cats.length === 1 && cats[0] === 'self') return false;
+		if (cats.indexOf('ally') >= 0 || cats.indexOf('enemy') >= 0 || cats.indexOf('multi') >= 0) return true;
+		const sk = lib.skill && lib.skill[sid];
+		return !!(sk && typeof sk.filterTarget === 'function');
+	} catch (e) { return false; }
+}
+
 /* ★ 基本技能决策标准接入层
  * 在 acts.sort 之前对 skill 候选应用 skillPlayBrain 的三段式标准：
  *   - 硬否决（负收益/自伤/时机不符/无可控敌）→ 压到接近结束回合
@@ -2268,7 +2279,8 @@ function applyBasicSkillRules(me, acts) {
 			 * mixed/低置信技能仍 fail-open 交给宿主。 */
 			const ti = prof.targets && prof.targets.intent;
 			const tc = prof.targets ? Number(prof.targets.confidence || 0) : 0;
-			const directional = (ti === 'support' || ti === 'offense') && tc >= 0.55;
+			const directional = (ti === 'support' || ti === 'offense') && tc >= 0.55
+				&& _skillNeedsExternalTarget(sid, prof);
 			if (!d.veto && directional && d.targetIndex < 0 && skillTargets.length > 0) {
 				a.score = Math.min(a.score, -6);
 				a.reason = (a.reason || '') + '（[技能目标否决] 无合法' + (ti === 'support' ? '友方' : '敌方') + '目标）';
@@ -2301,8 +2313,14 @@ function applyBasicSkillRules(me, acts) {
 						/* ★ 技能方向(purpose)：按技能类别映射，供统一收益守卫 actionValue 强判方向
 						 *   attack/control → 敌向；defense/aux(辅助/增益) → 友向；其余由守卫回退。 */
 						const _cat = d.category || d.rule || '';
-						if (_cat === 'attack' || _cat === 'control' || _cat === 'draw') a.purpose = 'attack';
-						else if (_cat === 'defense' || _cat === 'aux') a.purpose = 'support';
+						/* 目标 intent 高于技能大类：target.draw() 可能是辅助技，不能因 category=draw
+						 * 又被翻译成 attack。mixed 则刻意不设 purpose，交回原生/专属策略。 */
+						if (ti === 'offense') a.purpose = 'attack';
+						else if (ti === 'support') a.purpose = 'support';
+						else if (!ti) {
+							if (_cat === 'attack' || _cat === 'control') a.purpose = 'attack';
+							else if (_cat === 'defense' || _cat === 'aux') a.purpose = 'support';
+						}
 					}
 				}
 				/* ★ 多目标技能：写回 targetList（全部真敌/真友玩家对象），
@@ -5329,7 +5347,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
