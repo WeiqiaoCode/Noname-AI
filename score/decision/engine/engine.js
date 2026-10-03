@@ -2288,6 +2288,10 @@ function applyBasicSkillRules(me, acts) {
 			 * mixed/低置信技能仍 fail-open 交给宿主。 */
 			const ti = prof.targets && prof.targets.intent;
 			const tc = prof.targets ? Number(prof.targets.confidence || 0) : 0;
+			const inferredTargetIntent = !!(prof.targets && prof.targets.inferred);
+			a.targetIntent = ti || null;
+			a.targetConfidence = tc;
+			a.targetInferred = inferredTargetIntent;
 			const directional = (ti === 'support' || ti === 'offense') && tc >= 0.55
 				&& _skillNeedsExternalTarget(sid, prof);
 			if (!d.veto && directional && d.targetIndex < 0 && skillTargets.length > 0) {
