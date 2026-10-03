@@ -3325,6 +3325,19 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(reqUnknown42.ai1, nativeAi42, '10.42 unresolved 原生 ai1 引用原样保留');
     eq(reqUnknown42.ai1(), 7, '10.42 unresolved 原生 ai1 行为原样保留');
 
+    /* C2. hardOverride=false 时必须完全尊重“只评分、不改宿主选择”的配置语义。 */
+    hostStub._configStore['extension_无名AI_hardOverride'] = false;
+    const nativeOff42 = function () { return 5; };
+    const reqOff42 = {
+        type: 'wuxie', state: 1,
+        info_map: { card: C42('lebu'), player: enemy42, target: me42, targets: [me42], state: 1 },
+        ai1: nativeOff42,
+    };
+    const brOff42 = use42._bridgeWuxieChooseToUse(me42, [reqOff42]);
+    eq(brOff42.bridged, false, '10.42 hardOverride=false → Wuxie bridge 不改写');
+    eq(reqOff42.ai1, nativeOff42, '10.42 hardOverride=false → 原生 ai1 引用不变');
+    delete hostStub._configStore['extension_无名AI_hardOverride'];
+
     /* D. 顺/拆：行动方按最优合法选择，而不是“有乐就默认帮忙拆乐”或把所有装备求和。 */
     const allyOnlyLebu42 = P42('allyOnlyLebu42', 1, { h: 0, j: [C42('lebu')] });
     const allyLebuBagua42 = P42('allyLebuBagua42', 1, { h: 0, j: [C42('lebu')], e: [C42('bagua')] });
