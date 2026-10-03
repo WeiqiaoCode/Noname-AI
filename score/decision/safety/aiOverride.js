@@ -326,6 +326,155 @@ export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 	} catch (e) { return next; }
 }
 
+export function wrapSkillCostCardAI(original, player, decision) {
+	if (!decision || !player) return original;
+	const tag = decision.skillId + '|' + decision.targetName;
+	if (original && original.__djscSkillCostBridge === tag) return original;
+	const wrapped = function (card) {
+		let nativeScore = 0;
+		try {
+			if (typeof original === 'function') {
+				const n = Number(original.apply(this, arguments));
+				if (Number.isFinite(n)) nativeScore = n;
+			}
+		} catch (e) {}
+		try {
+			/* 只对自己实际可见/持有的候选牌做极小 tie-break。
+			 * 不替代技能自带 ai1，只在分数接近时偏向低机会成本牌。 */
+			let owner = null;
+			try { owner = get.owner ? get.owner(card) : null; } catch (e) {}
+			if (owner && owner !== player) return nativeScore;
+			const v = Number(get.value(card, player));
+			if (!Number.isFinite(v)) return nativeScore;
+			const tie = Math.max(-0.2, Math.min(0.2, -v * 0.02));
+			return nativeScore + tie;
+		} catch (e) { return nativeScore; }
+	};
+	try {
+		Object.defineProperty(wrapped, '__djscSkillCostBridge', { value: tag, configurable: true });
+	} catch (e) {}
+	return wrapped;
+}
+
+export function bridgeSkillCardCostEvent(next, player, sid, field, baOverride) {
+	try {
+		if (!next || !player || !sid || !field || next.processAI) return next;
+		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
+		if (!decision) return next;
+		/* target 合法性依赖所选 card 时不做“联合”猜测，整个 card half fail-open。 */
+		if (!eventAcceptsSkillTarget(next, player, decision.target)) return next;
+		if (typeof next[field] === 'function') next[field] = wrapSkillCostCardAI(next[field], player, decision);
+		if (typeof next.set === 'function' && !next.__djscSkillCostSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === field && typeof value === 'function') {
+					value = wrapSkillCostCardAI(value, player, decision);
+				}
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillCostSetBridge = true; } catch (e) {}
+		}
+		return next;
+	} catch (e) { return next; }
+}
+
+export function wrapSkillButtonAI(original, decision) {
+	if (!decision) return original;
+	const tag = decision.skillId + '|' + decision.targetName;
+	if (original && original.__djscSkillButtonBridge === tag) return original;
+	const wrapped = function (button) {
+		let nativeScore = 0;
+		try {
+			if (typeof original === 'function') {
+				const n = Number(original.apply(this, arguments));
+				if (Number.isFinite(n)) nativeScore = n;
+			}
+		} catch (e) {}
+		try {
+			const link = button && button.link;
+			const planned = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
+			if (link && planned.some(function (p) { return _samePlayer(link, p); })) {
+				return Math.max(nativeScore, 12);
+			}
+		} catch (e) {}
+		return nativeScore;
+	};
+	try { Object.defineProperty(wrapped, '__djscSkillButtonBridge', { value: tag, configurable: true }); } catch (e) {}
+	return wrapped;
+}
+
+export function bridgeSkillButtonEvent(next, player, sid, field, baOverride) {
+	try {
+		if (!next || !player || !sid || !field || next.processAI) return next;
+		const decision = getSkillTargetBridgeDecision(player, sid, baOverride);
+		if (!decision) return next;
+		if (typeof next[field] === 'function') next[field] = wrapSkillButtonAI(next[field], decision);
+		if (typeof next.set === 'function' && !next.__djscSkillButtonSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === field && typeof value === 'function') value = wrapSkillButtonAI(value, decision);
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillButtonSetBridge = true; } catch (e) {}
+		}
+		return next;
+	} catch (e) { return next; }
+}
+
+function _skillCommitDecision(player, sid, baOverride) {
+	try {
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
+		if (ba.rule === 'veto' || ba.rule === 'veto-target') return null;
+		const score = Number(ba.score || 0);
+		if (!Number.isFinite(score) || score < 0) return null;
+		return ba;
+	} catch (e) { return null; }
+}
+
+function _singleNonCancelControl(next) {
+	try {
+		const controls = Array.isArray(next && next.controls) ? next.controls : [];
+		const live = controls.filter(function (x) { return x !== 'cancel2'; });
+		if (live.length === 1) return live[0];
+		if (live.length === 0 && Array.isArray(next && next.choiceList) && next.choiceList.length === 1) return '__choice0__';
+		return null;
+	} catch (e) { return null; }
+}
+
+export function bridgeSkillControlEvent(next, player, sid, baOverride) {
+	try {
+		if (!next || !player || !sid || next.processAI) return next;
+		if (!_skillCommitDecision(player, sid, baOverride)) return next;
+		if (_singleNonCancelControl(next) === null) return next;
+		const wrap = function (original) {
+			return function () {
+				try {
+					const controls = Array.isArray(next.controls) ? next.controls : [];
+					const live = controls.filter(function (x) { return x !== 'cancel2'; });
+					if (live.length === 1) {
+						const idx = controls.indexOf(live[0]);
+						if (idx >= 0) return idx;
+					}
+					if (live.length === 0 && Array.isArray(next.choiceList) && next.choiceList.length === 1) return 0;
+				} catch (e) {}
+				try { return typeof original === 'function' ? original.apply(this, arguments) : 0; } catch (e) { return 0; }
+			};
+		};
+		if (typeof next.ai === 'function') next.ai = wrap(next.ai);
+		else next.ai = wrap(null);
+		if (typeof next.set === 'function' && !next.__djscSkillControlSetBridge) {
+			const origSet = next.set;
+			next.set = function (key, value) {
+				if (key === 'ai' && typeof value === 'function') value = wrap(value);
+				return origSet.call(this, key, value);
+			};
+			try { next.__djscSkillControlSetBridge = true; } catch (e) {}
+		}
+		return next;
+	} catch (e) { return next; }
+}
+
 function _hookSkillTargetChoice() {
 	if (_skillTargetHooked) return;
 	try {
@@ -348,10 +497,48 @@ function _hookSkillTargetChoice() {
 			proto.chooseCardTarget = function () {
 				const sid = resolveActiveSkillId(this, _status && _status.event);
 				const next = origChooseCardTarget.apply(this, arguments);
-				return sid ? bridgeSkillTargetEvent(next, this, sid, 'ai2') : next;
+				if (!sid) return next;
+				bridgeSkillTargetEvent(next, this, sid, 'ai2');
+				bridgeSkillCardCostEvent(next, this, sid, 'ai1');
+				return next;
 			};
 		}
-		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget);
+
+		const origChooseButtonTarget = proto.chooseButtonTarget;
+		if (typeof origChooseButtonTarget === 'function') {
+			_protoBackup.chooseButtonTarget = origChooseButtonTarget;
+			proto.chooseButtonTarget = function () {
+				const sid = resolveActiveSkillId(this, _status && _status.event);
+				const next = origChooseButtonTarget.apply(this, arguments);
+				if (!sid) return next;
+				bridgeSkillTargetEvent(next, this, sid, 'ai2');
+				bridgeSkillButtonEvent(next, this, sid, 'ai1');
+				return next;
+			};
+		}
+
+		const origChooseButton = proto.chooseButton;
+		if (typeof origChooseButton === 'function') {
+			_protoBackup.chooseButton = origChooseButton;
+			proto.chooseButton = function () {
+				const sid = resolveActiveSkillId(this, _status && _status.event);
+				const next = origChooseButton.apply(this, arguments);
+				return sid ? bridgeSkillButtonEvent(next, this, sid, 'ai') : next;
+			};
+		}
+
+		const origChooseControl = proto.chooseControl;
+		if (typeof origChooseControl === 'function') {
+			_protoBackup.chooseControl = origChooseControl;
+			proto.chooseControl = function () {
+				const sid = resolveActiveSkillId(this, _status && _status.event);
+				const next = origChooseControl.apply(this, arguments);
+				return sid ? bridgeSkillControlEvent(next, this, sid) : next;
+			};
+		}
+
+		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget
+			|| _protoBackup.chooseButtonTarget || _protoBackup.chooseButton || _protoBackup.chooseControl);
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
