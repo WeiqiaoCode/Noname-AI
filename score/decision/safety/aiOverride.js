@@ -20,7 +20,7 @@ import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
 import { skillProfileOf } from '../skills/skills.js';
 import { beginSkillChoiceStage } from '../skills/skillChoiceTransaction.js';
-import { skillCardSelectionAdjustment } from '../skills/skillCardChoiceBrain.js';
+import { classifySkillCardSelection, skillCardSelectionAdjustment } from '../skills/skillCardChoiceBrain.js';
 import { cfg } from '../../foundation/config/util.js';
 import { isAllyOf, dispositionOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 
@@ -500,6 +500,50 @@ function _ownSkillCardContext(player) {
 	return out;
 }
 
+export function skillCardAIValueModifier(player, card, num, baOverride, eventOverride) {
+	try {
+		const base = Number(num);
+		if (!player || !card || !Number.isFinite(base)) return num;
+		const ba = baOverride || _getBA(player);
+		if (!ba || ba.type !== 'skill' || !ba.id) return num;
+
+		/* declarative 主动技（filterCard/check）没有 player.chooseCard() 调用。
+		 * 只在当前真实技能上下文与 bestAction 完全一致时修改 aiValue，避免污染普通出牌。 */
+		const active = resolveActiveSkillContext(player,
+			eventOverride !== undefined ? eventOverride : (_status && _status.event));
+		if (!active || active.id !== ba.id) return num;
+
+		const info = lib.skill && lib.skill[ba.id];
+		if (!info || typeof info !== 'object' || !info.filterCard) return num;
+		const profile = skillProfileOf(ba.id);
+		const semantic = classifySkillCardSelection(profile, { skillInfo: info });
+		if (semantic !== 'cost') return num;
+
+		let owner = null;
+		try {
+			if (typeof get.owner !== 'function') return num;
+			owner = get.owner(card);
+		} catch (e) { return num; }
+		if (owner !== player) return num;
+
+		let id = '';
+		try {
+			id = (typeof get.name === 'function' && get.name(card, player))
+				|| (card && card.name) || '';
+		} catch (e) { id = (card && card.name) || ''; }
+		if (!id) return num;
+
+		const d = skillCardSelectionAdjustment(id, profile, {
+			me: _ownSkillCardContext(player),
+			cardValue: base,
+			skillInfo: info,
+		});
+		/* 宿主常见 check(card)=常数-get.value(card)。
+		 * 适合作成本 → adjustment>0 → 降低 value；关键牌则提高 value。 */
+		return base - Number(d && d.adjustment || 0);
+	} catch (e) { return num; }
+}
+
 export function wrapSkillCardOpportunityAI(original, player, stage, profile) {
 	if (!player || !stage) return original;
 	const tag = stage.skillId + '|' + stage.transactionId + '|' + stage.ordinal;
@@ -531,6 +575,7 @@ export function wrapSkillCardOpportunityAI(original, player, stage, profile) {
 			const d = skillCardSelectionAdjustment(id, profile, {
 				me: meCardCtx,
 				cardValue: value,
+				skillInfo: profile && profile.__skillInfo,
 			});
 			return nativeScore + Number(d && d.adjustment || 0);
 		} catch (e) { return nativeScore; }
@@ -547,7 +592,10 @@ export function bridgeSkillCardStageEvent(next, player, skillContext, field, baO
 		const ba = baOverride || _getBA(player);
 		if (!ba || ba.type !== 'skill' || ba.id !== skillContext.id) return next;
 		if (ba.rule === 'veto' || ba.rule === 'veto-target') return next;
-		const profile = skillProfileOf(skillContext.id);
+		const baseProfile = skillProfileOf(skillContext.id);
+		const profile = Object.assign({}, baseProfile || {}, {
+			__skillInfo: lib.skill && lib.skill[skillContext.id],
+		});
 
 		if (typeof next[field] === 'function') {
 			next[field] = wrapSkillCardOpportunityAI(next[field], player, stage, profile);
@@ -953,6 +1001,11 @@ export function installAIOverride() {
 						if (isRecastRecommended(ba)) {
 							return num;
 						}
+
+						/* Stage 3：declarative filterCard/check 技能没有 chooseCard() 桥。
+						 * 在当前技能上下文中，通过 aiValue 让宿主原生 check(card) 消费同一套成本策略。 */
+						const skillCardValue = skillCardAIValueModifier(player, card, num, ba);
+						if (skillCardValue !== num) return skillCardValue;
 
 						/* 如果是我们推荐的牌 → 加价值 */
 						if (ba.rule && _cardMatches(card, player, ba.rule)) {
