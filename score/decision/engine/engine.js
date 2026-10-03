@@ -148,6 +148,7 @@ import { deepValueBonus, deepCardValue, deepTargetValue, deepSituationValue } fr
 import { recordTrigger, getDecayMultiplier, applyDecay, clearDecayLog, getDecayStats } from '../tuning/decayOpt.js';
 import { clearCompensation } from './scoreUnify.js';
 import { makeActionCandidate, runtimeScore, targetKey, candidateTargetValue } from '../state/actionCandidate.js';
+import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
 import { getState as modelGetState, onGameEnd as modelOnGameEnd, forceTrain as modelForceTrain } from '../../model/net/modelState.js';  /* ★ 真正的 modelState */
@@ -4190,19 +4191,32 @@ function bestAction() {
 		try {
 			const refined = refineBestWithPlan(me, best, bestT);
 			if (refined && refined !== best) {
-				best = refined;
-				/* ★ 衔接修复：规划器返回的 target 同步回 bestT（确保"规划目标"与"最终执行目标"一致）。
-				 * bestTs 是数值评分，不改为数组；此处仅让 bestT 指向规划目标，评分沿用 refined.score。 */
+				/* Planner 后续仍要经过 Champion / DeepThink / Guard，因此 winner 必须回到
+				 * acts 中的 canonical candidate，禁止同一动作以两个不同对象继续参与排序。 */
+				let canonical = acts.find(function (a) { return a === refined; }) || null;
+				if (!canonical) {
+					canonical = acts.find(function (a) {
+						if (!a || a.id !== refined.id || a.type !== refined.type) return false;
+						if (refined.target != null && a.target != null && a.target !== refined.target) return false;
+						return true;
+					}) || null;
+				}
+				if (canonical && canonical !== refined) {
+					Object.assign(canonical, refined);
+					best = canonical;
+				} else {
+					best = refined;
+					if (!acts.some(function (a) { return a === refined; })) acts.push(refined);
+				}
+				acts.sort(function (a, b) { return b.score - a.score; });
+
 				try {
-					if (refined.target && (!bestT || (bestT.name1 || bestT.name) !== (refined.target.name1 || refined.target.name))) {
-						bestT = refined.target;
-						bestTs = typeof refined.score === 'number' ? refined.score : bestTs;
+					if (best.target && typeof best.target === 'object' &&
+						(!bestT || (bestT.name1 || bestT.name) !== (best.target.name1 || best.target.name))) {
+						bestT = best.target;
+						bestTs = typeof best.score === 'number' ? best.score : bestTs;
 					}
 				} catch (eSync) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSync); }
-				if (!acts.some(function (a) { return a.id === refined.id; })) {
-					try { acts.push(Object.assign({}, refined, refined.target ? { target: refined.target.name1 || refined.target.name } : {})); } catch (ePush) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(ePush); }
-					acts.sort(function (a, b) { return b.score - a.score; });
-				}
 			}
 		} catch (eP) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eP); }
 
@@ -4301,7 +4315,6 @@ function bestAction() {
 						const champBoost = _baseBoost * strengthFactor;
 						if (champBoost > 0 && typeof applyChampionRule === 'function') {
 							const cr = applyChampionRule(acts, best, champBoost, {
-								gapLimit: 14,
 								heroId: (game && game.me && (game.me.name || game.me.name1)) || '',  /* ★ 当前英雄id，主键之一 */
 							});
 							if (cr && cr.replaced && cr.best && cr.best !== best) {
@@ -4661,14 +4674,15 @@ function bestAction() {
 						const _ls = window.__DJSC && window.__DJSC.learning;
 						if (_ls) _ls.negSampled = (typeof _ls.negSampled === 'number' ? _ls.negSampled : 0) + 0;
 					} catch (eN2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eN2); }
-					for (let k = 0; k < acts.length; k++) {
-						if (negLogged >= 1) break;                       /* 每决策点至多 1 个负样本 */
-						const aN = acts[k];
-						if (!aN || aN === best || aN.type === 'end' || aN.type === 'unknown') continue;
-						if (aN._feat && aN._feat.length && typeof aN.score === 'number' && aN.score <= -8) {
-							trainRecordSample(me, aN, sit, aN.score, aN._feat);
-							negLogged++;
-						}
+					const negativePool = acts.filter(function (aN) {
+						return aN && aN !== best && aN.type !== 'end' && aN.type !== 'unknown' &&
+							aN._feat && aN._feat.length && typeof aN.score === 'number' &&
+							Number.isFinite(aN.score) && aN.score < 0;
+					}).sort(function (a, b) { return a.score - b.score; });
+					if (negativePool.length) {
+						const aN = negativePool[0];  /* 每决策点仅记录相对最差的负收益动作 */
+						trainRecordSample(me, aN, sit, aN.score, aN._feat);
+						negLogged++;
 					}
 				} catch (eNeg) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eNeg); }
 				/* ★ 样本满3万后自动清洗：只保留高价值（置信度低）的 */
@@ -5010,9 +5024,9 @@ function settle() {
 				dLog.forEach(function (e) {
 					const c = e.candidates || [];
 					if (c.length < 2) { q.normal++; return; }
-					const gap = (c[0].score || 0) - (c[1].score || 0);
-					if (gap >= 3) q.crush++;
-					else if (gap <= 0.8) q.close++;
+					const margin = normalizedMargin(c[0].score || 0, c[1].score || 0);
+					if (margin >= DECISION_MARGIN.CLEAR) q.crush++;
+					else if (margin <= DECISION_MARGIN.CLOSE) q.close++;
 					else q.normal++;
 				});
 			} catch (eQ) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eQ); }
