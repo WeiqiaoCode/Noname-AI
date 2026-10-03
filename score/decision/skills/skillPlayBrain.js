@@ -176,17 +176,23 @@ export function skillTarget(sid, profile, ctx) {
 			};
 		}
 		const min = Math.max(0, Number(range[0]) || 0);
-		const max = range[1] === Infinity ? ranked.length : Math.max(min, Number(range[1]) || min);
+		const max = range[1] === Infinity ? Infinity : Math.max(min, Number(range[1]) || min);
 		if (ranked.length < min) {
 			return { index: -1, reason: '合法目标不足最小数量' + min, targetIndexes: [], targetRangeResolved: true };
 		}
-		const take = Math.min(ranked.length, max);
+		const fixed = max !== Infinity && min === max;
+		/* 固定 N 才完整规划 N；可变 [min,max] 只给最小必要组合，额外目标留给宿主。
+		 * min=0 但技能已进入 directional action 时，至少给一个主目标提示。 */
+		const want = fixed ? min : Math.max(1, min);
+		const take = Math.min(ranked.length, max === Infinity ? want : Math.min(want, max));
 		const chosen = ranked.slice(0, take).map(function (x) { return x.i; });
 		return {
-			index: chosen[0],
-			reason: '多目标：按收益排序选择' + chosen.length + '个' + (offensive ? '敌方' : '友方') + '目标',
+			index: chosen.length ? chosen[0] : -1,
+			reason: fixed
+				? ('多目标：按收益排序选择' + chosen.length + '个' + (offensive ? '敌方' : '友方') + '目标')
+				: ('多目标区间：推荐最小必要' + chosen.length + '个目标，额外选择交回宿主'),
 			targetIndexes: chosen,
-			targetRangeResolved: true,
+			targetRangeResolved: fixed,
 		};
 	}
 	// 自身技
