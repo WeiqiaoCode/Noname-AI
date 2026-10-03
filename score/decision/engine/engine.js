@@ -147,7 +147,7 @@ import { shunshouBonus } from '../timing/shunshouTiming.js';
 import { deepValueBonus, deepCardValue, deepTargetValue, deepSituationValue } from '../../model/net/deepValue.js';
 import { recordTrigger, getDecayMultiplier, applyDecay, clearDecayLog, getDecayStats } from '../tuning/decayOpt.js';
 import { clearCompensation } from './scoreUnify.js';
-import { makeActionCandidate, runtimeScore, targetKey } from '../state/actionCandidate.js';
+import { makeActionCandidate, runtimeScore, targetKey, candidateTargetValue } from '../state/actionCandidate.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
 import { getState as modelGetState, onGameEnd as modelOnGameEnd, forceTrain as modelForceTrain } from '../../model/net/modelState.js';  /* ★ 真正的 modelState */
@@ -4480,11 +4480,11 @@ function bestAction() {
 					me: me,
 					state: { hp: me.hp, maxHp: me.maxHp },
 					candidates: (acts || []).slice(0, 6),
-					rule: best.type === 'card' || best.type === 'skill' ? { type: best.type, id: best.id, score: best.score, target: best.target != null ? best.target : null, reason: best.reason || '' } : null,
+					rule: best.type === 'card' || best.type === 'skill' ? { type: best.type, id: best.id, score: best.score, target: candidateTargetValue(best), reason: best.reason || '' } : null,
 					model: modelConf ? { label: modelConf.label, confidence: modelConf.maxProb !== undefined ? modelConf.maxProb : (modelConf.confidence !== undefined ? modelConf.confidence : 0) } : null,
 					meta: metaMod ? { familiarity: metaMod.familiarity, modulator: metaMod.modulator, level: metaMod.level } : null,
 					bus: { winner: best.type + ':' + best.id, reason: (best.reason || '').slice(0, 60) },
-					final: { type: best.type, id: best.id, score: best.score, target: best.target != null ? best.target : null, reason: best.reason || '' },
+					final: { type: best.type, id: best.id, score: best.score, target: candidateTargetValue(best), reason: best.reason || '' },
 					intervention: intervention || 'none',
 				});
 			}
@@ -4552,9 +4552,7 @@ function bestAction() {
 
 		/* 最终执行目标以 winner candidate 自己绑定的目标为准；
 		 * bestT 仅是全局关注目标，不再覆盖具体动作目标。 */
-		let _finalTarget = best && best.target != null
-			? (best.targetObj ? targetKey(best.targetObj) : best.target)
-			: null;
+		let _finalTarget = candidateTargetValue(best);
 		if (best && best.type === 'equip') _finalTarget = null;
 		const _finalResult = {
 			action: action,
