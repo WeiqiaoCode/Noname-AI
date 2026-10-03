@@ -4546,6 +4546,18 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.46 giveCard 是强语义，即使同时有 loseCard 也不能套弃牌策略');
     eq(sc46.classifySkillCardSelection(unknownProf46), 'unknown',
         '10.46 无成本/给牌证据 → 语义未知，保持保守');
+    eq(sc46.classifySkillCardSelection(unknownProf46, {
+        skillInfo: { filterCard: true },
+    }), 'cost',
+        '10.46 宿主 filterCard 且默认丢失/弃置 → declarative 成本选牌');
+    eq(sc46.classifySkillCardSelection(unknownProf46, {
+        skillInfo: { filterCard: true, discard: false, lose: false },
+    }), 'unknown',
+        '10.46 宿主明确 discard:false/lose:false → 不擅自当成本');
+    eq(sc46.classifySkillCardSelection(giveProf46, {
+        skillInfo: { filterCard: true, discard: false, lose: false },
+    }), 'give',
+        '10.46 giveCard + 非弃置宿主契约 → 保持给牌语义');
 
     const lowHpCtx46 = {
         me: {
@@ -4643,6 +4655,42 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const foreign46 = { name: 'other46' };
     eq(wrapped46({ name: 'generic_junk_46', owner: foreign46, v: 1 }), 5,
         '10.46 非当前玩家持有的牌不参与技能成本重排');
+
+    /* declarative 技能：直接 filterCard/check(card)，不调用 chooseCard()，通过 aiValue 接入。 */
+    const oldSkillRegistry46 = host46.lib.skill;
+    host46.lib.skill = Object.assign({}, oldSkillRegistry46);
+    host46.lib.skill.generic_decl_cost_46 = {
+        enable: 'phaseUse',
+        filterCard: true,
+        selectCard: [1, Infinity],
+        check: function (card) { return 6 - card.v; },
+    };
+    host46.lib.skill.generic_decl_give_46 = {
+        enable: 'phaseUse',
+        filterCard: true,
+        discard: false,
+        lose: false,
+        selectCard: [1, Infinity],
+    };
+    const declCostEvt46 = { skill: 'generic_decl_cost_46' };
+    const declCostBA46 = { type: 'skill', id: 'generic_decl_cost_46', rule: 'aux' };
+    const declTaoValue46 = ao46.skillCardAIValueModifier(
+        me46, { name: 'tao', owner: me46 }, 8, declCostBA46, declCostEvt46);
+    const declJunkValue46 = ao46.skillCardAIValueModifier(
+        me46, { name: 'generic_junk_46', owner: me46 }, 1, declCostBA46, declCostEvt46);
+    ok(declTaoValue46 > 8 && declJunkValue46 < 1,
+        '10.46 declarative 成本技能：关键牌提高 aiValue、垃圾牌降低 aiValue，使原生 C-get.value 自然选垃圾');
+
+    const declGiveEvt46 = { skill: 'generic_decl_give_46' };
+    const declGiveBA46 = { type: 'skill', id: 'generic_decl_give_46', rule: 'aux' };
+    eq(ao46.skillCardAIValueModifier(
+        me46, { name: 'generic_junk_46', owner: me46 }, 1, declGiveBA46, declGiveEvt46), 1,
+        '10.46 declarative 非弃置/给牌技能不通过 aiValue 套成本策略');
+    eq(ao46.skillCardAIValueModifier(
+        me46, { name: 'generic_junk_46', owner: me46 }, 1,
+        { type: 'skill', id: 'other_decl_46', rule: 'aux' }, declCostEvt46), 1,
+        '10.46 当前真实 skill 与 bestAction 不一致 → aiValue 不跨技能污染');
+    host46.lib.skill = oldSkillRegistry46;
 
     host46.get.owner = oldOwner46;
     host46.get.value = oldValue46;
