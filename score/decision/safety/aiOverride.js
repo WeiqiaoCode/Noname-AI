@@ -471,33 +471,31 @@ export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 }
 
 function _ownSkillCardContext(player) {
-	const out = {
+	let hand = [];
+	try { hand = player && typeof player.getCards === 'function' ? (player.getCards('h') || []) : []; } catch (e) { hand = []; }
+	let handSize = hand.length;
+	if (!handSize) {
+		try { handSize = player && typeof player.countCards === 'function' ? Number(player.countCards('h') || 0) : 0; } catch (e) { handSize = 0; }
+	}
+	return {
 		hp: (player && player.hp !== undefined) ? player.hp : 3,
 		maxHp: (player && player.maxHp) || 3,
-		shaCount: 0, shanCount: 0, wuxieCount: 0, jiuCount: 0,
-		hasZhuge: false, hasPaoxiao: false,
+		handSize: Math.max(0, Number(handSize) || 0),
+		hand: hand,
 	};
+}
+
+function _ownCardDuplicateCount(player, cardId, hand) {
 	try {
-		const hand = player && typeof player.getCards === 'function' ? (player.getCards('h') || []) : [];
+		if (!cardId || !Array.isArray(hand) || !hand.length) return 1;
+		let count = 0;
 		for (const c of hand) {
 			let id = '';
-			try { id = (typeof get.name === 'function' && get.name(c, player)) || (c && c.name) || ''; } catch (e) { id = (c && c.name) || ''; }
-			if (id === 'sha') out.shaCount++;
-			else if (id === 'shan') out.shanCount++;
-			else if (id === 'wuxie') out.wuxieCount++;
-			else if (id === 'jiu') out.jiuCount++;
+			try { id = (typeof get.name === 'function' && get.name(c, player)) || (c && c.name) || ''; } catch (e) {}
+			if (id === cardId) count++;
 		}
-		try {
-			const equips = player && typeof player.getCards === 'function' ? (player.getCards('e') || []) : [];
-			for (const c of equips) {
-				let id = '';
-				try { id = (typeof get.name === 'function' && get.name(c, player)) || (c && c.name) || ''; } catch (e) { id = (c && c.name) || ''; }
-				if (id === 'zhuge') out.hasZhuge = true;
-			}
-		} catch (e) {}
-		try { if (player && typeof player.hasSkill === 'function' && player.hasSkill('paoxiao')) out.hasPaoxiao = true; } catch (e) {}
-	} catch (e) {}
-	return out;
+		return Math.max(1, count);
+	} catch (e) { return 1; }
 }
 
 export function skillCardAIValueModifier(player, card, num, baOverride, eventOverride) {
@@ -533,9 +531,11 @@ export function skillCardAIValueModifier(player, card, num, baOverride, eventOve
 		} catch (e) { id = (card && card.name) || ''; }
 		if (!id) return num;
 
+		const own = _ownSkillCardContext(player);
 		const d = skillCardSelectionAdjustment(id, profile, {
-			me: _ownSkillCardContext(player),
+			me: { hp: own.hp, maxHp: own.maxHp, handSize: own.handSize },
 			cardValue: base,
+			duplicates: _ownCardDuplicateCount(player, id, own.hand),
 			skillInfo: info,
 		});
 		/* 宿主常见 check(card)=常数-get.value(card)。
@@ -573,8 +573,9 @@ export function wrapSkillCardOpportunityAI(original, player, stage, profile) {
 			try { value = Number(get.value(card, player)); } catch (e) {}
 
 			const d = skillCardSelectionAdjustment(id, profile, {
-				me: meCardCtx,
+				me: { hp: meCardCtx.hp, maxHp: meCardCtx.maxHp, handSize: meCardCtx.handSize },
 				cardValue: value,
+				duplicates: _ownCardDuplicateCount(player, id, meCardCtx.hand),
 				skillInfo: profile && profile.__skillInfo,
 			});
 			return nativeScore + Number(d && d.adjustment || 0);
