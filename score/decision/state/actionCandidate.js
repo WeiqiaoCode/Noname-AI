@@ -42,6 +42,25 @@ export function hasConsistentBoundTarget(candidate) {
 	return targetKey(candidate.targetObj) === candidate.target;
 }
 
+function _sameTargetValue(a, b) {
+	if (Array.isArray(a) || Array.isArray(b)) {
+		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+		for (let i = 0; i < a.length; i++) {
+			if (a[i] !== b[i]) return false;
+		}
+		return true;
+	}
+	return a === b;
+}
+
+/* 动作身份必须包含 type + id + 绑定目标。仅 id 相同不能视为同一个候选。 */
+export function sameCandidateAction(a, b) {
+	if (!a || !b) return false;
+	if ((a.type || 'card') !== (b.type || 'card')) return false;
+	if (a.id !== b.id) return false;
+	return _sameTargetValue(candidateTargetValue(a), candidateTargetValue(b));
+}
+
 
 export const PRIORITY_TIER = Object.freeze({
 	NORMAL: 'normal',
@@ -96,6 +115,18 @@ export function isCandidateEligible(candidate) {
 export function candidatePriorityRank(candidate) {
 	const p = ensureCandidatePolicy(candidate);
 	return p ? (_TIER_RANK[p.priorityTier] || 0) : 0;
+}
+
+/* 复核层的权限边界：
+ * - normal 仍是 utility-first，因此同为 normal 即属于同一复核带；
+ * - critical / forced 必须同时保持 priorityValue，不能由模型层跨策略优先级改判。 */
+export function sameCandidatePolicyBand(a, b) {
+	if (!isCandidateEligible(a) || !isCandidateEligible(b)) return false;
+	const ar = candidatePriorityRank(a), br = candidatePriorityRank(b);
+	if (ar !== br) return false;
+	if (ar === 0) return true;
+	const ap = ensureCandidatePolicy(a), bp = ensureCandidatePolicy(b);
+	return ap.priorityValue === bp.priorityValue;
 }
 
 /* 排序契约：policy 只决定“能不能选 / 哪一层优先”，score 始终只代表真实 utility。 */
