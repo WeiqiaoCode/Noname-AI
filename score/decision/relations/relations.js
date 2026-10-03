@@ -40,7 +40,8 @@
  */
 import { game, get } from '../../foundation/adapt/host.js';
 import { getModeStrategy } from '../strategy/modeStrategy.js';
-import { currentMode, isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, identityOfFor, beliefOfFor, hardIdentityOf, isRolePossibleFor } from '../../perception/observer/identity.js';
+import { currentMode, isLikelyEnemy, isLikelyAlly, confidenceOfFor as idConfidenceOfFor, identityOfFor, hardIdentityOf, isRolePossibleFor } from '../../perception/observer/identity.js';
+import { spyDispositionOf } from '../strategy/identityStance.js';
 
 function _isIdentityMode() {
 	try {
@@ -156,56 +157,14 @@ function isSameCamp(a, b) { return campRelationOf(a, b) === 'same'; }
  *   - 禁止调用宿主 get.attitude / isFriend 作为输入，因为本体身份 AI 可能读取未公开 identity；
  *   - 只消费公开事实、observer-specific posterior、规则剩余槽位；
  *   - “身份不可能”由 isRolePossibleFor 判断，绝不用四舍五入后的概率 === 0；
- *   - 内奸 identity 固定，但 stance 根据公平可见的阵营质量动态变化。
+ *   - 内奸 identity 固定；stance 统一委托 identityStance.js，避免多处阈值漂移。
  *
  * 其它模式保持宿主关系语义作为兜底。
  */
-function _identitySpyDisposition(me, t) {
-	try {
-		if (!me || !t || me === t) return 0;
-		const alive = (game.players || []).filter(function (p) { return p && p.alive !== false; });
-		const aliveCount = alive.length;
-
-		/* 主公：多人阶段必须保命；只剩内奸与主公时转为最终敌人。 */
-		if (t === game.zhu) return aliveCount <= 2 ? -1 : 1;
-
-		const tb = beliefOfFor(me, t);
-		if (!tb) return 0;
-		const hard = hardIdentityOf(me, t);
-		if (hard.role === 'nei') return 0;
-
-		let loyalMass = 0;
-		let rebelMass = 0;
-		for (const p of alive) {
-			if (!p || p === me) continue;
-			if (p === game.zhu) { loyalMass += 1; continue; }
-			const pb = beliefOfFor(me, p);
-			if (!pb) continue;
-			loyalMass += pb.zhong || 0;
-			rebelMass += pb.fan || 0;
-		}
-
-		const rebelStrong = rebelMass > loyalMass + 0.75;
-		const loyalStrong = loyalMass > rebelMass + 0.75;
-		const fanP = tb.fan || 0;
-		const loyalP = tb.zhong || 0;
-
-		/* 帮弱打强：只在目标阵营 posterior 明显时落到敌/友，模糊目标保持 neutral。 */
-		if (rebelStrong) {
-			if (fanP >= 0.60) return -1;
-			if (loyalP >= 0.65) return 1;
-		} else if (loyalStrong) {
-			if (loyalP >= 0.60) return -1;
-			if (fanP >= 0.65) return 1;
-		}
-		return 0;
-	} catch (e) { return 0; }
-}
-
 function _identityDisposition(me, t) {
 	try {
 		const myRole = me === game.zhu ? 'zhu' : me.identity;
-		if (myRole === 'nei') return _identitySpyDisposition(me, t);
+		if (myRole === 'nei') return spyDispositionOf(me, t);
 
 		if (isLikelyEnemy(me, t)) return -1;
 		if (isLikelyAlly(me, t)) return 1;
