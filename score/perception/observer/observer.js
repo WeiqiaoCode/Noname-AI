@@ -127,6 +127,7 @@ export function observeCardUse(source, card, target) {
 		
 		var se = _ensure(keyOf(source));
 		let touchedDirectly = false;
+		let delegatedTouch = false;
 
 		// 1. 记录 AOE 使用倾向
 		if (id === "wanjian" || id === "nanman") {
@@ -154,16 +155,17 @@ export function observeCardUse(source, card, target) {
 		if (target) {
 			if (Array.isArray(target)) {
 				for (var i = 0; i < target.length; i++) {
-					if (CARD_ATTACK_W[id] !== undefined) observeAttack(source, target[i], CARD_ATTACK_W[id]);
-					else if (CARD_AID_W[id] !== undefined) observeAid(source, target[i], CARD_AID_W[id]);
+					if (CARD_ATTACK_W[id] !== undefined) { observeAttack(source, target[i], CARD_ATTACK_W[id]); delegatedTouch = true; }
+					else if (CARD_AID_W[id] !== undefined) { observeAid(source, target[i], CARD_AID_W[id]); delegatedTouch = true; }
 				}
 			} else {
-				if (CARD_ATTACK_W[id] !== undefined) observeAttack(source, target, CARD_ATTACK_W[id]);
-				else if (CARD_AID_W[id] !== undefined) observeAid(source, target, CARD_AID_W[id]);
+				if (CARD_ATTACK_W[id] !== undefined) { observeAttack(source, target, CARD_ATTACK_W[id]); delegatedTouch = true; }
+				else if (CARD_AID_W[id] !== undefined) { observeAid(source, target, CARD_AID_W[id]); delegatedTouch = true; }
 			}
 		}
 
-		if (touchedDirectly) _touchObservation();
+		/* observeAttack/observeAid 已经递增 revision 时，不再为同一张牌重复 touch。 */
+		if (touchedDirectly && !delegatedTouch) _touchObservation();
 
 		// ★ 五期：同时记录花色
 		try { observeSuit(source, card); } catch (eS) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eS); }
