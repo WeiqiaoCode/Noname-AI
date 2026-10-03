@@ -132,7 +132,28 @@ export function skillTarget(sid, profile, ctx) {
 	const cats = (profile && profile.tags && profile.tags.__targets) || profileTargetCats(profile);
 	const cat = classifySkill(profile, ctx);
 	const targets = ctx.targets || [];
-	if (!targets.length) return { index: -1, reason: '无目标' };
+	const declaredRange = Array.isArray(ctx.selectTargetRange) ? ctx.selectTargetRange : null;
+	const declaredMin = declaredRange ? Math.max(0, Number(declaredRange[0]) || 0) : null;
+	const declaredMax = declaredRange
+		? (declaredRange[1] === Infinity ? Infinity : Math.max(declaredMin, Number(declaredRange[1]) || declaredMin))
+		: null;
+	const declaredFixed = !!declaredRange && declaredMax !== Infinity && declaredMin === declaredMax;
+	/* [0,N] 的 0 不是“没找到目标”，而是宿主明确允许不选目标。
+	 * 可变 0..N 的“选0还是选更多”属于技能语义，通用层不得擅自决定；
+	 * 固定 [0,0] 则可确证为无需目标。 */
+	if (declaredRange && declaredMin === 0) {
+		return {
+			index: -1,
+			reason: declaredFixed
+				? '固定零目标：宿主明确无需选择目标'
+				: '可选零目标区间：0或更多目标交回宿主',
+			targetIndexes: [],
+			targetRangeResolved: declaredFixed,
+			targetDecisionResolved: declaredFixed,
+			targetRequired: false,
+		};
+	}
+	if (!targets.length) return { index: -1, reason: '无目标', targetDecisionResolved: true, targetRequired: true };
 	// ★ 多目标：luanji/yehan/fencheng/shenfen/qinyin 等 `__targets:['multi']` 技能
 	//   此前无分支 → 落到 {index:-1,'灵活'}，目标从没选出来（熊乱/辉逝类同病）。
 	//   这里按技能方向挑选"首要真敌/真友"作主目标，并把全部可作用目标索引一并返回，
@@ -142,33 +163,57 @@ export function skillTarget(sid, profile, ctx) {
 		|| catsArr.indexOf('multi') >= 0
 		|| (catsArr.length >= 2 && catsArr.indexOf('self') < 0);
 	if (isMulti) {
-		const offensive = (cat === 'attack' || cat === 'control' || cat === 'draw'
-			|| (cats && cats.indexOf('enemy') >= 0 && cats.indexOf('ally') < 0));
-		const relevantIndexes = [];
-		targets.forEach(function (t, i) {
-			if (offensive ? (t.isEnemy === true) : (t.isAlly === true)) {
-				if (relevantIndexes.indexOf(i) < 0) relevantIndexes.push(i);
-			}
-		});
-		/* 主目标：方向取敌威胁/低血最高，或友濒死/低血最高 */
-		let bi = -1, bs = -Infinity;
+		const intent = profile && profile.targets && profile.targets.intent;
+		/* mixed 多目标技能通常包含不同角色/不同效果槽位，不能把所有目标按一个方向全选。 */
+		if (intent === 'mixed') return { index: -1, reason: '多目标效果混合，交回专属/原生AI', targetIndexes: [] };
+
+		const offensive = intent === 'offense'
+			|| (intent !== 'support' && (cat === 'attack' || cat === 'control'
+				|| (cats && cats.indexOf('enemy') >= 0 && cats.indexOf('ally') < 0)));
+		const ranked = [];
 		targets.forEach(function (t, i) {
 			const ok = offensive ? (t.isEnemy === true) : (t.isAlly === true);
 			if (!ok) return;
 			const dying = (t.hp !== undefined && t.hp <= 0) ? 6 : 0;
 			const low = (t.hp !== undefined && t.hp <= 1) ? 3 : 0;
-			let s = (t.threat || 0) + dying + low;
+			let score = offensive ? ((t.threat || 0) + low) : (dying + low + (t.threat || 0) * 0.3);
 			if (ctx.hi && typeof ctx.hi.identityBiasOf === 'function') {
-				s += ctx.hi.identityBiasOf(ctx.me, t.pp, 0.6);
+				score += ctx.hi.identityBiasOf(ctx.me, t.pp, 0.6);
 			}
-			if (s > bs) { bs = s; bi = i; }
+			ranked.push({ i: i, score: score });
 		});
-		if (bi < 0 && relevantIndexes.length) bi = relevantIndexes[0];
-		if (bi < 0) return { index: -1, reason: '多目标技能暂无' + (offensive ? '真敌' : '真友') };
+		ranked.sort(function (a, b) { return b.score - a.score; });
+		if (!ranked.length) return { index: -1, reason: '多目标技能暂无' + (offensive ? '真敌' : '真友'), targetIndexes: [] };
+
+		/* 宿主 selectTarget 是数量硬约束：不能再把所有同方向角色都塞进 targetList。
+		 * 动态 selectTarget 无法静态确定时，只提供主目标并 fail-open 给宿主补齐组合。 */
+		const range = declaredRange;
+		if (!range) {
+			return {
+				index: ranked[0].i,
+				reason: '多目标数量动态：仅推荐主目标，组合交回宿主',
+				targetIndexes: [ranked[0].i],
+				targetRangeResolved: false,
+			};
+		}
+		const min = declaredMin;
+		const max = declaredMax;
+		if (ranked.length < min) {
+			return { index: -1, reason: '合法目标不足最小数量' + min, targetIndexes: [], targetRangeResolved: true };
+		}
+		const fixed = max !== Infinity && min === max;
+		/* 固定 N 才完整规划 N；可变 [min,max] 只给最小必要组合，额外目标留给宿主。
+		 * min=0 已在前面作为“目标可省略”语义 fail-open，不会走到这里。 */
+		const want = fixed ? min : min;
+		const take = Math.min(ranked.length, max === Infinity ? want : Math.min(want, max));
+		const chosen = ranked.slice(0, take).map(function (x) { return x.i; });
 		return {
-			index: bi,
-			reason: '多目标：主攻' + (offensive ? '敌' : '辅友') + '，覆盖' + relevantIndexes.length + '目标',
-			targetIndexes: relevantIndexes,
+			index: chosen.length ? chosen[0] : -1,
+			reason: fixed
+				? ('多目标：按收益排序选择' + chosen.length + '个' + (offensive ? '敌方' : '友方') + '目标')
+				: ('多目标区间：推荐最小必要' + chosen.length + '个目标，额外选择交回宿主'),
+			targetIndexes: chosen,
+			targetRangeResolved: fixed,
 		};
 	}
 	// 自身技
@@ -225,6 +270,9 @@ export function decideSkill(sid, profile, ctx) {
 		veto: false, vetoReason: '',
 		priority: p, targetIndex: tk.index,
 		targetIndexes: tk.targetIndexes || (tk.index >= 0 ? [tk.index] : []),
+		targetRangeResolved: tk.targetRangeResolved !== false,
+		targetDecisionResolved: tk.targetDecisionResolved !== false,
+		targetRequired: tk.targetRequired !== false,
 		reason: tk.reason,
 	};
 }
