@@ -132,7 +132,28 @@ export function skillTarget(sid, profile, ctx) {
 	const cats = (profile && profile.tags && profile.tags.__targets) || profileTargetCats(profile);
 	const cat = classifySkill(profile, ctx);
 	const targets = ctx.targets || [];
-	if (!targets.length) return { index: -1, reason: '无目标' };
+	const declaredRange = Array.isArray(ctx.selectTargetRange) ? ctx.selectTargetRange : null;
+	const declaredMin = declaredRange ? Math.max(0, Number(declaredRange[0]) || 0) : null;
+	const declaredMax = declaredRange
+		? (declaredRange[1] === Infinity ? Infinity : Math.max(declaredMin, Number(declaredRange[1]) || declaredMin))
+		: null;
+	const declaredFixed = !!declaredRange && declaredMax !== Infinity && declaredMin === declaredMax;
+	/* [0,N] 的 0 不是“没找到目标”，而是宿主明确允许不选目标。
+	 * 可变 0..N 的“选0还是选更多”属于技能语义，通用层不得擅自决定；
+	 * 固定 [0,0] 则可确证为无需目标。 */
+	if (declaredRange && declaredMin === 0) {
+		return {
+			index: -1,
+			reason: declaredFixed
+				? '固定零目标：宿主明确无需选择目标'
+				: '可选零目标区间：0或更多目标交回宿主',
+			targetIndexes: [],
+			targetRangeResolved: declaredFixed,
+			targetDecisionResolved: declaredFixed,
+			targetRequired: false,
+		};
+	}
+	if (!targets.length) return { index: -1, reason: '无目标', targetDecisionResolved: true, targetRequired: true };
 	// ★ 多目标：luanji/yehan/fencheng/shenfen/qinyin 等 `__targets:['multi']` 技能
 	//   此前无分支 → 落到 {index:-1,'灵活'}，目标从没选出来（熊乱/辉逝类同病）。
 	//   这里按技能方向挑选"首要真敌/真友"作主目标，并把全部可作用目标索引一并返回，
@@ -166,7 +187,7 @@ export function skillTarget(sid, profile, ctx) {
 
 		/* 宿主 selectTarget 是数量硬约束：不能再把所有同方向角色都塞进 targetList。
 		 * 动态 selectTarget 无法静态确定时，只提供主目标并 fail-open 给宿主补齐组合。 */
-		const range = Array.isArray(ctx.selectTargetRange) ? ctx.selectTargetRange : null;
+		const range = declaredRange;
 		if (!range) {
 			return {
 				index: ranked[0].i,
@@ -175,15 +196,15 @@ export function skillTarget(sid, profile, ctx) {
 				targetRangeResolved: false,
 			};
 		}
-		const min = Math.max(0, Number(range[0]) || 0);
-		const max = range[1] === Infinity ? Infinity : Math.max(min, Number(range[1]) || min);
+		const min = declaredMin;
+		const max = declaredMax;
 		if (ranked.length < min) {
 			return { index: -1, reason: '合法目标不足最小数量' + min, targetIndexes: [], targetRangeResolved: true };
 		}
 		const fixed = max !== Infinity && min === max;
 		/* 固定 N 才完整规划 N；可变 [min,max] 只给最小必要组合，额外目标留给宿主。
-		 * min=0 但技能已进入 directional action 时，至少给一个主目标提示。 */
-		const want = fixed ? min : Math.max(1, min);
+		 * min=0 已在前面作为“目标可省略”语义 fail-open，不会走到这里。 */
+		const want = fixed ? min : min;
 		const take = Math.min(ranked.length, max === Infinity ? want : Math.min(want, max));
 		const chosen = ranked.slice(0, take).map(function (x) { return x.i; });
 		return {
@@ -250,6 +271,8 @@ export function decideSkill(sid, profile, ctx) {
 		priority: p, targetIndex: tk.index,
 		targetIndexes: tk.targetIndexes || (tk.index >= 0 ? [tk.index] : []),
 		targetRangeResolved: tk.targetRangeResolved !== false,
+		targetDecisionResolved: tk.targetDecisionResolved !== false,
+		targetRequired: tk.targetRequired !== false,
 		reason: tk.reason,
 	};
 }
