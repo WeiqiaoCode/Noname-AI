@@ -2591,8 +2591,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             '10.37 身份推理包含剩余槽位 + hard fact 层');
         eq(/\(game\.players \|\| \[\]\).*x\.identity === "fan"/s.test(idSrc37), false,
             '10.37 不再遍历隐藏 identity 作为人数先验');
-        ok(modeSrc37.indexOf('beliefOfFor(me, p)') >= 0,
-            '10.37 内奸强弱判断使用合法 posterior，不统计隐藏身份');
+        ok(modeSrc37.indexOf('spyAttackBonus(me, tgt)') >= 0,
+            '10.37 内奸策略消费统一 stance 权威，不在 modeStrategy 重算阵营强弱');
     } finally {
         host37.get.identityList = oldIdentityList37;
         host37.get.attitude = oldAtt37;
@@ -2757,7 +2757,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         const idSrc38 = fs38.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
         const relSrc38 = fs38.readFileSync(join(_pkg, 'score', 'decision', 'relations', 'relations.js'), 'utf8');
         const identityRelBlock38 = relSrc38.slice(
-            relSrc38.indexOf('function _identitySpyDisposition'),
+            relSrc38.indexOf('function _identityDisposition'),
             relSrc38.indexOf('function dispositionOf')
         );
         const dispositionBlock38 = relSrc38.slice(
@@ -2768,6 +2768,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             '10.38 identity belief 不再使用宿主 get.attitude(zhu,p)');
         eq(identityRelBlock38.indexOf('get.attitude') >= 0, false,
             '10.38 identity disposition 分支不调用宿主 get.attitude');
+        ok(relSrc38.indexOf("import { spyDispositionOf } from '../strategy/identityStance.js';") >= 0,
+            '10.38 relations 的内奸立场委托统一 identityStance 权威');
         eq(identityRelBlock38.indexOf('.isFriend(') >= 0, false,
             '10.38 identity disposition helper 不调用宿主 isFriend');
         ok(dispositionBlock38.indexOf("if (_isIdentityMode()) return _identityDisposition(me, t);") >= 0,
@@ -2815,6 +2817,145 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+/* ================= 10.39 Situation cache + single spy stance authority =================
+ * A. 局面缓存必须在状态完全相同时复用，但同一 round 的 HP/手牌/装备/关系变化必须失效；
+ * B. relations 与 modeStrategy 必须消费同一个内奸 stance 权威；
+ * C. 测试汇总不再手工维护章节编号。
+ */
+{
+    const host39 = await import(pathToFileURL(_hostPath).href);
+    const id39 = await import(pathToFileURL(join(_pkg, 'score', 'perception', 'observer', 'identity.js')).href);
+    const rel39 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'relations', 'relations.js')).href);
+    const sit39 = await import(pathToFileURL(join(_pkg, 'score', 'cognition', 'situationEval.js')).href);
+    const stance39 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'strategy', 'identityStance.js')).href);
+    const mode39 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'strategy', 'modeStrategy.js')).href);
+    const fs39 = await import('node:fs');
+
+    function P39(name, identity, shown, hp, hand, equip) {
+        return {
+            name: name, name1: name, playerid: name,
+            alive: true, hp: hp == null ? 4 : hp, maxHp: 4,
+            identity: identity || '', identityShown: !!shown,
+            _h: hand == null ? 0 : hand, _e: equip == null ? 0 : equip,
+            countCards: function (z) {
+                if (z === 'h' || z === 'hs') return this._h;
+                if (z === 'e') return this._e;
+                return 0;
+            },
+            getCards: function () { return []; },
+        };
+    }
+    function install39(players, me, zhu, roles) {
+        host39.game.me = me;
+        host39.game.zhu = zhu;
+        host39.game.players = players;
+        host39.game.dead = [];
+        host39.game.alivePlayers = players.filter(function (p) { return p.alive !== false; });
+        host39._status.currentPhase = me;
+        host39._status.roundNumber = 5;
+        host39._status.mode = 'normal';
+        host39.get.mode = function () { return 'identity'; };
+        host39.get.identityList = function () { return roles.slice(); };
+    }
+
+    const oldIdentityList39 = host39.get.identityList;
+    const oldAtt39 = host39.get.attitude;
+    try {
+        /* A. 同一 round 关系公开后，局面缓存必须看到新敌人；随后 HP 变化也必须重新估值。 */
+        {
+            const zhu = P39('zhu39a', 'zhu', true, 4, 0, 0);
+            const me = P39('me39a', 'zhong', false, 4, 4, 1);
+            const fan = P39('fan39a', 'fan', false, 8, 6, 3);
+            const spy = P39('spy39a', 'nei', false, 4, 0, 0);
+            install39([zhu, me, fan, spy], me, zhu, ['zhu','zhong','fan','nei']);
+            host39.get.attitude = function () { return 0; };
+            id39.resetBelief();
+
+            const hiddenValue = sit39.evaluateSituation(me);
+            eq(sit39.evaluateSituation(me), hiddenValue,
+                '10.39 状态完全相同 → situation cache 返回相同估值');
+
+            fan.identityShown = true;
+            id39.resetBelief();
+            const revealedValue = sit39.evaluateSituation(me);
+            ok(revealedValue !== hiddenValue,
+                '10.39 同一 round 身份关系公开 → situation cache 失效并重新估值');
+
+            fan.hp = 1;
+            const hpChangedValue = sit39.evaluateSituation(me);
+            ok(hpChangedValue !== revealedValue,
+                '10.39 同一 round HP 变化 → situation cache 失效并重新估值');
+        }
+
+        /* B. 内奸 stance 只有 identityStance.js 一个强弱/阈值权威。 */
+        {
+            const zhu = P39('zhu39b', 'zhu', true, 4, 2, 0);
+            const spy = P39('spy39b', 'nei', false, 4, 2, 0);
+            const f1 = P39('f39b1', 'fan', true, 4, 2, 0);
+            const f2 = P39('f39b2', 'fan', true, 4, 2, 0);
+            const f3 = P39('f39b3', 'fan', true, 4, 2, 0);
+            const f4 = P39('f39b4', 'fan', true, 4, 2, 0);
+            const x = P39('x39b', 'fan', false, 4, 2, 0);
+            const y = P39('y39b', 'zhong', false, 4, 2, 0);
+            install39([zhu, spy, f1, f2, f3, f4, x, y], spy, zhu,
+                ['zhu','zhong','zhong','nei','fan','fan','fan','fan']);
+            host39.get.attitude = function (from, to) {
+                return to && to.identity === 'fan' ? -9 : 9;
+            };
+            id39.resetBelief();
+
+            const centralDisposition = stance39.spyDispositionOf(spy, f1);
+            eq(rel39.dispositionOf(spy, f1), centralDisposition,
+                '10.39 relations 内奸敌友 = identityStance 统一结果');
+
+            const centralBonus = stance39.spyAttackBonus(spy, f1);
+            const modeBonus = mode39.getModeStrategy().decisionBoost(spy, {
+                type: 'card', id: 'sha', target: f1.name1,
+            });
+            eq(modeBonus, centralBonus,
+                '10.39 modeStrategy 内奸攻击加成 = identityStance 统一结果');
+
+            const beforeHidden = JSON.stringify(stance39.evaluateSpyStance(spy));
+            x.identity = 'zhong';
+            const afterHidden = JSON.stringify(stance39.evaluateSpyStance(spy));
+            eq(afterHidden, beforeHidden,
+                '10.39 hidden identity 字段变化不影响内奸 stance');
+
+            f3.alive = false;
+            f4.alive = false;
+            host39.game.alivePlayers = host39.game.players.filter(function (p) { return p.alive !== false; });
+            const flipped = stance39.evaluateSpyStance(spy);
+            eq(flipped.dominantSide, 'loyal',
+                '10.39 公开存活局势翻转 → central stance 同步翻转');
+        }
+
+        /* 源码守卫。 */
+        const sitSrc39 = fs39.readFileSync(join(_pkg, 'score', 'cognition', 'situationEval.js'), 'utf8');
+        const relSrc39 = fs39.readFileSync(join(_pkg, 'score', 'decision', 'relations', 'relations.js'), 'utf8');
+        const modeSrc39 = fs39.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'modeStrategy.js'), 'utf8');
+        const stanceSrc39 = fs39.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'identityStance.js'), 'utf8');
+
+        ok(sitSrc39.indexOf('_cacheRound = r;') >= 0 &&
+            sitSrc39.indexOf('relationStateKey(me)') >= 0 &&
+            sitSrc39.indexOf("countCards('h')") >= 0 &&
+            sitSrc39.indexOf("countCards('e')") >= 0,
+            '10.39 situation cache 同时绑定 round / relation / HP-手牌-装备状态');
+        ok(relSrc39.indexOf('spyDispositionOf(me, t)') >= 0 &&
+            relSrc39.indexOf('function _identitySpyDisposition') < 0,
+            '10.39 relations 不再维护第二套内奸 stance');
+        ok(modeSrc39.indexOf('spyAttackBonus(me, tgt)') >= 0 &&
+            modeSrc39.indexOf('let loyalMass = 0, rebelMass = 0') < 0,
+            '10.39 modeStrategy 不再重算内奸阵营强弱');
+        ok(stanceSrc39.indexOf('SPY_STANCE_MARGIN') >= 0 &&
+            stanceSrc39.indexOf('spyDispositionOf') >= 0 &&
+            stanceSrc39.indexOf('spyAttackBonus') >= 0,
+            '10.39 identityStance 集中管理内奸阈值、敌友与攻击加成');
+    } finally {
+        host39.get.identityList = oldIdentityList39;
+        host39.get.attitude = oldAtt39;
+    }
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
@@ -2822,7 +2963,7 @@ if (_fails.length) {
     for (const f of _fails) console.error('  FAIL ' + f);
     process.exitCode = 1;
 } else {
-    console.log('\n✅ 发布门禁全部通过：' + _pass + ' 项断言（§10.1/10.2/10.3/10.4/10.5/10.6/10.7/10.8/10.9/10.11/10.12/10.13/10.14/10.15/10.16/10.17/10.18/10.19/10.20/10.21/10.22/10.23/10.24/10.25/10.26/10.27/10.28/10.29/10.30/10.31/10.32/10.33/10.34）');
+    console.log('\n✅ 发布门禁全部通过：' + _pass + ' 项断言');
 }
 /* trainExport 的防抖落盘定时器无需等待；宿主桩在 process exit 时自动清理 */
 setTimeout(() => { process.exit(process.exitCode || 0); }, 50);
