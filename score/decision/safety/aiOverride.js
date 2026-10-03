@@ -37,6 +37,19 @@ const CACHE = new Map();          // player → { key, value }
 let _installed = false;
 let _protoHooked = false;
 let _skillTargetHooked = false;
+/* 每次安装使用独立 token。旧 wrapper 即使被后装扩展包在调用链内，
+ * 卸载后也永久退化为透明 passthrough；重新安装不会让旧 wrapper 复活。 */
+let _activeHookToken = null;
+
+function _markOwnedWrapper(fn, token) {
+	try {
+		Object.defineProperty(fn, '__djscHookActive', {
+			value: function () { return !!token && _activeHookToken === token; },
+			configurable: true,
+		});
+	} catch (e) {}
+	return fn;
+}
 /* ★ M09：备份被换装的底层方法原引用，卸载时原样还原，避免热重载残留 */
 const _protoBackup = {
 	addSkill: null, getSkills: null, gameCheck: null,
@@ -46,6 +59,7 @@ const _protoBackup = {
 /* 记录“我们实际安装进去的 wrapper”本身。卸载时只有当前方法仍严格等于
  * 该 wrapper 才恢复原引用；若后装扩展又包了一层，则绝不覆盖别人的修改。 */
 const _protoOwned = {
+	addSkill: null, getSkills: null, gameCheck: null,
 	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
 	chooseButton: null, chooseControl: null,
 };
@@ -486,7 +500,11 @@ export function bridgeSkillButtonEvent(next, player, sid, field, baOverride) {
 		 * 只有 planner 明确产出 buttonChoice 才允许接管；否则完全原生。 */
 		const planned = _skillExplicitButtonDecision(player, sid, baOverride);
 		if (planned === null) return next;
-		if (typeof next[field] === 'function') next[field] = wrapExplicitSkillButtonAI(next[field], planned);
+		let bridged = false;
+		if (typeof next[field] === 'function') {
+			next[field] = wrapExplicitSkillButtonAI(next[field], planned);
+			bridged = true;
+		}
 		if (typeof next.set === 'function' && !next.__djscSkillButtonSetBridge) {
 			const origSet = next.set;
 			next.set = function (key, value) {
@@ -494,8 +512,29 @@ export function bridgeSkillButtonEvent(next, player, sid, field, baOverride) {
 				return origSet.call(this, key, value);
 			};
 			try { next.__djscSkillButtonSetBridge = true; } catch (e) {}
+			bridged = true;
+		}
+		if (bridged) {
+			try { next.__djscSkillButtonDecision = { skillId: sid, choice: planned }; } catch (e) {}
 		}
 		return next;
+	} catch (e) { return next; }
+}
+
+export function bridgeSkillButtonChoiceOnce(next, player, skillContext, field, baOverride) {
+	try {
+		if (!skillContext || !skillContext.id) return next;
+		const ownerEvent = skillContext.event || null;
+		if (ownerEvent && ownerEvent.__djscSkillButtonBridgeConsumed) return next;
+		const out = bridgeSkillButtonEvent(next, player, skillContext.id, field, baOverride);
+		if (out && out.__djscSkillButtonDecision && ownerEvent) {
+			try {
+				ownerEvent.__djscSkillButtonBridgeConsumed = {
+					skillId: skillContext.id,
+				};
+			} catch (e) {}
+		}
+		return out;
 	} catch (e) { return next; }
 }
 
@@ -536,7 +575,25 @@ export function bridgeSkillControlEvent(next, player, sid, baOverride) {
 			};
 			try { next.__djscSkillControlSetBridge = true; } catch (e) {}
 		}
+		try { next.__djscSkillControlDecision = { skillId: sid, choice: planned }; } catch (e) {}
 		return next;
+	} catch (e) { return next; }
+}
+
+export function bridgeSkillControlChoiceOnce(next, player, skillContext, baOverride) {
+	try {
+		if (!skillContext || !skillContext.id) return next;
+		const ownerEvent = skillContext.event || null;
+		if (ownerEvent && ownerEvent.__djscSkillControlBridgeConsumed) return next;
+		const out = bridgeSkillControlEvent(next, player, skillContext.id, baOverride);
+		if (out && out.__djscSkillControlDecision && ownerEvent) {
+			try {
+				ownerEvent.__djscSkillControlBridgeConsumed = {
+					skillId: skillContext.id,
+				};
+			} catch (e) {}
+		}
+		return out;
 	} catch (e) { return next; }
 }
 
@@ -545,65 +602,72 @@ function _hookSkillTargetChoice() {
 	try {
 		const proto = lib.element && lib.element.Player && lib.element.Player.prototype;
 		if (!proto) return;
+		const hookToken = _activeHookToken;
+		if (!hookToken) return;
 
 		const origChooseTarget = proto.chooseTarget;
 		if (typeof origChooseTarget === 'function') {
 			_protoBackup.chooseTarget = origChooseTarget;
-			proto.chooseTarget = function () {
+			proto.chooseTarget = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseTarget.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseTarget.apply(this, arguments);
 				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai') : next;
-			};
+			}, hookToken);
 			_protoOwned.chooseTarget = proto.chooseTarget;
 		}
 
 		const origChooseCardTarget = proto.chooseCardTarget;
 		if (typeof origChooseCardTarget === 'function') {
 			_protoBackup.chooseCardTarget = origChooseCardTarget;
-			proto.chooseCardTarget = function () {
+			proto.chooseCardTarget = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseCardTarget.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseCardTarget.apply(this, arguments);
 				if (!skillCtx) return next;
 				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2');
 				bridgeSkillCardCostEvent(next, this, skillCtx.id, 'ai1');
 				return next;
-			};
+			}, hookToken);
 			_protoOwned.chooseCardTarget = proto.chooseCardTarget;
 		}
 
 		const origChooseButtonTarget = proto.chooseButtonTarget;
 		if (typeof origChooseButtonTarget === 'function') {
 			_protoBackup.chooseButtonTarget = origChooseButtonTarget;
-			proto.chooseButtonTarget = function () {
+			proto.chooseButtonTarget = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseButtonTarget.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseButtonTarget.apply(this, arguments);
 				if (!skillCtx) return next;
 				bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2');
-				bridgeSkillButtonEvent(next, this, skillCtx.id, 'ai1');
+				bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai1');
 				return next;
-			};
+			}, hookToken);
 			_protoOwned.chooseButtonTarget = proto.chooseButtonTarget;
 		}
 
 		const origChooseButton = proto.chooseButton;
 		if (typeof origChooseButton === 'function') {
 			_protoBackup.chooseButton = origChooseButton;
-			proto.chooseButton = function () {
+			proto.chooseButton = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseButton.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseButton.apply(this, arguments);
-				return skillCtx ? bridgeSkillButtonEvent(next, this, skillCtx.id, 'ai') : next;
-			};
+				return skillCtx ? bridgeSkillButtonChoiceOnce(next, this, skillCtx, 'ai') : next;
+			}, hookToken);
 			_protoOwned.chooseButton = proto.chooseButton;
 		}
 
 		const origChooseControl = proto.chooseControl;
 		if (typeof origChooseControl === 'function') {
 			_protoBackup.chooseControl = origChooseControl;
-			proto.chooseControl = function () {
+			proto.chooseControl = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origChooseControl.apply(this, arguments);
 				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseControl.apply(this, arguments);
-				return skillCtx ? bridgeSkillControlEvent(next, this, skillCtx.id) : next;
-			};
+				return skillCtx ? bridgeSkillControlChoiceOnce(next, this, skillCtx) : next;
+			}, hookToken);
 			_protoOwned.chooseControl = proto.chooseControl;
 		}
 
@@ -788,6 +852,7 @@ export function installAIOverride() {
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		});
 
+		_activeHookToken = {};
 		_hookAddSkill();
 		_hookRoundChange();
 		_hookSkillTargetChoice();
@@ -795,6 +860,7 @@ export function installAIOverride() {
 		_installed = true;
 		try { if (game.log) game.log('决策积分引擎：原生 AI 软接管层已安装（aiOrder + aiValue + effect + useful）'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	} catch (e) {
+		_activeHookToken = null;
 		try { console.error('[决策积分引擎] installAIOverride 失败：', e); } catch (e2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e2); }
 	}
 }
@@ -803,10 +869,13 @@ function _hookAddSkill() {
 	if (_protoHooked) return;
 	try {
 		const proto = lib.element.Player.prototype;
+		const hookToken = _activeHookToken;
+		if (!hookToken) return;
 		const orig = proto.addSkill;
 		if (typeof orig !== 'function') return;
 		_protoBackup.addSkill = orig;   /* ★ M09：存下原生 addSkill，卸载时还原 */
-		proto.addSkill = function () {
+		proto.addSkill = _markOwnedWrapper(function () {
+			if (_activeHookToken !== hookToken) return orig.apply(this, arguments);
 			const r = orig.apply(this, arguments);
 			try {
 				if (this !== game.me && !this.hasSkill(SKILL_ID) && lib.skill[SKILL_ID]) {
@@ -814,14 +883,16 @@ function _hookAddSkill() {
 				}
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 			return r;
-		};
+		}, hookToken);
+		_protoOwned.addSkill = proto.addSkill;
 		_protoHooked = true;
 
 		/* ★ 修复左慈死亡 temp 报错：过滤掉 lib.skill[sid] 为 undefined 的残留技能 */
 		const origGetSkills = proto.getSkills;
 		if (typeof origGetSkills === 'function') {
 			_protoBackup.getSkills = origGetSkills;   /* ★ M09：存下原生 getSkills，卸载时还原 */
-			proto.getSkills = function () {
+			proto.getSkills = _markOwnedWrapper(function () {
+				if (_activeHookToken !== hookToken) return origGetSkills.apply(this, arguments);
 				const skills = origGetSkills.apply(this, arguments);
 				try {
 					if (Array.isArray(skills) && skills.length > 0) {
@@ -831,7 +902,8 @@ function _hookAddSkill() {
 					}
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				return skills;
-			};
+			}, hookToken);
+			_protoOwned.getSkills = proto.getSkills;
 		}
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
@@ -839,26 +911,32 @@ function _hookAddSkill() {
 function _hookRoundChange() {
 	try {
 		if (game.__djsc_check_hooked) return;
+		const hookToken = _activeHookToken;
+		if (!hookToken) return;
 		game.__djsc_check_hooked = true;
 		const orig = game.check;
 		if (typeof orig !== 'function') return;
 		_protoBackup.gameCheck = orig;   /* ★ M09：存下原生 game.check，卸载时还原 */
-		game.check = function () {
+		game.check = _markOwnedWrapper(function () {
+			if (_activeHookToken !== hookToken) return orig.apply(this, arguments);
 			try { _clearCache(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 			return orig.apply(this, arguments);
-		};
+		}, hookToken);
+		_protoOwned.gameCheck = game.check;
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
 /* ---------- 卸载 ---------- */
 export function uninstallAIOverride() {
+	/* 先失效本代 wrapper；即使它被第三方 wrapper 包在内部，也只能透明调用旧原函数。 */
+	_activeHookToken = null;
 	try { _clearCache(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ M09：还原被换装的底层方法（仅当仍是我们的包装时才还原，避免热重载残留） */
 	try {
 		var proto = (lib && lib.element && lib.element.Player) ? lib.element.Player.prototype : null;
 		if (proto) {
-			if (_protoBackup.addSkill && proto.addSkill !== _protoBackup.addSkill) proto.addSkill = _protoBackup.addSkill;
-			if (_protoBackup.getSkills && proto.getSkills !== _protoBackup.getSkills) proto.getSkills = _protoBackup.getSkills;
+			if (_protoBackup.addSkill && proto.addSkill === _protoOwned.addSkill) proto.addSkill = _protoBackup.addSkill;
+			if (_protoBackup.getSkills && proto.getSkills === _protoOwned.getSkills) proto.getSkills = _protoBackup.getSkills;
 			if (_protoBackup.chooseTarget && proto.chooseTarget === _protoOwned.chooseTarget) proto.chooseTarget = _protoBackup.chooseTarget;
 			if (_protoBackup.chooseCardTarget && proto.chooseCardTarget === _protoOwned.chooseCardTarget) proto.chooseCardTarget = _protoBackup.chooseCardTarget;
 			if (_protoBackup.chooseButtonTarget && proto.chooseButtonTarget === _protoOwned.chooseButtonTarget) proto.chooseButtonTarget = _protoBackup.chooseButtonTarget;
@@ -866,7 +944,7 @@ export function uninstallAIOverride() {
 			if (_protoBackup.chooseControl && proto.chooseControl === _protoOwned.chooseControl) proto.chooseControl = _protoBackup.chooseControl;
 		}
 		var g = (typeof game !== 'undefined') ? game : null;
-		if (g && _protoBackup.gameCheck && g.check !== _protoBackup.gameCheck) g.check = _protoBackup.gameCheck;
+		if (g && _protoBackup.gameCheck && g.check === _protoOwned.gameCheck) g.check = _protoBackup.gameCheck;
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ M09：复位标志，允许下次 install 重新正确地换装 */
 	try {
