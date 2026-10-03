@@ -32,7 +32,7 @@ import { observeAttack, observeAid, observeCardUse, resetObs, getObs, fireAttack
 import './scoreSelfMod.js';  // ★ 积分自修改器：AI 直接修改规则积分
 import { deckConsume, deckReset, cardRemaining, deckAutoDetect, deckSyncFromUI } from '../../perception/memory/deckMemory.js';
 import { baguaSuccessRate } from '../../model/predict/deckPredict.js';
-import { identityOf as _identityOf, beliefOf, updateBelief, confidenceOf, isLikelyEnemy, isLikelyAlly, resetBelief, explainIdentity, identityBiasOf } from '../../perception/observer/identity.js';
+import { identityOf as _identityOf, identityOfFor as _identityOfFor, beliefOf, updateBelief, confidenceOf, confidenceOfFor as _confidenceOfFor, hardIdentityOf as _hardIdentityOf, isLikelyEnemy, isLikelyAlly, resetBelief, explainIdentity, identityBiasOf } from '../../perception/observer/identity.js';
 import { cfg, safe, nameOf, keyOf } from '../../foundation/config/util.js';
 import { teamPlan } from '../../perception/team/team.js';
 import { log } from '../../foundation/diag/logger.js';
@@ -733,6 +733,19 @@ function _campOf(player) {
 			if (strategy && strategy.getCamp) return strategy.getCamp(player);
 		}
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	/* 身份模式兜底也必须遵守公开信息边界；不能因策略模块暂不可用就退回真实 identity。 */
+	try {
+		const mode = (get && typeof get.mode === 'function') ? get.mode() : '';
+		if (mode === 'identity') {
+			if (player === game.zhu) return 'loyal';
+			if (player && (player.identityShown || player.identity === 'mingzhong')) {
+				if (player.identity === 'zhu' || player.identity === 'zhong' || player.identity === 'mingzhong') return 'loyal';
+				if (player.identity === 'fan') return 'rebel';
+				if (player.identity === 'nei') return 'nei';
+			}
+			return 'unknown';
+		}
+	} catch (eMode) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eMode); }
 	return (player && player.identity) || 'unknown';
 }
 
@@ -1813,6 +1826,8 @@ function recordDecision(me, layers, candidates, winner, conf) {
 function _autofeatCtx(me, best, bestT) {
 	try {
 		if (!me || !best) return null;
+		const tgtRole = bestT ? _identityOfFor(me, bestT) : 'unknown';
+		const tgtHard = bestT ? _hardIdentityOf(me, bestT) : { role: null };
 		const ctx = {
 			cardType: best.type === 'card' ? best.id : null,
 			cardSuit: null,
@@ -1826,7 +1841,8 @@ function _autofeatCtx(me, best, bestT) {
 			tgtHighHp: !!(bestT && bestT.hp && bestT.hp >= 4),
 			tgtFewHand: !!(bestT && bestT.countCards && bestT.countCards('h') <= 1),
 			myIdentity: me.identity || null,
-			tgtIdentity: bestT && bestT.identity ? bestT.identity : null,
+			tgtIdentity: tgtRole && tgtRole !== 'unknown' ? tgtRole : null,
+			tgtIdentityKnown: !!(tgtHard && tgtHard.role),
 			myHasSha: me.countCards ? me.countCards('hs', 'sha') > 0 : false,
 			myHasTao: me.countCards ? me.countCards('hs', 'tao') > 0 : false,
 			isEndgame: (game.players || []).filter(function (p) { return p && p.alive !== false; }).length <= 3,
@@ -3208,12 +3224,14 @@ function bestAction() {
 								const tHp = dyingAlly.maxHp || 4;
 								if (tHp >= 5) targetValue += 0.6;
 								else if (tHp >= 4) targetValue += 0.3;
-								const mode = (_status && _status.mode) || '';
+								const mode = (get && typeof get.mode === 'function') ? get.mode() : ((_status && _status.mode) || '');
 								if (mode === 'identity') {
-									const tid = dyingAlly.identity;
-									if (tid === 'zhu') targetValue += 1.5;
-									else if (tid === 'zhong' || tid === 'mingzhong') targetValue += 1.0;
-									else if (tid === 'nei') targetValue += 0.3;
+									const hard = _hardIdentityOf(me, dyingAlly);
+									const tid = _identityOfFor(me, dyingAlly);
+									const conf = _confidenceOfFor(me, dyingAlly);
+									if (dyingAlly === game.zhu) targetValue += 1.5;
+									else if (hard && hard.role && hard.role !== 'nei') targetValue += 1.0;
+									else if (tid !== 'unknown' && conf >= 0.65) targetValue += 0.5;
 								}
 								try {
 									const th = threatOf(dyingAlly);
@@ -3457,7 +3475,7 @@ function bestAction() {
 					/* ★ 忠臣打主公：额外惩罚（软指标，初始-30，剩下让模型判断） */
 					try {
 						if (me.identity === 'zhong' || me.identity === 'zhu') {
-							if (bestT && bestT.identity === 'zhu' && bestT.identityShown) {
+							if (bestT && bestT === game.zhu) {
 								if (['sha', 'juedou', 'huogong', 'zhujin', 'nanman', 'wanjian'].indexOf(id) >= 0) {
 									s += getMetric('zhong_attack_zhu_penalty', -30);
 								}
@@ -3488,9 +3506,7 @@ function bestAction() {
 					try {
 						if (me.identity === 'zhong' || me.identity === 'zhu') {
 							/* 找主公 */
-							const zhugong = (game.players || []).find(function (p) {
-								return p && p.alive !== false && p.identity === 'zhu';
-							});
+							const zhugong = (game.zhu && game.zhu.alive !== false) ? game.zhu : null;
 							if (zhugong && zhugong !== me) {
 								/* 治疗/保护牌对主公 → 高加分 */
 								if (['tao', 'taoyuan'].indexOf(id) >= 0 && bestT === zhugong) {
@@ -3868,7 +3884,9 @@ function bestAction() {
 								for (const p of (game.players || [])) {
 									if (!p) continue;
 									if ((p.name1 || p.name || '') === a.target) {
-										if (p.identity || p.identityShown) expose = true;
+										if (modeStrategy.name === 'identity') {
+										expose = (p === game.zhu) || !!p.identityShown || p.identity === 'mingzhong';
+									} else if (p.identity || p.identityShown) expose = true;
 										break;
 									}
 								}
@@ -4972,9 +4990,17 @@ function settle() {
 				/* 附上身份推理快照 */
 				try {
 					const beliefs = {};
+					const observer = game.me || ((_status && _status.currentPhase) || null);
 					(game.players || []).forEach(function (p) {
 						if (!p) return;
-						beliefs[p.name || "?"] = { real: p.identity || "?", inferred: _identityOf(p), belief: beliefOf(p) };
+						const publicIdentity = p === game.zhu
+							? 'zhu'
+							: ((p.identityShown || p.identity === 'mingzhong') ? (p.identity || '?') : '?');
+						beliefs[p.name || "?"] = {
+							public: publicIdentity,
+							inferred: observer ? _identityOfFor(observer, p) : _identityOf(p),
+							belief: observer ? (awaitImpossible => beliefOf(p))(0) : beliefOf(p),
+						};
 					});
 					entry.identities = beliefs;
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
