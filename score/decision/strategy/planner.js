@@ -22,7 +22,7 @@ import { isEnemyOf, probHasShan, seatPressure, threatOf } from '../threat/threat
 import { isAllyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 import { baseEquipValue } from '../basic/equipBrain.js';
 import { signedNormalizedImprovement, DECISION_MARGIN } from '../state/decisionMargin.js';
-import { targetKey, setCandidatePriority, PRIORITY_TIER, isCandidateEligible, candidatePriorityRank } from '../state/actionCandidate.js';
+import { targetKey, setCandidatePriority, ensureCandidatePolicy, PRIORITY_TIER, isCandidateEligible, sameCandidateAction, sameCandidatePolicyBand, compareActionCandidates } from '../state/actionCandidate.js';
 
 const PLAN_TIMEOUT = 350;
 const LOOKAHEAD_DISCOUNT = 0.7;
@@ -191,7 +191,7 @@ function _findKillSequence(me, target) {
 
 		const steps = [];
 		let totalDmg = 0;      /* 乐观累计（用于估算能否压线） */
-		let certainDmg = 0;    /* 保守累计（仅必中伤害） */
+		let guaranteedDmg = 0; /* 严格确定伤害：只有已知无响应窗口才计入 */
 
 		/* ★ 攻击范围必须是残局解的一部分：
 		 * 当前在范围外时，不允许直接把【杀】算进序列；若手牌武器能补足射程，
@@ -216,10 +216,10 @@ function _findKillSequence(me, target) {
 
 		/* 击杀判断：期望伤害覆盖剩余血；
 		 *  且有保底命中(或期望足以超额覆盖)才判可杀，避免纯"期望伤害"造假必杀解。 */
-		function killable(expect, certain) {
+		function killable(expect, guaranteed) {
 			if (expect < hp) return false;             /* 期望都没压线 → 不可能 */
-			if (certain >= hp) return true;            /* 保守的必中都能杀 → 稳 */
-			return expect >= hp + 1;                   /* 仅期望 → 需超额覆盖留余量 */
+			if (guaranteed >= hp) return true;         /* 严格确定伤害足以击杀 */
+			return expect >= hp + 1;                   /* 概率路线仅作为高置信规划 */
 		}
 
 		if (hand.has('jiu') && shaReachable && take('sha')) {
@@ -228,16 +228,16 @@ function _findKillSequence(me, target) {
 			/* ★ 杀命中按 probHasShan 折算：期望伤害 = 命中率 × 伤害 */
 			const pS = probHasShan(me, target);
 			const shaExpect = 2 * (1 - pS);
-			steps.push({ id: 'sha', expect: shaExpect, dmg: 2, type: 'damage' });
+			steps.push({ id: 'sha', expect: shaExpect, dmg: 2, type: 'damage', target: targetKey(target) });
 			totalDmg += shaExpect;
-			certainDmg += (pS <= 0.5 ? 1 : 0);
+			if (pS <= 0) guaranteedDmg += 2;
 		} else if (hand.has('sha') && shaReachable && take('sha')) {
 			prepareShaRange();
 			const pS = probHasShan(me, target);
 			const shaExpect = 1 * (1 - pS);
-			steps.push({ id: 'sha', expect: shaExpect, dmg: 1, type: 'damage' });
+			steps.push({ id: 'sha', expect: shaExpect, dmg: 1, type: 'damage', target: targetKey(target) });
 			totalDmg += shaExpect;
-			certainDmg += (pS <= 0.5 ? 1 : 0);
+			if (pS <= 0) guaranteedDmg += 1;
 		}
 
 		if (hand.has('huogong') && totalDmg < hp) {
@@ -255,7 +255,7 @@ function _findKillSequence(me, target) {
 			if (canBurn || totalDmg === 0) {
 				take('huogong');
 				/* 火攻本身有手牌/花色条件，命中率较低、且需展示手牌——按 0.7 折算 */
-				steps.push({ id: 'huogong', expect: 0.7, dmg: 1, type: 'damage' });
+				steps.push({ id: 'huogong', expect: 0.7, dmg: 1, type: 'damage', target: targetKey(target) });
 				totalDmg += 0.7;
 			}
 		}
@@ -265,7 +265,7 @@ function _findKillSequence(me, target) {
 			const tgtHand = target.countCards ? target.countCards('h') : 0;
 			if (mySha >= 1 || tgtHand <= 1) {
 				take('juedou');
-				steps.push({ id: 'juedou', expect: 0.75, dmg: 1, type: 'damage' });
+				steps.push({ id: 'juedou', expect: 0.75, dmg: 1, type: 'damage', target: targetKey(target) });
 				totalDmg += 0.75;
 			}
 		}
@@ -283,19 +283,24 @@ function _findKillSequence(me, target) {
 
 		if (hand.has('zhujin') && totalDmg < hp) {
 			take('zhujin');
-			steps.push({ id: 'zhujin', expect: 0.9, dmg: 1, type: 'damage' });
+			steps.push({ id: 'zhujin', expect: 0.9, dmg: 1, type: 'damage', target: targetKey(target) });
 			totalDmg += 0.9;
 		}
 
 		/* ★ 既要期望伤害压线，又要判定合理才判可杀 */
-		if (killable(totalDmg, certainDmg)) {
+		if (killable(totalDmg, guaranteedDmg)) {
+			/* forced 只允许“当前第一步本身即可确定击杀”。
+			 * 多步、概率响应、射程准备等路线即使很强，也只进入 critical。 */
+			const certainty = (steps.length === 1 && guaranteedDmg >= hp) ? 'forced' : 'critical';
 			return {
 				target: target,
 				targetName: target.name || target.name1 || '?',
 				steps: steps,
 				totalDmg: Math.round(totalDmg * 10) / 10,
+				guaranteedDmg: Math.round(guaranteedDmg * 10) / 10,
 				killable: true,
-				killRank: Math.round((certainDmg * 10 + totalDmg) * 100) / 100,
+				certainty: certainty,
+				killRank: Math.round((guaranteedDmg * 10 + totalDmg) * 100) / 100,
 			};
 		}
 		return null;
@@ -493,24 +498,39 @@ export function planSequence(me) {
 			if (!p || p === me || !p.isIn()) continue;
 			if (!isEnemyOf(me, p)) continue;
 			const ks = _findKillSequence(me, p);
-			if (ks && (!killSeq || ks.killRank > killSeq.killRank)) {
+			if (!ks) continue;
+
+			/* Planner 只能提升宿主已经生成的真实合法候选，不能凭推演合成动作。
+			 * 对有目标动作，type + id + target 必须全部一致。 */
+			const first = ks.steps[0] || {};
+			const plannedFirst = {
+				type: first.type === 'equip' ? 'equip' : 'card',
+				id: first.id,
+				target: first.target == null ? null : first.target,
+			};
+			const firstCandidate = candidates.find(function (c) {
+				return c && isCandidateEligible(c) && sameCandidateAction(c, plannedFirst);
+			}) || null;
+			if (!firstCandidate) continue;
+			ks.firstCandidate = firstCandidate;
+
+			const ksTier = ks.certainty === 'forced' ? 2 : 1;
+			const bestTier = killSeq ? (killSeq.certainty === 'forced' ? 2 : 1) : -1;
+			if (!killSeq || ksTier > bestTier || (ksTier === bestTier && ks.killRank > killSeq.killRank)) {
 				killSeq = ks;
 			}
 		}
-		if (killSeq) {
+		if (killSeq && killSeq.firstCandidate) {
 			log.debug('planner', '残局解：打 ' + killSeq.targetName + ' ' + killSeq.totalDmg + ' 点可秒');
-			const first = killSeq.steps[0] || {};
-			const firstType = first.type === 'equip' ? 'equip' : 'card';
-			const firstCandidate = candidates.find(function (c) {
-				return c && isCandidateEligible(c) && c.id === first.id && c.type === firstType;
-			}) || null;
+			const firstCandidate = killSeq.firstCandidate;
 			return {
 				best: {
-					action: first,
-					baseScore: firstCandidate ? (firstCandidate.score || 0) : 0,
-					total: firstCandidate ? (firstCandidate.score || 0) : 0,
+					action: firstCandidate,
+					baseScore: firstCandidate.score || 0,
+					total: firstCandidate.score || 0,
 					futureScore: 0,
 					killRank: killSeq.killRank,
+					certainty: killSeq.certainty,
 					steps: killSeq.steps,
 					isKill: true,
 					target: killSeq.target,
@@ -577,43 +597,42 @@ export function refineBestWithPlan(me, best, bestT) {
 		const liveCandidates = (_status.djsc_lastCandidates || []);
 		function canonicalOf(action) {
 			if (!action) return null;
-			const actionType = action.type === 'equip' ? 'equip'
-				: (action.type === 'skill' ? 'skill' : 'card');
 			return liveCandidates.find(function (c) {
-				if (!c || c.id !== action.id) return false;
-				if ((c.type || 'card') !== actionType) return false;
-				if (action.target != null && c.target != null && c.target !== action.target) return false;
-				return true;
+				return c && isCandidateEligible(c) && sameCandidateAction(c, action);
 			}) || null;
 		}
 
 		if (plan.isKill && planBest.action) {
 			const canonicalKill = canonicalOf(planBest.action);
-			const out = canonicalKill || {
-				type: planBest.action.type === 'equip' ? 'equip' : 'card',
-				id: planBest.action.id,
-				score: Number(planBest.baseScore || 0),
-			};
-			setCandidatePriority(out, PRIORITY_TIER.FORCED, Number(planBest.killRank || 0), '已验证击杀序列');
-			out.reason = (out.reason || '') + '（★残局解：' + planBest.steps.map(function (step) { return step.id; }).join(' → ') +
+			if (!canonicalKill || !isCandidateEligible(canonicalKill)) return best;
+
+			const tier = planBest.certainty === 'forced' ? PRIORITY_TIER.FORCED : PRIORITY_TIER.CRITICAL;
+			const currentPolicy = ensureCandidatePolicy(canonicalKill);
+			const priorityValue = tier === PRIORITY_TIER.FORCED
+				? Number(planBest.killRank || 0)
+				: Math.max(99, Number(currentPolicy && currentPolicy.priorityValue || 0));
+			const reason = tier === PRIORITY_TIER.FORCED ? '已验证确定击杀序列' : '高置信击杀序列';
+
+			/* 先在副本上比较，避免未胜出的规划污染 live candidate policy。 */
+			const proposed = Object.assign({}, canonicalKill, {
+				policy: Object.assign({}, canonicalKill.policy || {}),
+			});
+			setCandidatePriority(proposed, tier, priorityValue, reason);
+			if (canonicalKill !== best && compareActionCandidates(proposed, best) >= 0) return best;
+
+			setCandidatePriority(canonicalKill, tier, priorityValue, reason);
+			canonicalKill.reason = (canonicalKill.reason || '') + '（★残局解：' + planBest.steps.map(function (step) { return step.id; }).join(' → ') +
 				'，预计' + planBest.steps.reduce(function (sum, x) { return sum + (x.dmg || 0); }, 0) + '点伤害）';
-			out.killTarget = planBest.target;
-			if (planBest.action.type === 'equip') {
-				out.target = null;
-				out.targetObj = null;
-			} else {
-				out.targetObj = planBest.target || out.targetObj || null;
-				out.target = targetKey(out.targetObj) || out.target || null;
-			}
-			out.isKill = true;
-			out.planned = true;
-			return out;
+			canonicalKill.killTarget = planBest.target;
+			canonicalKill.isKill = true;
+			canonicalKill.planned = true;
+			return canonicalKill;
 		}
 
 		const planTop = planBest.action;
 		const canonicalTop = planTop ? canonicalOf(planTop) : null;
 		const samePolicyTier = canonicalTop
-			? candidatePriorityRank(canonicalTop) === candidatePriorityRank(best)
+			? sameCandidatePolicyBand(canonicalTop, best)
 			: false;
 		const improvement = planTop && planTop.id
 			? signedNormalizedImprovement(best.score || 0, planBest.total)
