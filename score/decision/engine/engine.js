@@ -2210,6 +2210,15 @@ function _skillNeedsExternalTarget(sid, prof) {
 	} catch (e) { return false; }
 }
 
+function _skillPurposeFromIntent(intent, category) {
+	if (intent === 'offense') return 'attack';
+	if (intent === 'support') return 'support';
+	if (intent === 'mixed') return null;
+	if (category === 'attack' || category === 'control') return 'attack';
+	if (category === 'defense' || category === 'aux') return 'support';
+	return null;
+}
+
 /* ★ 基本技能决策标准接入层
  * 在 acts.sort 之前对 skill 候选应用 skillPlayBrain 的三段式标准：
  *   - 硬否决（负收益/自伤/时机不符/无可控敌）→ 压到接近结束回合
@@ -2315,12 +2324,8 @@ function applyBasicSkillRules(me, acts) {
 						const _cat = d.category || d.rule || '';
 						/* 目标 intent 高于技能大类：target.draw() 可能是辅助技，不能因 category=draw
 						 * 又被翻译成 attack。mixed 则刻意不设 purpose，交回原生/专属策略。 */
-						if (ti === 'offense') a.purpose = 'attack';
-						else if (ti === 'support') a.purpose = 'support';
-						else if (!ti) {
-							if (_cat === 'attack' || _cat === 'control') a.purpose = 'attack';
-							else if (_cat === 'defense' || _cat === 'aux') a.purpose = 'support';
-						}
+						const _purpose = _skillPurposeFromIntent(ti, _cat);
+						if (_purpose) a.purpose = _purpose;
 					}
 				}
 				/* ★ 多目标技能：写回 targetList（全部真敌/真友玩家对象），
@@ -5347,7 +5352,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _skillPurposeFromIntent };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
