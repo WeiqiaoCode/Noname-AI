@@ -2233,6 +2233,20 @@ function _skillPurposeFromIntent(intent, category, confidence) {
 	return null;
 }
 
+function _isSingleTargetSkillProfile(prof, decision) {
+	try {
+		const tags = (prof && prof.tags) || {};
+		const cats = tags.__targets || [];
+		const scope = tags.__scope || null;
+		if (cats.indexOf('multi') >= 0) return false;
+		if (prof && prof.targets && prof.targets.category === 'all') return false;
+		if (scope === 'all' || scope === 'all_others' || scope === 'anyN'
+			|| scope === 'enemyN' || scope === 'allyN' || scope === 'selfN') return false;
+		if (decision && Array.isArray(decision.targetIndexes) && decision.targetIndexes.length > 1) return false;
+		return true;
+	} catch (e) { return false; }
+}
+
 /* ★ 基本技能决策标准接入层
  * 在 acts.sort 之前对 skill 候选应用 skillPlayBrain 的三段式标准：
  *   - 硬否决（负收益/自伤/时机不符/无可控敌）→ 压到接近结束回合
@@ -2347,7 +2361,7 @@ function applyBasicSkillRules(me, acts) {
 						/* provenance：只有真正经过 kernel 合法目标池 + decideSkill 解析出的目标，
 						 * 才允许后续宿主桥消费。防止旧 action 上恰好存在 target 字段被误接管。 */
 						a.skillTargetResolved = true;
-						a.skillTargetSingle = !(Array.isArray(d.targetIndexes) && d.targetIndexes.length > 1);
+						a.skillTargetSingle = _isSingleTargetSkillProfile(prof, d);
 						a.targetRule = d.rule + '→' + a.target + '(' + d.reason + ')';
 						a.reason = (a.reason || '') + '（对象：' + a.target + '）';
 						/* ★ 技能方向(purpose)：按技能类别映射，供统一收益守卫 actionValue 强判方向
@@ -5383,7 +5397,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _isSingleTargetSkillProfile };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
