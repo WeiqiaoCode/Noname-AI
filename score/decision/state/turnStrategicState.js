@@ -500,9 +500,10 @@ export function evaluateCreateConsistency(player, target, cardId, context) {
 					out.reason = 'state-still-active';
 					return out;
 				}
-				const committed = Math.max(0, Number(r.strategicValue) || 0);
-				out.penalty = Math.round(committed * REAPPLY_WEIGHT * 1000) / 1000;
-				out.reason = out.penalty > 0 ? 'reapply-lost-created-state' : 'prior-create-not-beneficial';
+				/* 状态消失本身不代表“我自己反转了策略”。
+				 * 只有同 actor 的 confirmed remove-state 才构成 REMOVE→CREATE reversal；
+				 * 被无懈、判定自然结算、或被其他玩家移除后重新补挂不应受罚。 */
+				out.reason = 'prior-create-no-longer-active';
 				return out;
 			}
 		}
