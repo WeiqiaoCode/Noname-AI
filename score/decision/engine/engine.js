@@ -2228,12 +2228,13 @@ function _skillTargetRange(sid) {
 		const sk = lib.skill && lib.skill[sid];
 		if (!sk) return null;
 		const st = sk.selectTarget;
-		if (typeof st === 'number') return [st, st];
+		/* 宿主负数 selectTarget（典型 -1）有自动/特殊选择语义，不按普通数量解释。 */
+		if (typeof st === 'number') return st >= 0 ? [st, st] : null;
 		if (Array.isArray(st) && st.length >= 2) {
 			const min = Number(st[0]);
 			const max = st[1] === Infinity ? Infinity : Number(st[1]);
-			if (Number.isFinite(min) && (max === Infinity || Number.isFinite(max))) {
-				return [Math.max(0, min), max === Infinity ? Infinity : Math.max(min, max)];
+			if (Number.isFinite(min) && min >= 0 && (max === Infinity || (Number.isFinite(max) && max >= 0))) {
+				return [min, max === Infinity ? Infinity : Math.max(min, max)];
 			}
 		}
 		/* 有 filterTarget 而无 selectTarget 时，宿主默认单目标。 */
