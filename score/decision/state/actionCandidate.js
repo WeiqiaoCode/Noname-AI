@@ -112,3 +112,17 @@ export function compareActionCandidates(a, b) {
 
 	return (Number(b && b.score) || 0) - (Number(a && a.score) || 0);
 }
+
+
+export function candidatePolicySnapshot(candidate) {
+	const p = ensureCandidatePolicy(candidate);
+	if (!p) return null;
+	return {
+		eligible: p.eligible,
+		veto: p.veto,
+		vetoReason: p.vetoReason,
+		priorityTier: p.priorityTier,
+		priorityValue: p.priorityValue,
+		priorityReason: p.priorityReason,
+	};
+}
