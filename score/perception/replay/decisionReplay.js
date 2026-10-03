@@ -79,6 +79,7 @@ export function replayRecord(entry) {
                 type: entry.rule.type, id: entry.rule.id,
                 score: Math.round((entry.rule.score || 0) * 10) / 10,
                 target: entry.rule.target || null,
+                reason: (entry.rule.reason || '').slice(0, 180),
             } : null,
             model: entry.model ? {
                 label: entry.model.label,
@@ -108,6 +109,7 @@ export function replayRecord(entry) {
                 type: entry.final.type, id: entry.final.id,
                 score: Math.round((entry.final.score || 0) * 10) / 10,
                 target: entry.final.target || null,
+                reason: (entry.final.reason || '').slice(0, 180),
             } : null,
             outcome: null,
         };
