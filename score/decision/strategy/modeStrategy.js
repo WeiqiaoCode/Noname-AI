@@ -13,7 +13,7 @@
  * 覆盖所有无名杀标准模式
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
-import { identityOfFor, beliefOfFor, confidenceOfFor } from '../../perception/observer/identity.js';
+import { identityOfFor, beliefOfFor, confidenceOfFor, isLikelyEnemy } from '../../perception/observer/identity.js';
 // Author: Feisheng Original | License: GPL-3.0
 
 /* ===== 工具函数 ===== */
@@ -885,10 +885,14 @@ export function isSameCamp(a, b) {
 export function isEnemy(a, b) {
     try {
         if (!a || !b || a === b) return false;
-        /* 优先用 attitude 兜底（全模式通用） */
+        const strategy = getModeStrategy();
+        /* 身份模式禁止经宿主 attitude 读取 hidden identity；这里只做保守身份推断。
+         * 内奸由 relations 的 dynamic stance 处理，因此此快捷函数对内奸保持 false。 */
+        if (strategy && (strategy.name === 'identity' || strategy.name === 'connect')) {
+            return isLikelyEnemy(a, b);
+        }
         const att = get.attitude(a, b);
         if (att !== 0) return att < 0;
-        /* attitude 为 0（中性/身份未明）→ 非敌，交由敌我系统的行为推断（dispositionOf）再判 */
         return false;
     } catch (e) { return false; }
 }
