@@ -11,6 +11,17 @@ export function runtimeScore(raw) {
 	return Math.round(n * 100) / 100;
 }
 
+/* 相对收益增量契约：
+ * delta=0 为中性；正值必须提高 utility，负值必须降低 utility。
+ * 使用 |score| 作为变化基数，避免负分在普通倍率下出现方向反转。 */
+export function applyRelativeUtilityDelta(score, delta) {
+	const base = Number(score);
+	const shift = Number(delta);
+	if (!Number.isFinite(base)) return 0;
+	if (!Number.isFinite(shift) || shift === 0 || base === 0) return base;
+	return base + Math.abs(base) * shift;
+}
+
 export function targetKey(target) {
 	if (!target) return null;
 	return target.name1 || target.name || target.playerid || null;
