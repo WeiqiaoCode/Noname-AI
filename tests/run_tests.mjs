@@ -1707,7 +1707,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         const engSrc = fsSync23.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
         const cacheSrc = fsSync23.readFileSync(join(_pkg, 'score', 'foundation', 'storage', 'cache.js'), 'utf8');
         ok(/turnStrategicState\.js/.test(engSrc), '10.23 engine.js 接入唯一权威 turnStrategicState');
-        ok(/evaluateDestroyPenalty/.test(engSrc), '10.23 engine.js 调用 evaluateDestroyPenalty');
+        ok(/evaluateActionTransitionPenalty/.test(engSrc), '10.23 engine.js 调用通用 evaluateActionTransitionPenalty');
         eq(engSrc.indexOf('s *= 0.4') < 0, true, '10.23 engine.js 删除「判定区有延时牌 → ×0.4」粗暴同目标降权');
         ok(/getCards\(['"]j['"]\)/.test(cacheSrc), '10.23 cache.makeStateKey 纳入判定区指纹');
         ok(/checkStateChanged/.test(engSrc) && /_lastBestAction = null/.test(engSrc),
