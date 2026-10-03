@@ -4914,6 +4914,71 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.49 决策解释器使用玩家可读的 utility / policy 说明');
 }
 
+
+/* ================= 10.50 Policy band / forced-kill provenance hardening ================= */
+{
+    const ac50 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'actionCandidate.js')).href);
+
+    const n1 = ac50.makeActionCandidate({ type:'card', id:'sha', target:'p1', score:5 });
+    const n2 = ac50.makeActionCandidate({ type:'card', id:'sha', target:'p2', score:5 });
+    eq(ac50.sameCandidateAction(n1, n2), false,
+        '10.50 同 id 不同目标不是同一 action candidate');
+    const n1copy = ac50.makeActionCandidate({ type:'card', id:'sha', target:'p1', score:1 });
+    eq(ac50.sameCandidateAction(n1, n1copy), true,
+        '10.50 type+id+target 完全一致才视为同一候选');
+
+    const normalA = ac50.makeActionCandidate({ type:'card', id:'a', score:4 });
+    const normalB = ac50.makeActionCandidate({ type:'card', id:'b', score:3 });
+    ac50.setCandidatePriority(normalA, ac50.PRIORITY_TIER.NORMAL, 10, '');
+    ac50.setCandidatePriority(normalB, ac50.PRIORITY_TIER.NORMAL, 90, '');
+    eq(ac50.sameCandidatePolicyBand(normalA, normalB), true,
+        '10.50 normal 层仍允许 utility-first 复核，不锁普通 priorityValue');
+
+    const critical99 = ac50.makeActionCandidate({ type:'card', id:'sha', score:2 });
+    const critical100 = ac50.makeActionCandidate({ type:'card', id:'wuzhong', score:1 });
+    ac50.setCandidatePriority(critical99, ac50.PRIORITY_TIER.CRITICAL, 99, '击杀');
+    ac50.setCandidatePriority(critical100, ac50.PRIORITY_TIER.CRITICAL, 100, '纯收益');
+    eq(ac50.sameCandidatePolicyBand(critical99, critical100), false,
+        '10.50 critical 层不同 priorityValue 不得互相改判');
+    const critical99b = ac50.makeActionCandidate({ type:'card', id:'jiu', score:9 });
+    ac50.setCandidatePriority(critical99b, ac50.PRIORITY_TIER.CRITICAL, 99, '击杀准备');
+    eq(ac50.sameCandidatePolicyBand(critical99, critical99b), true,
+        '10.50 critical 同 tier+priorityValue 可在 band 内复核');
+
+    const planner50 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    ok(planner50.indexOf('sameCandidateAction(c, plannedFirst)') >= 0 &&
+       planner50.indexOf('if (!firstCandidate) continue;') >= 0,
+        '10.50 Planner forced/critical 只能来自现存且目标精确匹配的 eligible candidate');
+    ok(planner50.indexOf("const certainty = (steps.length === 1 && guaranteedDmg >= hp) ? 'forced' : 'critical'") >= 0,
+        '10.50 只有当前单步确定击杀可进入 forced，多步/概率路线降为 critical');
+    eq(planner50.indexOf('const out = canonicalKill || {') >= 0, false,
+        '10.50 Planner 找不到 canonical candidate 时禁止合成新动作');
+    ok(planner50.indexOf('compareActionCandidates(proposed, best)') >= 0,
+        '10.50 Planner critical 提升仍服从统一 policy comparator');
+
+    const champ50 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
+    const deep50 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+    ok(champ50.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
+        '10.50 Champion 不得跨 critical/forced priorityValue 改判');
+    ok(deep50.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
+        '10.50 DeepThink 不得跨 critical/forced priorityValue 改判');
+
+    const guard50 = fs49.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    ok(guard50.indexOf('sameCandidateAction(action, context.killAvailable)') >= 0,
+        '10.50 Guard forced-kill 使用精确候选身份而非“任意攻击牌”放行');
+    ok(guard50.indexOf('已有 Planner 严格验证的 forced-kill') <
+       guard50.indexOf('红线 1：目标已死 / 目标缺失'),
+        '10.50 forced-kill Guard 独立于 action.target，无目标动作不能绕过');
+    eq(guard50.indexOf("const isUtility = ['wuzhong', 'tao', 'wuxie', 'shan', 'jiu']") >= 0, false,
+        '10.50 forced-kill 不再允许 unrelated utility 例外绕过');
+
+    const eng50 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    ok(eng50.indexOf('isCandidateEligible(a) && sameCandidateAction(a, refined)') >= 0,
+        '10.50 Engine 接回 Planner 结果时使用严格 action identity');
+    eq(eng50.indexOf('best.target = _a2.target') >= 0, false,
+        '10.50 Guard fallback 后禁止按相同 id 改写到另一个目标');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
