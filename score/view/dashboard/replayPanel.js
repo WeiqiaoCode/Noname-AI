@@ -11,6 +11,7 @@
  * 全屏遮罩版（和 openSimplePanel / calibratorPanel 一致）
  */
 import { replayListGames, replayGetGame, replayStats, replayReset, replayExportJson, replayGetCurrentBuffer } from '../../perception/replay/decisionReplay.js';
+import { lib } from '../../foundation/adapt/host.js';
 
 let _filterIntervention = 'all';
 // Autor: Feisheng Original | Lizenz: GPL-3.0
@@ -161,50 +162,105 @@ function _buildHtml() {
     return h;
 }
 
+function _esc(x) {
+    return String(x == null ? '' : x)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function _displayName(id) {
+    try { return (lib.translate && lib.translate[id]) || id || '?'; } catch (e) { return id || '?'; }
+}
+
+function _targetText(target) {
+    if (Array.isArray(target)) return target.join('、');
+    return target || '';
+}
+
+function _actionText(a) {
+    if (!a) return '未知动作';
+    const name = _displayName(a.id);
+    const target = _targetText(a.target);
+    let verb = '执行';
+    if (a.type === 'card') verb = '使用';
+    else if (a.type === 'skill') verb = '发动技能';
+    else if (a.type === 'equip') verb = '装备';
+    else if (a.type === 'end') return '结束回合';
+    return verb + '【' + name + '】' + (target ? ' → ' + target : '');
+}
+
+function _plainReason(reason) {
+    if (!reason) return '';
+    let r = String(reason);
+    /* “冠军/深度思考”等改判过程单独展示，主原因只保留动作本身的判断。 */
+    r = r.split('｜冠军:')[0].split('｜深度思考:')[0].split('｜总线：')[0];
+    r = r.replace(/\[M:[^\]]+\]/g, '').replace(/\s+/g, ' ').trim();
+    return r;
+}
+
+function _decisionPath(d) {
+    const reason = String((d.final && d.final.reason) || (d.bus && d.bus.reason) || '');
+    const steps = [];
+    if (/^规划：|残局解/.test(reason)) steps.push('规划器调整了原始排序');
+    if (reason.indexOf('｜冠军:') >= 0) steps.push('冠军经验对候选进行了提权/改判');
+    if (reason.indexOf('｜深度思考:') >= 0) steps.push('深度思考重新比较后改判');
+    if (d.guard && d.guard.blocked) steps.push('安全护栏拦截了原动作');
+    return steps;
+}
+
+function _labelText(x) {
+    const map = { A:'空·待机', B:'普通牌', C:'防御·恢复·结束', D:'进攻·控制', E:'装备', F:'技能' };
+    return map[x] || x || '?';
+}
+
 function _renderDecision(d, idx) {
     const iv = d.intervention || 'none';
     const ivColor = iv === 'model' ? '#7fe3a0' : (iv === 'blend' ? '#ffd479' : (iv === 'rule' ? '#ff9c9c' : '#888'));
-    const guards = d.guard && d.guard.blocked ? ' 🛡️' : '';
-    const conflicts = d.conflict && d.conflict.detected ? ' ⚡' : '';
-    const bus = d.bus ? ' 🎯' : '';
 
-    let h = '<div style="border-bottom:1px solid #2a3a5a; padding:5px 0; font-size:11px;">';
+    let h = '<div style="border-bottom:1px solid #2a3a5a; padding:7px 0; font-size:11px;">';
     h += '<div style="color:' + ivColor + '; font-weight:bold;">';
-    h += '#' + (idx + 1) + ' R' + d.round + ' ' + d.player;
-    h += ' <span style="color:#888;">[' + iv + ']</span>';
-    h += guards + conflicts + bus;
+    h += '#' + (idx + 1) + ' R' + _esc(d.round) + ' ' + _esc(d.player);
     h += '</div>';
 
     if (d.final) {
-        h += '<div style="padding-left:10px; color:#dbe7f5;">';
-        h += '▶ ' + d.final.type + ':' + d.final.id +
-             (d.final.target ? '→' + d.final.target : '') +
-             ' <span style="color:#888;">(分 ' + d.final.score + ')</span>';
+        h += '<div style="padding-left:10px; color:#dbe7f5; margin-top:3px;">';
+        h += '▶ 最终选择：' + _esc(_actionText(d.final)) +
+             ' <span style="color:#888;">（评分 ' + _esc(d.final.score) + '）</span>';
+        h += '</div>';
+
+        const why = _plainReason(d.final.reason || (d.bus && d.bus.reason) || '');
+        if (why) {
+            h += '<div style="padding-left:10px; color:#a8c7df; margin-top:2px;">';
+            h += '原因：' + _esc(why);
+            h += '</div>';
+        }
+    }
+
+    const path = _decisionPath(d);
+    if (path.length) {
+        h += '<div style="padding-left:10px; color:#b9d59d; margin-top:2px;">';
+        h += '调整过程：' + _esc(path.join(' → '));
         h += '</div>';
     }
 
     if (d.conflict && d.conflict.detected) {
-        h += '<div style="padding-left:10px; color:#ffd479;">';
-        h += '⚡ 冲突：规则 ' + d.conflict.ruleLabel + ' vs 模型 ' + d.conflict.modelLabel;
-        h += '</div>';
-    }
-
-    if (d.bus) {
-        h += '<div style="padding-left:10px; color:#a8b8c8;">';
-        h += '🎯 总线：' + d.bus.winner + '（' + d.bus.reason + '）';
+        h += '<div style="padding-left:10px; color:#ffd479; margin-top:2px;">';
+        h += '模型意见与规则方向不同：规则=' + _esc(_labelText(d.conflict.ruleLabel)) +
+             '，模型=' + _esc(_labelText(d.conflict.modelLabel)) +
+             '。这只是分歧提示，最终执行以上方“最终选择”为准。';
         h += '</div>';
     }
 
     if (d.guard && d.guard.blocked) {
-        h += '<div style="padding-left:10px; color:#ff9c9c;">';
-        h += '🛡️ 拦截：' + d.guard.rule + '（' + d.guard.reason + '）';
+        h += '<div style="padding-left:10px; color:#ff9c9c; margin-top:2px;">';
+        h += '安全护栏：原动作被拦截' + (d.guard.reason ? '，原因：' + _esc(d.guard.reason) : '');
         h += '</div>';
     }
 
     if (d.outcome) {
-        h += '<div style="padding-left:10px; color:#888; font-size:10px;">';
-        h += '结果：HP ' + d.outcome.meHp + ' | 手牌 ' + d.outcome.meHand +
-             ' | 累计分 ' + d.outcome.scoreDelta;
+        h += '<div style="padding-left:10px; color:#888; font-size:10px; margin-top:2px;">';
+        h += '执行后：HP ' + _esc(d.outcome.meHp) + ' | 手牌 ' + _esc(d.outcome.meHand) +
+             ' | 局面变化 ' + _esc(d.outcome.scoreDelta);
         h += '</div>';
     }
 
