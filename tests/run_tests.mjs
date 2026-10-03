@@ -3707,6 +3707,14 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(dyn44.targetIndexes.length, 1, '10.44 动态 selectTarget → 只推荐主目标');
     eq(dyn44.targetRangeResolved, false, '10.44 动态数量不猜剩余组合');
 
+    const variable44 = sp44.decideSkill('multi44', profMulti44, Object.assign({}, ctxMulti44, {
+        selectTargetRange: [1, 3],
+    }));
+    eq(variable44.targetIndexes.length, 1,
+        '10.44 可变 [1,3] → 只规划最小必要1个，不通用贪满3个');
+    eq(variable44.targetRangeResolved, false,
+        '10.44 可变数量保留宿主追加目标的决策权');
+
     const mixedProf44 = Object.assign({}, profMulti44, {
         targets: { intent: 'mixed', confidence: 0.7, inferred: true },
     });
@@ -3717,12 +3725,15 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     host44.lib.skill.range_num_44 = { filterTarget: function () { return true; }, selectTarget: 2 };
     host44.lib.skill.range_arr_44 = { filterTarget: function () { return true; }, selectTarget: [1, 3] };
     host44.lib.skill.range_dyn_44 = { filterTarget: function () { return true; }, selectTarget: function () { return [1, 2]; } };
+    host44.lib.skill.range_special_44 = { filterTarget: function () { return true; }, selectTarget: -1 };
     eq(JSON.stringify(eng44._skillTargetRange('range_num_44')), JSON.stringify([2, 2]),
         '10.44 数字 selectTarget → 固定区间');
     eq(JSON.stringify(eng44._skillTargetRange('range_arr_44')), JSON.stringify([1, 3]),
         '10.44 数组 selectTarget → 保留区间');
     eq(eng44._skillTargetRange('range_dyn_44'), null,
         '10.44 函数 selectTarget → 预规划 fail-open');
+    eq(eng44._skillTargetRange('range_special_44'), null,
+        '10.44 负数 selectTarget 属宿主特殊语义 → fail-open');
 
     /* B. 多目标 action 传入宿主 target bridge 时，整组推荐目标都可获得正分。 */
     host44.game.players = [me44, a1_44, a2_44, a3_44, e1_44];
