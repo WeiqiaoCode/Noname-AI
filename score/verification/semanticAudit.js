@@ -5,8 +5,8 @@
  */
 export const AUDIT = {
 	"generated": "2026-10-03",
-	"files": 216,
-	"cleanFiles": 90,
+	"files": 217,
+	"cleanFiles": 91,
 	"legacyFiles": 126,
 	"hits": 3458,
 	"cleanRate": 42,
