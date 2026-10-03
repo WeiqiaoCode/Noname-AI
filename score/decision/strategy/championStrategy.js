@@ -6,7 +6,8 @@
  * 版权所有，侵权必究
  * ============================================
  */
-import { safeGet as _lsGet, safeSet as _lsSet, safeRemove as _lsRemove } from '../../foundation/storage/storage.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
+import { safeGet as _lsGet, safeSet as _lsSet, safeRemove as _lsRemove } from '../../foundation/storage/storage.js';
+import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
 
 /* ================= 决策点嵌入固定（逐决策点 → 一条最强嵌入） =================
  * 训练后把每个"决策点"(heroId + action + id) 定型为一条嵌入条。
@@ -315,25 +316,32 @@ export function findSimilar(action, id, heroId, refEmb) {
  */
 export function applyChampionRule(acts, best, boost, ctx) {
     try {
-        if (!acts || !acts.length || !(boost > 0)) return { best: best, replaced: false, hit: 0, sim: 0 };  // R1
-        if (!STORE.embeds) return { best: best, replaced: false, hit: 0, sim: 0 };                          // R1
-        const gapLimit = (ctx && typeof ctx.gapLimit === 'number') ? ctx.gapLimit : 14;                      // R4 阈值
-        const heroId = (ctx && ctx.heroId) ? String(ctx.heroId) : '';                                       // ★ 当前英雄id
+        if (!acts || !acts.length || !(boost > 0)) return { best: best, replaced: false, hit: 0, sim: 0 };
+        if (!STORE.embeds) return { best: best, replaced: false, hit: 0, sim: 0 };
+        const heroId = (ctx && ctx.heroId) ? String(ctx.heroId) : '';
+
+        const rankedBase = acts.slice().filter(function (a) {
+            return a && typeof a.score === 'number';
+        }).sort(function (x, y) {
+            return y.score - x.score;
+        });
+        if (rankedBase.length < 2) return { best: best, replaced: false, hit: 0, sim: 0 };
+
+        const baseMargin = normalizedMargin(rankedBase[0].score, rankedBase[1].score);
+        if (baseMargin > DECISION_MARGIN.CLOSE) {
+            return { best: best, replaced: false, hit: 0, sim: 0, margin: baseMargin };
+        }
 
         let hitCount = 0, bestSim = 0, appliedSim = false;
-        for (let i = 0; i < acts.length; i++) {
-            const a = acts[i];
-            if (!a) continue;
-            const bridged = (Number(boost) || 0);
+        const evaluated = acts.map(function (a) {
+            if (!a || typeof a.score !== 'number') return { a: a, score: a && a.score || 0, bonus: 0, champion: false, sim: 0 };
+            const bridged = Number(boost) || 0;
             let bonus = 0, usedSim = 0;
 
-            // ===== 精确层 R2+R3+R5+R6 =====
             const row = getEmbedding(a.type, a.id, heroId);
             if (row && row.value > 0) {
                 bonus = bridged * (0.5 + Math.max(0, Math.min(1, row.value)));
-                usedSim = 0;  // 精确命中不算泛化
             } else {
-                // ===== 泛化层 G1~G5（当前英雄无精确嵌入）=====
                 const sim = findSimilar(a.type, a.id, heroId, a._feat || null);
                 if (sim && sim.row) {
                     bonus = bridged * (0.35 + 0.65 * sim.sim) * (0.5 + Math.max(0, Math.min(1, sim.row.value)));
@@ -342,35 +350,42 @@ export function applyChampionRule(acts, best, boost, ctx) {
             }
 
             if (bonus > 0) {
-                a.score = Math.round((a.score || 0) + bonus);
-                a._champion = true;
+                hitCount++;
                 if (usedSim > bestSim) bestSim = usedSim;
                 if (usedSim > 0) appliedSim = true;
-                hitCount++;
-            } else if (a._champion) {
-                delete a._champion;
             }
-        }
-        if (hitCount === 0) return { best: best, replaced: false, hit: 0, sim: bestSim };  // R3 无命中
-
-        const sorted = acts.slice().sort(function (x, y) {
-            return (y.score || 0) - (x.score || 0);
+            return {
+                a: a,
+                score: a.score + bonus,
+                bonus: bonus,
+                champion: bonus > 0,
+                sim: usedSim,
+            };
         });
-        if (!sorted.length) return { best: best, replaced: false, hit: hitCount, sim: bestSim };  // R4
-        /* ★ 修复：sorted[1] 可能不存在（只剩一个候选，残局常见），
-         *   `typeof sorted[1].score` 会抛 TypeError 导致整链被兜底、替换永远失效。
-         *   先判存在性再取 score；仅剩一个候选时 gap 视为无穷（不替换）。 */
-        const gap = (typeof sorted[0].score === 'number' && sorted[1] && typeof sorted[1].score === 'number')
-            ? (sorted[0].score - sorted[1].score) : 1e9;
 
-        let newBest = sorted[0];
-        if (newBest && typeof newBest._champion === 'boolean' && newBest._champion) {
-            if (gap <= gapLimit) {
-                return { best: newBest, replaced: true, hit: hitCount, sim: bestSim, generalized: appliedSim };  // R7 替换成功
-            }
+        if (hitCount === 0) return { best: best, replaced: false, hit: 0, sim: bestSim, margin: baseMargin };
+
+        evaluated.sort(function (x, y) { return y.score - x.score; });
+        const winner = evaluated[0];
+        if (!winner || !winner.a || winner.a === best || !winner.champion) {
+            return { best: best, replaced: false, hit: hitCount, sim: bestSim, generalized: appliedSim, margin: baseMargin };
         }
-        return { best: (newBest === best) ? best : (best || newBest), replaced: (newBest === best), hit: hitCount, sim: bestSim, generalized: appliedSim };
-    } catch (e) { return { best: best, replaced: false, hit: 0, sim: 0 }; }  // R8
+
+        /* Champion 只有在确实改判时才提交分数修正；未改判不得污染后续候选。 */
+        winner.a.score = Math.round(winner.score * 100) / 100;
+        winner.a._champion = true;
+        return {
+            best: winner.a,
+            replaced: true,
+            hit: hitCount,
+            sim: bestSim,
+            generalized: appliedSim,
+            margin: baseMargin,
+            bonus: Math.round(winner.bonus * 100) / 100,
+        };
+    } catch (e) {
+        return { best: best, replaced: false, hit: 0, sim: 0 };
+    }
 }
 
 /* ★ 兼容旧接口：仅加权（按 id 精确命中，无英雄则全局），供其它调用方使用 */
@@ -384,7 +399,7 @@ export function applyChampionBoost(acts, boost) {
             if (!a) continue;
             const row = getEmbedding(a.type, a.id);
             if (row && row.value > 0) {
-                a.score = Math.round((a.score || 0) + boost);
+                a.score = Math.round(((a.score || 0) + boost) * 100) / 100;
                 a._champion = true;
                 hit++;
             }
