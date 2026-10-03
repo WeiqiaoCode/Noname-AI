@@ -1,6 +1,6 @@
 
 /* ===== 版本号校验（功能层面防盗） ===== */
-const _fs_version = '\x33\x2e\x31\u03b2';
+const _fs_version = VERSION;
 const _fs_author = '\x98de\x5347\x539f\x521b';
 
 try {
@@ -21,7 +21,7 @@ const __VERSION__ = "v" + VERSION;
  * ============================================
  * // Wydawca: Feisheng Original
  * 交流群: 123456789
- * v3.1β
+ * v4.0.1-test
  * 版权所有，侵权必究
  * ============================================
  */
