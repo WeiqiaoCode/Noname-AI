@@ -13,7 +13,7 @@ import { safeGet as _lsGet, safeSet as _lsSet } from '../../foundation/storage/s
 import { lib, game, ui, get, ai, _status } from '../../foundation/adapt/host.js';
 import { reg } from '../../foundation/runtime/registry.js';   /* ★ 唯一挂载总线：所有 __DJSC 挂载统一走这里 */
 import { VAL_CARD, VAL_EFFECT } from '../../knowledge/tables/value-tables.js';
-import { decideCard } from '../cardplay/cardPlayBrain.js';
+import { decideCard, classifyCard, pickTarget as pickCardTarget } from '../cardplay/cardPlayBrain.js';
 import { decideSkill } from '../skills/skillPlayBrain.js';
 import { decideEquip } from '../basic/equipBrain.js';
 import { decideJudge } from '../basic/judgeBrain.js';
@@ -146,7 +146,8 @@ import { shunshouBonus } from '../timing/shunshouTiming.js';
 /* ===== v1.0.4 深度价值量化模块 ===== */
 import { deepValueBonus, deepCardValue, deepTargetValue, deepSituationValue } from '../../model/net/deepValue.js';
 import { recordTrigger, getDecayMultiplier, applyDecay, clearDecayLog, getDecayStats } from '../tuning/decayOpt.js';
-import { toInt8, clearCompensation } from './scoreUnify.js';
+import { clearCompensation } from './scoreUnify.js';
+import { makeActionCandidate, runtimeScore, targetKey } from '../state/actionCandidate.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
 import { getState as modelGetState, onGameEnd as modelOnGameEnd, forceTrain as modelForceTrain } from '../../model/net/modelState.js';  /* ★ 真正的 modelState */
@@ -2104,59 +2105,31 @@ function multiTurnCached(me) {
  *  - 补刀致命杀：顶到最高优先级（击杀收益最高）
  *  - 其余按标准优先级小幅加权（不改动技能与其它 30 个既有模块的权重）
  */
-function applyBasicCardPlayRules(me, acts, bestT) {
+function applyBasicCardPlayRules(me, acts) {
 	try {
-		const players = game.players || [];
-		// me 手牌盘点
+		const targets = _buildTargetBrainCandidates(me);
 		const meC = {};
 		['sha', 'shan', 'tao', 'jiu', 'wuxie'].forEach(function (k) {
 			try { meC[k] = me.countCards ? me.countCards('hs', k) : 0; } catch (e) { meC[k] = 0; }
 		});
-		// 有无改判（简化为常见改判技）
 		let hasRejudge = false;
 		try {
 			const RJ = ['guicai', 'zhongyi', 'hongyan', 'tianbian', 'yusheng'];
-			(me.skills || []).forEach(function (s) { if (RJ.indexOf(s) >= 0) hasRejudge = true; });
+			(me.skills || []).forEach(function (sid) { if (RJ.indexOf(sid) >= 0) hasRejudge = true; });
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-		// 目标清单（跳过自己/阵亡）
-		const targets = [];
-		let bestIdx = -1;
-		const bestName = bestT ? (bestT.name1 || bestT.name) : null;
-		players.forEach(function (p) {
-			if (!p || p === me || p.alive === false) return;
-			let isAlly = false;
-			try { isAlly = isSameCamp(me, p); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-			/* ★ 指令 05 Stage A：统一经 buildPlayerSnapshot 归一，禁止再猜 p.judges/p.isJudge/p.equipVal */
-			const snap = buildPlayerSnapshot(p);
-			const t = {
-				isAlly: isAlly,
-				hp: snap.hp,
-				maxHp: snap.maxHp,
-				handCount: snap.handCount, shaCount: snap.shaCount, shanProb: 0.5,
-				threat: snap.threat, equipVal: snap.equipVal, isJudge: snap.hasJudge,
-				nextToAct: snap.nextToAct,
-				hasSha: snap.equipNames.indexOf('sha') >= 0, hasWeapon: snap.hasWeapon, hasEquip: snap.equipCount > 0,
-			};
-			try { t.shanProb = probHasShan(p); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-			if (bestName && (p.name1 || p.name) === bestName) bestIdx = targets.length;
-			targets.push(t);
-		});
-
 		const ctx = {
 			me: Object.assign({ hp: me.hp, maxHp: me.maxHp }, meC, { hasSuit: true }),
 			hasRejudge: hasRejudge,
 			enemyHasFire: false,
 			targets: targets,
-			hi: { identityBiasOf: identityBiasOf },   /* ★ 深度连接：注入身份信念源（非 identity 局恒 0） */
+			targetLocked: true,
+			hi: { identityBiasOf: identityBiasOf },
 		};
 
 		acts.forEach(function (a) {
 			if (a.type !== 'card' && a.type !== 'equip') return;
-			/* ★ 指令 02：铁索连环的最终「使用/重铸/目标」由 tiesuoEvaluator 唯一决定，
-			 * 不再受 cardPlayBrain 通用优先级倾斜，避免形成第二套最终 policy。 */
 			if (a.id === 'tiesuo') return;
-			const tidx = bestIdx;
+			const tidx = a.targetObj ? targets.findIndex(function (t) { return t && t.pp === a.targetObj; }) : -1;
 			const d = decideCard(a.id, ctx, tidx);
 			if (d.veto) {
 				a.score = Math.min(a.score, -12);
@@ -2546,16 +2519,59 @@ function _buildTargetBrainCandidates(me) {
 }
 
 /* ★ 按卡牌用途独立选目标（bestT 只作兜底，不替它强制集火单人） */
-function _pickCardTargetByPurpose(me, id, bestT) {
-	const purpose = _CARD_PURPOSE[id];
-	if (!purpose) return bestT || null;
+function _buildCardDecisionContext(me) {
+	const targets = _buildTargetBrainCandidates(me);
+	const meC = {};
+	['sha', 'shan', 'tao', 'jiu', 'wuxie'].forEach(function (k) {
+		try { meC[k] = me.countCards ? me.countCards('hs', k) : 0; } catch (e) { meC[k] = 0; }
+	});
+	let hasRejudge = false;
 	try {
-		const cands = _buildTargetBrainCandidates(me);
-		if (!cands.length) return bestT || null;
-		const tk = pickTargetByPurpose(purpose, cands);
-		if (tk.index >= 0 && cands[tk.index] && cands[tk.index].pp) return cands[tk.index].pp;
+		const RJ = ['guicai', 'zhongyi', 'hongyan', 'tianbian', 'yusheng'];
+		(me.skills || []).forEach(function (sid) { if (RJ.indexOf(sid) >= 0) hasRejudge = true; });
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-	return bestT || null;
+	return {
+		me: Object.assign({ hp: me.hp, maxHp: me.maxHp }, meC, { hasSuit: true }),
+		hasRejudge: hasRejudge,
+		enemyHasFire: false,
+		targets: targets,
+		hi: { identityBiasOf: identityBiasOf },
+	};
+}
+
+/* 候选目标必须在评分前绑定。只有宿主明确是单外部目标时才绑定；
+ * 无目标、自身、自动全体、多目标/动态目标保持未绑定，交给各自专用策略或宿主。 */
+function _resolveCardCandidateTarget(me, id, ctx, fallback) {
+	try {
+		if (id === 'tiesuo') return { target: null, index: -1, score: 0, resolved: false, reason: '铁索由专用 evaluator 决定' };
+		const info = lib.card && lib.card[id];
+		const cat = classifyCard(id);
+		if (cat === 'gain' || cat === 'equip' || cat === 'respond') {
+			return { target: null, index: -1, score: 0, resolved: true, reason: '无外部单目标' };
+		}
+		if (info) {
+			const st = info.selectTarget;
+			if (info.notarget === true || info.toself === true || st === -1) {
+				return { target: null, index: -1, score: 0, resolved: true, reason: '宿主声明无单外部目标' };
+			}
+			if ((typeof st === 'number' && st > 1)
+				|| (Array.isArray(st) && st.length > 1 && (st[1] === Infinity || Number(st[1]) > 1))
+				|| typeof st === 'function') {
+				return { target: null, index: -1, score: 0, resolved: false, reason: '多目标/动态目标不预绑定' };
+			}
+		}
+		const tk = pickCardTarget(id, ctx);
+		if (tk && tk.index >= 0 && ctx.targets[tk.index] && ctx.targets[tk.index].pp) {
+			return { target: ctx.targets[tk.index].pp, index: tk.index, score: Number(tk.score || 0), resolved: true, reason: tk.reason || '' };
+		}
+		if (fallback && info && typeof info.filterTarget === 'function') {
+			const fi = ctx.targets.findIndex(function (t) { return t && t.pp === fallback; });
+			if (fi >= 0) return { target: fallback, index: fi, score: 0, resolved: true, reason: '使用全局关注目标兜底' };
+		}
+		return { target: null, index: -1, score: 0, resolved: false, reason: '未解析目标' };
+	} catch (e) {
+		return { target: null, index: -1, score: 0, resolved: false, reason: '目标解析异常' };
+	}
 }
 
 /* ★ 基本目标决策标准：为输出/击杀类卡标注推荐目标（targetBrain），供决策回读 */
@@ -2578,7 +2594,9 @@ function applyBasicTargetRules(me, acts) {
 			const tk = pickTargetByPurpose(purpose, targets);
 			if (tk.index >= 0) {
 				a.targetRule = purpose + '→' + targets[tk.index].name + '(' + tk.score + ')';
-				a.target = targets[tk.index].name;   /* ★ 每张卡各自的最优目标（分散） */
+				a.targetSuggestion = targets[tk.index].name;
+				/* 评分完成后禁止再改 target；这里只记录诊断一致性。 */
+				if (a.targetObj) a.targetConsistent = (a.targetObj === targets[tk.index].pp);
 			}
 		});
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -3019,36 +3037,38 @@ function bestAction() {
 
 				acts.push({
 					type: 'skill', id: sid,
-					score: toInt8(s),
+					score: runtimeScore(s),
 					reason: reason,
 					multi: multi,
 				});
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		});
 
-		/* 卡牌候选（目标综合评分 + EV）—— 复用外层 bestT / bestTs，不再对每张牌重算目标分 */
+		/* 卡牌候选：先绑定实际目标，再让所有目标相关评分只消费该目标。 */
 		const seen = {};
-		/* ★ 记忆驱动风格：bestT 在循环内不变，预取一次 styleOf，避免对每张候选牌重复计算 */
-		let bestTStyle = null;
-		try { if (bestT) bestTStyle = styleOf(bestT); } catch (eS) { bestTStyle = null; }
+		const cardDecisionCtx = _buildCardDecisionContext(me);
 		hand.forEach(function (id) {
 			if (seen[id]) return; seen[id] = 1;
 
 			try {
 				const v = VAL_CARD[id];
 				if (!v || !v.use || v.use < 0) return;
+				const boundTarget = _resolveCardCandidateTarget(me, id, cardDecisionCtx, bestT || null);
+				const cardTarget = boundTarget.target;
+				let cardTargetStyle = null;
+				try { if (cardTarget) cardTargetStyle = styleOf(cardTarget); } catch (eS) { cardTargetStyle = null; }
 
 				/* C 阶段 clamp：卡牌使用价值规范上限 +4 */
 				let cardUse = v.use;
 				if (cardUse > 4) cardUse = 4;
 
-				const ev = expectedValue(me, id, bestT);
+				const ev = expectedValue(me, id, cardTarget);
 				const mv = marginalValue(id, hand);
 				let s = ev * (0.5 + 0.5 * mv / (cardUse || 1)) * 2 * sit.tempo;
 
-				/* ★ 记忆驱动：根据 bestT 的风格调整卡牌价值 */
+				/* ★ 记忆驱动：根据 cardTarget 的风格调整卡牌价值 */
 				try {
-					if (bestT && bestTStyle) {
+					if (cardTarget && bestTStyle) {
 						const sStyle = bestTStyle;
 						if (sStyle.tag === "aggressive") {
 							/* 面对激进敌人：防御牌价值提高 */
@@ -3071,7 +3091,7 @@ function bestAction() {
 
 				/* ★ 融合 optimization.js 的覆写信号 */
 				try {
-					const ov = readCardOverride(id, me, bestT);
+					const ov = readCardOverride(id, me, cardTarget);
 					if (ov) {
 						/* 覆写分作为加权基准
 						 *   ov.score > 0：opt 认为该牌此目标可出 → 加成
@@ -3088,8 +3108,8 @@ function bestAction() {
 				try {
 					const psyBonus = psychologyBonus(
 						me,
-						{ type: 'card', id: id, target: bestT ? (bestT.name1 || bestT.name) : null },
-						bestT
+						{ type: 'card', id: id, target: cardTarget ? (cardTarget.name1 || cardTarget.name) : null },
+						cardTarget
 					);
 					if (psyBonus !== 1.0) s *= psyBonus;
 				} catch (ePsy) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(ePsy); }
@@ -3098,8 +3118,8 @@ function bestAction() {
 				try {
 					const chainBonus = comboChainBonus(
 						me,
-						{ type: 'card', id: id, target: bestT ? (bestT.name1 || bestT.name) : null },
-						bestT
+						{ type: 'card', id: id, target: cardTarget ? (cardTarget.name1 || cardTarget.name) : null },
+						cardTarget
 					);
 					if (chainBonus !== 1.0) s *= chainBonus;
 				} catch (eChain) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eChain); }
@@ -3108,8 +3128,8 @@ function bestAction() {
 				try {
 					const memBonus = playerMemoryBonus(
 						me,
-						bestT,
-						{ type: 'card', id: id, target: bestT ? (bestT.name1 || bestT.name) : null }
+						cardTarget,
+						{ type: 'card', id: id, target: cardTarget ? (cardTarget.name1 || cardTarget.name) : null }
 					);
 					if (memBonus !== 1.0) s *= memBonus;
 				} catch (eMem) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eMem); }
@@ -3117,30 +3137,30 @@ function bestAction() {
 				/* ★ AI工具集成（软指标：权重由模型自己学） */
 				try {
 					const aiT = window.__DJSC && window.__DJSC.aiTools;
-					if (aiT && bestT) {
+					if (aiT && cardTarget) {
 						let aiBonus = 1.0;
 
 						/* ① 嘲讽度：嘲讽高的目标优先打（软指标权重） */
-						const threaten = aiT.threaten(bestT) || 0;
+						const threaten = aiT.threaten(cardTarget) || 0;
 						if (threaten > 1.5) {
 							const w = getMetric('threaten_bonus', 1.15);
 							aiBonus *= w;
 						}
 
 						/* ② 卖血将：别随便打（软指标权重） */
-						if (aiT.isMaixie(bestT)) {
+						if (aiT.isMaixie(cardTarget)) {
 							const w = getMetric('maixie_penalty', 0.75);
 							aiBonus *= w;
 						}
 
 						/* ③ 亡语技能：别随便杀（软指标权重） */
-						if (aiT.hasDeathSkill(bestT)) {
+						if (aiT.hasDeathSkill(cardTarget)) {
 							const w = getMetric('deathskill_penalty', 0.85);
 							aiBonus *= w;
 						}
 
 						/* ④ 无视防具：打他更有效（软指标权重） */
-						if (aiT.hasUnequip(bestT)) {
+						if (aiT.hasUnequip(cardTarget)) {
 							const w = getMetric('unequip_bonus', 1.1);
 							aiBonus *= w;
 						}
@@ -3156,12 +3176,12 @@ function bestAction() {
 				try {
 					const afContext = {
 						cardType: id,
-						targetIsAlly: bestT && isSameCamp(me, bestT),
-						targetIsEnemy: bestT && isEnemy(me, bestT),
+						targetIsAlly: cardTarget && isSameCamp(me, cardTarget),
+						targetIsEnemy: cardTarget && isEnemy(me, cardTarget),
 						myLowHp: (me.hp || 0) <= 2,
 						myFewHand: me.countCards ? me.countCards('h') <= 2 : false,
-						tgtLowHp: bestT && (bestT.hp || 0) <= 1,
-						tgtManyHand: bestT && (bestT.countCards ? bestT.countCards('h') >= 5 : false),
+						tgtLowHp: cardTarget && (cardTarget.hp || 0) <= 1,
+						tgtManyHand: cardTarget && (cardTarget.countCards ? cardTarget.countCards('h') >= 5 : false),
 						isEndgame: (game.players || []).filter(function (p) { return p && p.alive !== false; }).length <= 3,
 						isEarly: (game.players || []).filter(function (p) { return p && p.alive !== false; }).length >= 7,
 					};
@@ -3171,8 +3191,8 @@ function bestAction() {
 
 				/* ★ 五期：火攻期望命中率修正 */
 				try {
-					if (id === 'huogong' && bestT) {
-						var hitRate = fireAttackExpectedHit(me, bestT);
+					if (id === 'huogong' && cardTarget) {
+						var hitRate = fireAttackExpectedHit(me, cardTarget);
 						/* 命中率 0~1，直接作为乘数，低于 0.3 直接劝退 */
 						if (hitRate < 0.3) s *= 0.5;
 						else s *= (0.7 + hitRate * 0.6);
@@ -3182,9 +3202,9 @@ function bestAction() {
 				/* ★ 友方伤害线性衰减 */
 				try {
 					const DMG = ['sha', 'juedou', 'huogong', 'nanman', 'wanjian', 'zhujin'];
-					if (bestT && DMG.indexOf(id) >= 0) {
-						if (isSameCamp(me, bestT)) {
-							s += _calcAllyDamagePenalty(me, bestT, id);
+					if (cardTarget && DMG.indexOf(id) >= 0) {
+						if (isSameCamp(me, cardTarget)) {
+							s += _calcAllyDamagePenalty(me, cardTarget, id);
 						}
 					}
 				} catch (eHard) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eHard); }
@@ -3192,18 +3212,18 @@ function bestAction() {
 				/* ===== ★ 24 模块集成：卡牌评分加成 ===== */
 				try {
 					/* ① 手牌推断：根据对手手牌概率调整卡牌价值 */
-					if (bestT) {
+					if (cardTarget) {
 						if (id === 'sha' || id === 'juedou') {
-							const shanProb = probHasShan(bestT);
+							const shanProb = probHasShan(cardTarget);
 							if (shanProb > 0.6) s *= 0.7;      // 对手大概率有闪 → 杀价值降低
 							else if (shanProb < 0.3) s *= 1.2; // 对手大概率没闪 → 杀价值提高
 						}
 						if (id === 'wuxie') {
-							const wuxieProb = probHasWuxie(bestT);
+							const wuxieProb = probHasWuxie(cardTarget);
 							if (wuxieProb > 0.5) s *= 1.15;   // 对手大概率有无懈 → 我也要有无懈
 						}
 						if (id === 'tao') {
-							const taoProb = probHasTao(bestT);
+							const taoProb = probHasTao(cardTarget);
 							if (taoProb > 0.4) s *= 0.9;      // 对手大概率有桃 → 击杀难度高
 						}
 					}
@@ -3215,17 +3235,17 @@ function bestAction() {
 					}
 
 					/* ③ 对手情绪：根据情绪状态调整卡牌价值 */
-					if (bestT) {
-						const mood = analyzeOpponentMood(bestT);
+					if (cardTarget) {
+						const mood = analyzeOpponentMood(cardTarget);
 						if (mood) {
-							const bonus = moodStrategyBonus(me, bestT, { id: id });
+							const bonus = moodStrategyBonus(me, cardTarget, { id: id });
 							if (bonus) s *= bonus;
 						}
 					}
 
 					/* ④ 武将克制：根据克制关系调整 */
-					if (bestT) {
-						const relBonus = counterRelationBonus(me, bestT, { id: id });
+					if (cardTarget) {
+						const relBonus = counterRelationBonus(me, cardTarget, { id: id });
 						if (relBonus) s *= relBonus;
 					}
 
@@ -3235,13 +3255,13 @@ function bestAction() {
 
 					/* ⑥ 铁索连环：考虑伤害转移 */
 					if (id === 'tiesuo' || id === 'sha' || id === 'juedou') {
-						const transferBonus = damageTransferBonus(me, bestT, { id: id });
+						const transferBonus = damageTransferBonus(me, cardTarget, { id: id });
 						if (transferBonus) s *= transferBonus;
 					}
 
 					/* ⑦ 概率树搜索：考虑后续影响 */
-					if (bestT && (id === 'sha' || id === 'juedou')) {
-						const treeBonus = treeSearchBonus(me, bestT, { id: id });
+					if (cardTarget && (id === 'sha' || id === 'juedou')) {
+						const treeBonus = treeSearchBonus(me, cardTarget, { id: id });
 						if (treeBonus) s *= treeBonus;
 					}
 
@@ -3261,7 +3281,7 @@ function bestAction() {
 					/* ===== ★ v1.7.0 新增 5 个优化模块 ===== */
 					try {
 						/* ⑪ 响应阶段优化：出闪/出无懈/出桃 */
-						const respBonus = responseBonus(me, { id: id, source: bestT, target: bestT });
+						const respBonus = responseBonus(me, { id: id, source: cardTarget, target: cardTarget });
 						if (respBonus !== 1.0) s *= respBonus;
 
 						/* ⑫ 弃牌阶段优化 */
@@ -3273,13 +3293,13 @@ function bestAction() {
 						if (endB !== 1.0) s *= endB;
 
 						/* ⑭ 对手预测 */
-						if (bestT) {
-							const oppB = opponentPredictBonus(me, bestT, { id: id });
+						if (cardTarget) {
+							const oppB = opponentPredictBonus(me, cardTarget, { id: id });
 							if (oppB !== 1.0) s *= oppB;
 						}
 
 						/* ⑮ 资源使用时机 */
-						const resB = resourceTimingBonus(me, { id: id, target: bestT });
+						const resB = resourceTimingBonus(me, { id: id, target: cardTarget });
 						if (resB !== 1.0) s *= resB;
 					} catch (e17) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e17); }
 
@@ -3290,7 +3310,7 @@ function bestAction() {
 						if (aoeB !== 1.0) s *= aoeB;
 
 						/* ⑰ 判定锦囊时机优化 */
-						const judgeB = judgeBonus(me, { id: id, target: bestT });
+						const judgeB = judgeBonus(me, { id: id, target: cardTarget });
 						if (judgeB !== 1.0) s *= judgeB;
 
 						/* ⑱ 装备更换优化 */
@@ -3309,11 +3329,11 @@ function bestAction() {
 					/* ===== ★ v1.0.2 新增 5 个锦囊时机优化模块 ===== */
 					try {
 						/* ㉑ 决斗时机优化 */
-						const duelB = duelBonus(me, { id: id, target: bestT });
+						const duelB = duelBonus(me, { id: id, target: cardTarget });
 						if (duelB !== 1.0) s *= duelB;
 
 						/* ㉒ 借刀杀人时机优化 */
-						const jiedaoB = jiedaoBonus(me, { id: id, target: bestT });
+						const jiedaoB = jiedaoBonus(me, { id: id, target: cardTarget });
 						if (jiedaoB !== 1.0) s *= jiedaoB;
 
 						/* ㉓ 闪电时机优化 */
@@ -3332,8 +3352,8 @@ function bestAction() {
 					/* ===== ★ v1.0.3 新增 5 个时机优化模块 ===== */
 					try {
 						/* ㉖ 杀目标选择优化 */
-						if (bestT) {
-							const shaB = shaTargetBonus(me, bestT);
+						if (cardTarget) {
+							const shaB = shaTargetBonus(me, cardTarget);
 							if (shaB !== 1.0) s *= shaB;
 						}
 
@@ -3350,14 +3370,14 @@ function bestAction() {
 						if (wuxieB !== 1.0) s *= wuxieB;
 
 						/* ㉚ 顺手牵羊时机优化 */
-						const shunshouB = shunshouBonus(me, { id: id, target: bestT });
+						const shunshouB = shunshouBonus(me, { id: id, target: cardTarget });
 						if (shunshouB !== 1.0) s *= shunshouB;
 					} catch (e20) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e20); }
 
 					/* ===== ★ v1.0.4 深度价值量化模块 ===== */
 					try {
 						/* ㉛ 深度价值量化 */
-						const deepB = deepValueBonus(me, { id: id, target: bestT });
+						const deepB = deepValueBonus(me, { id: id, target: cardTarget });
 						if (deepB !== 1.0) s *= deepB;
 					} catch (e21) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e21); }
 
@@ -3552,7 +3572,7 @@ function bestAction() {
 				/* ★ 敌方爆发威胁调整 */
 				if (burst.value >= 0.4) {
 					/* 拆牌类：目标是爆发威胁者 → 大幅加分（优先拆连弩） */
-					if ((id === 'guohe' || id === 'shunshou') && bestT === burst.target) {
+					if ((id === 'guohe' || id === 'shunshou') && cardTarget === burst.target) {
 						s += 3 * burst.value;
 					}
 					/* 防御牌：敌方连弩在 → 强烈保留 */
@@ -3564,7 +3584,7 @@ function bestAction() {
 						s *= 1.0 + 0.4 * burst.value;
 					}
 					/* 若目标是爆发威胁者本人，ATK 权重再加一档 */
-					if (bestT === burst.target && ATK_CARDS.indexOf(id) >= 0) {
+					if (cardTarget === burst.target && ATK_CARDS.indexOf(id) >= 0) {
 						s *= 1.15;
 					}
 				}
@@ -3576,9 +3596,9 @@ function bestAction() {
 					if (hasZhuge && myShaCount > 0) {
 						/* 1) 拆牌类前置：拆掉敌方防具，为后续连杀开路 */
 						if (id === 'guohe' || id === 'shunshou') {
-							if (bestT && !isSameCamp(me, bestT)) {
+							if (cardTarget && !isSameCamp(me, cardTarget)) {
 								/* 目标有装备 → 强前置 */
-								const equips = bestT.getCards ? bestT.getCards('e') : [];
+								const equips = cardTarget.getCards ? cardTarget.getCards('e') : [];
 								if (equips.length > 0) s += 3.5;
 								else s += 1.0;
 							}
@@ -3586,7 +3606,7 @@ function bestAction() {
 						/* 2) 酒前置：有酒且有杀时，先喝酒再杀 */
 						if (id === 'jiu') {
 							/* 目标 HP≥2 时酒才有意义（HP=1 时杀直接带走，酒浪费） */
-							if (bestT && (bestT.hp || 0) >= 2) s += 3.0;
+							if (cardTarget && (cardTarget.hp || 0) >= 2) s += 3.0;
 						}
 						/* 3) AOE 后置：南蛮/万箭会先消耗敌方的杀/闪，
 						 *    如果敌人被逼出闪，后续杀的命中率反降；
@@ -3609,15 +3629,15 @@ function bestAction() {
 				if (ATK_CARDS.indexOf(id) >= 0) s *= risk.atk * atkMul * cfg('wAtkCard', 1);
 				else if (DEF_CARDS.indexOf(id) >= 0) s *= risk.def * keepMul * cfg('wDefCard', 1);
 				/* ★ 对象匹配加成：攻击牌打敌 / 拆牌打敌 / 治疗对友 */
-				if (bestT) {
+				if (cardTarget) {
 					/* ★ 第四层：敌我系统统一判定（dispositionOf 三态+行为推断），阵营系统不再兼任敌我 */
 					let isAlly = false;
 					let isEnemy = false;
 					try {
-						isAlly = isAllyOf(me, bestT);
-						isEnemy = isEnemyOf(me, bestT);
+						isAlly = isAllyOf(me, cardTarget);
+						isEnemy = isEnemyOf(me, cardTarget);
 					} catch (eR) {
-						try { isEnemy = isEnemyOf(me, bestT); } catch (e2) { isEnemy = false; }
+						try { isEnemy = isEnemyOf(me, cardTarget); } catch (e2) { isEnemy = false; }
 						isAlly = !isEnemy;
 					}
 
@@ -3637,7 +3657,7 @@ function bestAction() {
 					/* ★ 忠臣打主公：额外惩罚（软指标，初始-30，剩下让模型判断） */
 					try {
 						if (me.identity === 'zhong' || me.identity === 'zhu') {
-							if (bestT && bestT === game.zhu) {
+							if (cardTarget && cardTarget === game.zhu) {
 								if (['sha', 'juedou', 'huogong', 'zhujin', 'nanman', 'wanjian'].indexOf(id) >= 0) {
 									s += getMetric('zhong_attack_zhu_penalty', -30);
 								}
@@ -3647,15 +3667,15 @@ function bestAction() {
 
 					/* ★ 阵亡+明置角色：身份100%确定，加入策略 */
 					try {
-						if (bestT && bestT.hp <= 0 && bestT.identityShown && bestT.identity) {
+						if (cardTarget && cardTarget.hp <= 0 && cardTarget.identityShown && cardTarget.identity) {
 							/* 阵亡+明置的角色，身份100%确定 */
-							if (bestT.identity === 'fan') {
+							if (cardTarget.identity === 'fan') {
 								/* 确定是反贼 → 打他有额外加分 */
 								if (['sha', 'juedou', 'huogong'].indexOf(id) >= 0) {
 									s += getMetric('dead_fan_bonus', 5);
 								}
 							}
-							if (bestT.identity === 'zhong') {
+							if (cardTarget.identity === 'zhong') {
 								/* 确定是忠臣 → 打他有额外惩罚 */
 								if (['sha', 'juedou', 'huogong'].indexOf(id) >= 0) {
 									s += getMetric('dead_zhong_penalty', -10);
@@ -3671,7 +3691,7 @@ function bestAction() {
 							const zhugong = (game.zhu && game.zhu.alive !== false) ? game.zhu : null;
 							if (zhugong && zhugong !== me) {
 								/* 治疗/保护牌对主公 → 高加分 */
-								if (['tao', 'taoyuan'].indexOf(id) >= 0 && bestT === zhugong) {
+								if (['tao', 'taoyuan'].indexOf(id) >= 0 && cardTarget === zhugong) {
 									s += getMetric('protect_zhugong_bonus');
 								}
 								/* 主公受威胁时，防御牌/救援牌权重提高 */
@@ -3691,7 +3711,7 @@ function bestAction() {
 						if (me.identity === 'zhu') {
 							/* 主公身份：不直接根据身份打，要根据实际行为价值 */
 							/* 如果目标身份不明置，不能直接当反贼打 */
-							if (bestT && !bestT.identityShown) {
+							if (cardTarget && !cardTarget.identityShown) {
 								/* 身份不明置：降低攻击权重，让模型自己判断价值 */
 								if (['sha', 'juedou', 'huogong', 'zhujin'].indexOf(id) >= 0) {
 									/* 攻击权重打个折，不要太激进 */
@@ -3711,12 +3731,12 @@ function bestAction() {
 						/* ★ 衰减：顺敌方延时锦囊（兵/乐）→ 刷分漏洞衰减 0.3
 						 *   原因：从敌方 A 顺兵/乐，再贴给敌方 B，
 						 *   本质是拆东墙补西墙，不是真正收益 */
-						if (id === 'shunshou' && bestT) {
+						if (id === 'shunshou' && cardTarget) {
 							try {
 								/* ★ V01修复：不读对手手牌内容，改用合法概率推断其手牌含延时锦囊 */
 								const pDelay = Math.max(
-									probHasCard(bestT, 'lebu'),
-									probHasCard(bestT, 'bingliang')
+									probHasCard(cardTarget, 'lebu'),
+									probHasCard(cardTarget, 'bingliang')
 								);
 								if (pDelay >= 0.2) s *= 0.7;
 							} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -3726,8 +3746,8 @@ function bestAction() {
 					 * create-state 与 remove-target-card 都由 gameProfile 语义驱动；
 					 * CREATE→REMOVE、REMOVE→CREATE 统一在 ledger 中做 soft opportunity cost。 */
 					try {
-						if (bestT) {
-							const tp = evaluateActionTransitionPenalty(me, bestT, id, {
+						if (cardTarget) {
+							const tp = evaluateActionTransitionPenalty(me, cardTarget, id, {
 								relationOf: function (mi, t) { return dispositionOf(mi, t); },
 							});
 							if (tp && typeof tp.penalty === 'number' && tp.penalty !== 0) s -= tp.penalty;
@@ -3750,10 +3770,10 @@ function bestAction() {
 					}
 				});
 				/* 集火加成：攻击牌打集火目标（团队轴调节） */
-				if (focus && bestT === focus.target && ATK_CARDS.indexOf(id) >= 0) s *= (0.85 + 0.4 * teamwork) * trendMul.focus * cfg('wFocusMul', 1);
+				if (focus && cardTarget === focus.target && ATK_CARDS.indexOf(id) >= 0) s *= (0.85 + 0.4 * teamwork) * trendMul.focus * cfg('wFocusMul', 1);
 				/* 座位压力加成：乐/兵优先打最近敌方下家 */
 				if (SEAT_TARGET_CARDS.indexOf(id) >= 0) {
-					if (seat.nextEnemy && bestT === seat.nextEnemy) s += 1.5;
+					if (seat.nextEnemy && cardTarget === seat.nextEnemy) s += 1.5;
 					else s += seat.enemyPressure * 0.3 * cfg('wSeatPressure', 1);
 				}
 				/* 上家是敌人 → 防御牌保留倾向提高 */
@@ -3788,7 +3808,7 @@ function bestAction() {
 				}
 				/* ★ 决策维度反馈（target / tempo / keep） */
 				try {
-					const targetBonus = bestT ? getDecisionBonus('target', bestT.name1 || bestT.name) : 1.0;
+					const targetBonus = cardTarget ? getDecisionBonus('target', cardTarget.name1 || cardTarget.name) : 1.0;
 					s *= targetBonus;
 					const tempoBonus = getDecisionBonus('tempo', stageLabel);
 					s *= tempoBonus;
@@ -3804,7 +3824,7 @@ function bestAction() {
 				/* ★ 覆写命中时增强 reason */
 				let ovTag = '';
 				try {
-					const ov = readCardOverride(id, me, bestT);
+					const ov = readCardOverride(id, me, cardTarget);
 					if (ov) ovTag = ' | 覆写:' + Math.round(ov.score * 10) / 10 + '(' + (ov.reason || '').slice(0, 20) + ')';
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
@@ -3890,26 +3910,25 @@ function bestAction() {
 								+ '，使用门槛=' + tieRes.useThreshold + '，raw=' + actScore + '）';
 						}
 					} catch (eT) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eT); }
-				} else {
-					/* ★ 按用途分散目标：输出/控制/拆除类卡各自选最优目标，bestT 只作兜底，
-					 * 避免所有牌每回合都死绑同一个全局最优目标。 */
-					let cardTarget = _pickCardTargetByPurpose(me, id, bestT || null);
-					if (!cardTarget && bestT) cardTarget = bestT;
-					if (cardTarget) {
-						targetNames = cardTarget.name || cardTarget.name1;
-						targetDesc = '→' + targetNames + '（目标分' + Math.round(bestTs) + '）';
-					}
+				} else if (cardTarget) {
+					targetNames = targetKey(cardTarget);
+					targetDesc = '→' + targetNames + (boundTarget.score ? '（目标分' + Math.round(boundTarget.score * 10) / 10 + '）' : '');
 				}
 
-				acts.push({
+				const cardAct = makeActionCandidate({
 					type: "card",
 					id: id,
 					target: targetNames,
+					targetObj: (id === 'tiesuo') ? null : cardTarget,
+					targetList: (id === 'tiesuo' && !recast && Array.isArray(targetNames))
+						? ((tieBest && tieBest.targets) || null) : null,
+					targetResolved: id === 'tiesuo' ? true : boundTarget.resolved,
 					recast: recast,
-					targetScore: Math.round(bestTs),
-					score: toInt8(actScore),
-					reason: (recast ? "重铸" : "使用") + (v.name || id) + targetDesc + "（EV" + Math.round(ev) + " 边际" + Math.round(mv) + ovTag + "）"
+					targetScore: id === 'tiesuo' ? runtimeScore(bestTs) : runtimeScore(boundTarget.score || 0),
+					score: runtimeScore(actScore),
+					reason: (recast ? "重铸" : "使用") + (v.name || id) + targetDesc + "（EV" + Math.round(ev * 10) / 10 + " 边际" + Math.round(mv * 10) / 10 + ovTag + "）"
 				});
+				acts.push(cardAct);
 			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		});
 		/* 装备候选（价值替换） */
@@ -3925,7 +3944,7 @@ function bestAction() {
 						acts.push({
 							type: "equip",
 							id: c.name || "",
-							score: Math.round(eqCost.net * 2 * sit.tempo * risk.safe * 100) / 100,
+							score: runtimeScore(eqCost.net * 2 * sit.tempo * risk.safe),
 							reason: "装备" + (c.name || "") + "（价值" + eqCost.newValue + ">" + eqCost.oldValue + "，拆风险" + Math.round(eqCost.stripPressure * 100) + "%）",
 						});
 					}
@@ -4091,7 +4110,7 @@ function bestAction() {
 		let modelConf = null, metaMod = null, intervention = 'skip';
 
 		/* ★ 基本出牌决策标准：对候选重排 + 硬性否决（cardPlayBrain） */
-		try { applyBasicCardPlayRules(me, acts, bestT); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		try { applyBasicCardPlayRules(me, acts); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 		/* ★ 基本技能决策标准：技能硬否决 + 运行时优先级（skillPlayBrain） */
 		try { applyBasicSkillRules(me, acts); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -4457,11 +4476,11 @@ function bestAction() {
 					me: me,
 					state: { hp: me.hp, maxHp: me.maxHp },
 					candidates: (acts || []).slice(0, 6),
-					rule: best.type === 'card' || best.type === 'skill' ? { type: best.type, id: best.id, score: best.score, target: bestT ? (bestT.name1 || bestT.name) : null } : null,
+					rule: best.type === 'card' || best.type === 'skill' ? { type: best.type, id: best.id, score: best.score, target: best.target != null ? best.target : null, reason: best.reason || '' } : null,
 					model: modelConf ? { label: modelConf.label, confidence: modelConf.maxProb !== undefined ? modelConf.maxProb : (modelConf.confidence !== undefined ? modelConf.confidence : 0) } : null,
 					meta: metaMod ? { familiarity: metaMod.familiarity, modulator: metaMod.modulator, level: metaMod.level } : null,
 					bus: { winner: best.type + ':' + best.id, reason: (best.reason || '').slice(0, 60) },
-					final: { type: best.type, id: best.id, score: best.score, target: bestT ? (bestT.name1 || bestT.name) : null },
+					final: { type: best.type, id: best.id, score: best.score, target: best.target != null ? best.target : null, reason: best.reason || '' },
 					intervention: intervention || 'none',
 				});
 			}
@@ -4527,16 +4546,12 @@ function bestAction() {
 		/* ★ M07：Guard 可能已把 best 换成"结束回合"，动作代号要以最终 best 重新算，避免 action≠rule */
 		action = actionForBest(best);
 
-		/* ★ 指令 02：tiesuo 的 target 由 evaluator 决定（use=目标名数组；recast=null），
-		 * 其他牌的 target 仍沿用既有 bestT 结果，保持路径不变。 */
-		let _finalTarget = bestT ? (bestT.name1 || bestT.name || bestT.name2 || null) : null;
-		/* 装备动作没有玩家目标；planner 的“装备→杀”序列会把真正击杀目标放在 killTarget，
-		 * 不能把当时的 bestT 误写成 equip 的 target。 */
-		if (best && best.type === 'equip') {
-			_finalTarget = null;
-		} else if (best && best.id === 'tiesuo') {
-			_finalTarget = Array.isArray(best.target) ? best.target : null;
-		}
+		/* 最终执行目标以 winner candidate 自己绑定的目标为准；
+		 * bestT 仅是全局关注目标，不再覆盖具体动作目标。 */
+		let _finalTarget = best && best.target != null
+			? (best.targetObj ? targetKey(best.targetObj) : best.target)
+			: null;
+		if (best && best.type === 'equip') _finalTarget = null;
 		const _finalResult = {
 			action: action,
 			reason: best.reason + "（评分" + best.score + "，" + sit.mode + "×" + sit.tempo + "，阶段=" + stageLabel + "，性格=" + riskLabel + teamTip + seatTip + econTip + styleTip + forecastTip + mtTip + trendTip + (comboLen ? "，联动" + comboLen + "条" : "") + "）",
