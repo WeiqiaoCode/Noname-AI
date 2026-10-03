@@ -3721,8 +3721,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 宿主桥覆盖 chooseTarget + chooseCardTarget');
     ok(overrideSrc43.indexOf("if (key === field && typeof value === 'function')") >= 0,
         '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
-    ok(overrideSrc43.indexOf("ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55") >= 0,
-        '10.43 宿主桥只接受 kernel 已解析的高置信单目标');
+    ok(overrideSrc43.indexOf("ba.skillTargetResolved !== true || confidence < 0.55") >= 0
+        && overrideSrc43.indexOf("ba.skillTargetSingle !== true && (!Array.isArray(ba.targetList) || !ba.targetList.length)") >= 0,
+        '10.43 宿主桥只接受 kernel 已解析的高置信单目标/显式多目标组');
     ok(overrideSrc43.indexOf("__djscSkillTargetBridgeConsumed") >= 0,
         '10.43 同次技能发动的通用目标桥只消费一次');
     ok(overrideSrc43.indexOf("eventAcceptsSkillTargetPlan(next, player, decision)") >= 0,
@@ -3738,7 +3739,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
  * B. 动态数量 / mixed 组合 fail-open；
  * C. chooseCardTarget = 目标计划 + 低机会成本牌轻量 tie-break；
  * D. chooseButton 仅在 button.link 真的是推荐玩家时桥接；
- * E. chooseControl 仅处理“唯一有效选项 vs cancel2”；
+ * E. chooseControl 只有 planner 明确给出 controlChoice 才接管；
  * F. chooseButtonTarget/chooseControl 新 hook 必须可卸载。
  */
 {
