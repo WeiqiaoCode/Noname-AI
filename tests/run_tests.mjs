@@ -3716,8 +3716,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 skill profile 保留目标方向置信度/来源');
     ok(engineSrc43.indexOf('_isLegalSkillTarget(sid, me, t.pp)') >= 0,
         '10.43 engine 每技能目标先过 filterTarget');
-    ok(overrideSrc43.indexOf('proto.chooseTarget = function') >= 0
-        && overrideSrc43.indexOf('proto.chooseCardTarget = function') >= 0,
+    ok(overrideSrc43.indexOf('const origChooseTarget = proto.chooseTarget') >= 0
+        && overrideSrc43.indexOf('const origChooseCardTarget = proto.chooseCardTarget') >= 0
+        && overrideSrc43.indexOf('_protoOwned.chooseTarget = proto.chooseTarget') >= 0
+        && overrideSrc43.indexOf('_protoOwned.chooseCardTarget = proto.chooseCardTarget') >= 0,
         '10.43 宿主桥覆盖 chooseTarget + chooseCardTarget');
     ok(overrideSrc43.indexOf("if (key === field && typeof value === 'function')") >= 0,
         '10.43 事件 .set(ai/ai2) 后写仍经过桥接');
