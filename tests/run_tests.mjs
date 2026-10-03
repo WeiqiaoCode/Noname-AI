@@ -2349,10 +2349,12 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 【杀】进入残局解前必须经过攻击范围门禁');
     ok(/steps\.push\(\{\s*id:\s*rangeWeapon\.id,\s*type:\s*'equip'/.test(src35),
         '10.35 远距离击杀序列显式先 push equip step');
-    ok(/type:\s*planBest\.action\.type === 'equip' \? 'equip' : 'card'/.test(src35),
-        '10.35 planner 第一动作是装备时返回 equip 类型');
-    ok(/if \(planBest\.action\.type === 'equip'\) \{\s*out\.target = null;\s*out\.targetObj = null;/.test(src35),
-        '10.35 装备动作同时清空 target/targetObj，不错误携带敌方 player target');
+    ok(/action:\s*firstCandidate/.test(src35) &&
+       src35.indexOf('sameCandidateAction(c, plannedFirst)') >= 0,
+        '10.35 planner 第一动作直接返回已验证的 canonical equip candidate');
+    ok(src35.indexOf('canonicalKill.targetObj = planBest.target') < 0 &&
+       src35.indexOf('canonicalKill.target = targetKey') < 0,
+        '10.35 装备/无目标首步保留 canonical target，不错误携带敌方 player target');
 
     const eng35 = fs35.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
     ok(/if \(best && best\.type === 'equip'\)\s*_finalTarget = null;/.test(eng35),
