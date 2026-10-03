@@ -142,33 +142,51 @@ export function skillTarget(sid, profile, ctx) {
 		|| catsArr.indexOf('multi') >= 0
 		|| (catsArr.length >= 2 && catsArr.indexOf('self') < 0);
 	if (isMulti) {
-		const offensive = (cat === 'attack' || cat === 'control' || cat === 'draw'
-			|| (cats && cats.indexOf('enemy') >= 0 && cats.indexOf('ally') < 0));
-		const relevantIndexes = [];
-		targets.forEach(function (t, i) {
-			if (offensive ? (t.isEnemy === true) : (t.isAlly === true)) {
-				if (relevantIndexes.indexOf(i) < 0) relevantIndexes.push(i);
-			}
-		});
-		/* 主目标：方向取敌威胁/低血最高，或友濒死/低血最高 */
-		let bi = -1, bs = -Infinity;
+		const intent = profile && profile.targets && profile.targets.intent;
+		/* mixed 多目标技能通常包含不同角色/不同效果槽位，不能把所有目标按一个方向全选。 */
+		if (intent === 'mixed') return { index: -1, reason: '多目标效果混合，交回专属/原生AI', targetIndexes: [] };
+
+		const offensive = intent === 'offense'
+			|| (intent !== 'support' && (cat === 'attack' || cat === 'control'
+				|| (cats && cats.indexOf('enemy') >= 0 && cats.indexOf('ally') < 0)));
+		const ranked = [];
 		targets.forEach(function (t, i) {
 			const ok = offensive ? (t.isEnemy === true) : (t.isAlly === true);
 			if (!ok) return;
 			const dying = (t.hp !== undefined && t.hp <= 0) ? 6 : 0;
 			const low = (t.hp !== undefined && t.hp <= 1) ? 3 : 0;
-			let s = (t.threat || 0) + dying + low;
+			let score = offensive ? ((t.threat || 0) + low) : (dying + low + (t.threat || 0) * 0.3);
 			if (ctx.hi && typeof ctx.hi.identityBiasOf === 'function') {
-				s += ctx.hi.identityBiasOf(ctx.me, t.pp, 0.6);
+				score += ctx.hi.identityBiasOf(ctx.me, t.pp, 0.6);
 			}
-			if (s > bs) { bs = s; bi = i; }
+			ranked.push({ i: i, score: score });
 		});
-		if (bi < 0 && relevantIndexes.length) bi = relevantIndexes[0];
-		if (bi < 0) return { index: -1, reason: '多目标技能暂无' + (offensive ? '真敌' : '真友') };
+		ranked.sort(function (a, b) { return b.score - a.score; });
+		if (!ranked.length) return { index: -1, reason: '多目标技能暂无' + (offensive ? '真敌' : '真友'), targetIndexes: [] };
+
+		/* 宿主 selectTarget 是数量硬约束：不能再把所有同方向角色都塞进 targetList。
+		 * 动态 selectTarget 无法静态确定时，只提供主目标并 fail-open 给宿主补齐组合。 */
+		const range = Array.isArray(ctx.selectTargetRange) ? ctx.selectTargetRange : null;
+		if (!range) {
+			return {
+				index: ranked[0].i,
+				reason: '多目标数量动态：仅推荐主目标，组合交回宿主',
+				targetIndexes: [ranked[0].i],
+				targetRangeResolved: false,
+			};
+		}
+		const min = Math.max(0, Number(range[0]) || 0);
+		const max = range[1] === Infinity ? ranked.length : Math.max(min, Number(range[1]) || min);
+		if (ranked.length < min) {
+			return { index: -1, reason: '合法目标不足最小数量' + min, targetIndexes: [], targetRangeResolved: true };
+		}
+		const take = Math.min(ranked.length, max);
+		const chosen = ranked.slice(0, take).map(function (x) { return x.i; });
 		return {
-			index: bi,
-			reason: '多目标：主攻' + (offensive ? '敌' : '辅友') + '，覆盖' + relevantIndexes.length + '目标',
-			targetIndexes: relevantIndexes,
+			index: chosen[0],
+			reason: '多目标：按收益排序选择' + chosen.length + '个' + (offensive ? '敌方' : '友方') + '目标',
+			targetIndexes: chosen,
+			targetRangeResolved: true,
 		};
 	}
 	// 自身技
@@ -225,6 +243,7 @@ export function decideSkill(sid, profile, ctx) {
 		veto: false, vetoReason: '',
 		priority: p, targetIndex: tk.index,
 		targetIndexes: tk.targetIndexes || (tk.index >= 0 ? [tk.index] : []),
+		targetRangeResolved: tk.targetRangeResolved !== false,
 		reason: tk.reason,
 	};
 }
