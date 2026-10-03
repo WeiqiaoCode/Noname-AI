@@ -430,7 +430,8 @@ export function scanObjectMethod(source, ctx) {
     const voteTotal = allyTargetVotes + enemyTargetVotes;
     if (voteTotal > 0.01) {
         const delta = Math.abs(allyTargetVotes - enemyTargetVotes) / voteTotal;
-        out.__targetConfidence = Math.round(delta * 100) / 100;
+        /* 源码语义属于启发式证据，最高 0.75；手工 ID 表在 skills.js 中仍为 1.0。 */
+        out.__targetConfidence = Math.round(delta * 0.75 * 100) / 100;
         out.__targetInferred = true;
         if (allyTargetVotes > enemyTargetVotes * 1.25) {
             out.__targets = ['ally'];
