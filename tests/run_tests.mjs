@@ -4707,6 +4707,60 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.46 选牌策略按通用语义 cost/give/unknown 分流');
 }
 
+/* ================= 10.47 统一动作评分值域 + 候选目标契约 ================= */
+{
+    const fs47 = await import('node:fs');
+    let ac47 = null, cp47 = null;
+    try { ac47 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'actionCandidate.js')).href); } catch (e) { ac47 = null; }
+    try { cp47 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'cardplay', 'cardPlayBrain.js')).href); } catch (e) { cp47 = null; }
+
+    ok(ac47 && typeof ac47.runtimeScore === 'function' && typeof ac47.makeActionCandidate === 'function',
+        '10.47 actionCandidate 统一候选契约可用');
+    if (ac47) {
+        eq(ac47.runtimeScore(8.126), 8.13, '10.47 runtime score 保持 float，仅做有限小数归一');
+        eq(ac47.runtimeScore(Infinity), 0, '10.47 runtime score 非有限值安全归零');
+        const t47 = { name1: 'target47' };
+        const c47 = ac47.makeActionCandidate({ type: 'card', id: 'sha', targetObj: t47, score: 8.126 });
+        eq(c47.target, 'target47', '10.47 targetObj 与执行 target 自动保持同源');
+        eq(c47.score, 8.13, '10.47 candidate score 保持 runtime float');
+        ok(ac47.hasConsistentBoundTarget(c47), '10.47 候选绑定目标一致性可验证');
+    }
+
+    const eng47 = fs47.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    eq(/score:\s*toInt8\(s\)/.test(eng47), false, '10.47 skill runtime 排序不再使用 toInt8');
+    eq(/score:\s*toInt8\(actScore\)/.test(eng47), false, '10.47 card runtime 排序不再使用 toInt8');
+    ok(/const boundTarget = _resolveCardCandidateTarget[\s\S]*const cardTarget = boundTarget\.target[\s\S]*expectedValue\(me, id, cardTarget\)/.test(eng47),
+        '10.47 卡牌先绑定实际目标，再按该目标计算 EV');
+    eq(/a\.target\s*=\s*targets\[tk\.index\]\.name/.test(eng47), false,
+        '10.47 评分结束后的 targetBrain 不再偷偷重写执行目标');
+    ok(/candidateTargetValue\(best\)/.test(eng47),
+        '10.47 最终执行目标来自 winner candidate，而非全局 bestT');
+
+    ok(cp47 && typeof cp47.decideCard === 'function', '10.47 cardPlayBrain 可加载');
+    if (cp47) {
+        const enemyKill47 = { isAlly:false, isEnemy:true, hp:1, maxHp:4, handCount:1, shaCount:0, shanProb:0.1, threat:10, equipVal:0 };
+        const enemySafe47 = { isAlly:false, isEnemy:true, hp:4, maxHp:4, handCount:2, shaCount:1, shanProb:0.8, threat:1, equipVal:0 };
+        const ally47 = { isAlly:true, isEnemy:false, hp:4, maxHp:4, handCount:2, shaCount:0, shanProb:0.2, threat:0, equipVal:0 };
+        const ctx47 = {
+            me:{ hp:4, maxHp:4, sha:1, hasSuit:true },
+            targets:[enemyKill47, enemySafe47, ally47],
+            targetLocked:true,
+            hasRejudge:false,
+        };
+        const lockedSafe47 = cp47.decideCard('sha', ctx47, 1);
+        ok(!lockedSafe47.veto && lockedSafe47.priority < 99,
+            '10.47 已绑定非斩杀目标时，不再借其他残血目标触发 +99 补刀');
+        const lockedAlly47 = cp47.decideCard('sha', ctx47, 2);
+        ok(lockedAlly47.veto, '10.47 基本规则否决使用候选自身绑定目标，不再看全局目标');
+    }
+
+    const replay47 = fs47.readFileSync(join(_pkg, 'score', 'view', 'dashboard', 'replayPanel.js'), 'utf8');
+    ok(replay47.indexOf('最终选择：') >= 0 && replay47.indexOf('原因：') >= 0 && replay47.indexOf('调整过程：') >= 0,
+        '10.47 对局回放按“最终选择/原因/调整过程”展示');
+    eq(replay47.indexOf('🎯 总线：') < 0, true,
+        '10.47 回放默认不再用“总线 winner”内部术语作为主说明');
+}
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
