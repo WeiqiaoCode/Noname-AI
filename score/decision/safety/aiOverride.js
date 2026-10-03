@@ -39,7 +39,8 @@ let _skillTargetHooked = false;
 /* ★ M09：备份被换装的底层方法原引用，卸载时原样还原，避免热重载残留 */
 const _protoBackup = {
 	addSkill: null, getSkills: null, gameCheck: null,
-	chooseTarget: null, chooseCardTarget: null,
+	chooseTarget: null, chooseCardTarget: null, chooseButtonTarget: null,
+	chooseButton: null, chooseControl: null,
 };
 
 /* ================= ★ 软接管打点（决策级去重） ================= */
@@ -192,6 +193,20 @@ function _findActionTarget(ba) {
 	} catch (e) { return null; }
 }
 
+function _findActionTargets(ba) {
+	try {
+		const out = [];
+		if (ba && Array.isArray(ba.targetList)) {
+			for (const p of ba.targetList) {
+				if (p && typeof p === 'object' && out.indexOf(p) < 0) out.push(p);
+			}
+		}
+		const primary = _findActionTarget(ba);
+		if (primary && out.indexOf(primary) < 0) out.unshift(primary);
+		return out;
+	} catch (e) { return []; }
+}
+
 export function getSkillTargetBridgeDecision(player, sid, baOverride) {
 	try {
 		if (!player || !sid) return null;
@@ -202,8 +217,9 @@ export function getSkillTargetBridgeDecision(player, sid, baOverride) {
 		 * 第二、第三次不同目的的 chooseTarget 错绑到同一个目标。 */
 		const confidence = Number(ba.targetConfidence || 0);
 		if (ba.targetInferred !== true || confidence < 0.55) return null;
-		const target = _findActionTarget(ba);
-		if (!target) return null;
+		const targets = _findActionTargets(ba);
+		if (!targets.length) return null;
+		const target = targets[0];
 		const purpose = ba.purpose || ((ba.rule === 'attack' || ba.rule === 'control') ? 'attack'
 			: ((ba.rule === 'defense' || ba.rule === 'aux') ? 'support' : null));
 		if (purpose !== 'attack' && purpose !== 'support') return null;
@@ -213,7 +229,9 @@ export function getSkillTargetBridgeDecision(player, sid, baOverride) {
 		return {
 			skillId: sid,
 			target: target,
+			targets: targets,
 			targetName: target.playerid || target.name1 || target.name || '',
+			targetRangeResolved: ba.targetRangeResolved !== false,
 			purpose: purpose,
 			intent: ba.targetIntent,
 			confidence: confidence,
@@ -235,7 +253,8 @@ export function wrapSkillTargetAI(original, player, decision) {
 		} catch (e) {}
 		try {
 			if (!target) return nativeScore;
-			if (_samePlayer(target, decision.target)) return Math.max(nativeScore, 12);
+			const plannedTargets = Array.isArray(decision.targets) && decision.targets.length ? decision.targets : [decision.target];
+			if (plannedTargets.some(function (p) { return _samePlayer(target, p); })) return Math.max(nativeScore, 12);
 			const rel = dispositionOf(player, target);
 			if (decision.purpose === 'support') {
 				if (rel < 0) return Math.min(nativeScore, -12);
