@@ -19,6 +19,7 @@ import { getWeights, getBias, isReady } from '../../model/weights/weights.js';
 import { FEATURE_DIM } from '../../model/features/features.js';
 import { log } from '../../foundation/diag/logger.js';
 import { safeGet as _lsGet, safeSet as _lsSet } from '../../foundation/storage/storage.js';  /* ★ P2-31：中央存储抽象，业务层禁止直触 localStorage */
+import { dispositionOf } from '../../decision/relations/relations.js';
 
 const DJSC_SHADOW = '__djsc_shadow_orig';
 const STORAGE_KEY = 'djsc_auto_discover';
@@ -64,7 +65,7 @@ function buildFeature(me, type, cand) {
             if (name === 'tao') f[40] = 127;
         } else if (type === 'target') {
             let isAlly = false;
-            try { if (get.attitude(me, cand) > 0) isAlly = true; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+            try { if (dispositionOf(me, cand) > 0) isAlly = true; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
             f[42] = isAlly ? 127 : 0;
             f[43] = isAlly ? 0 : 127;
             f[44] = Math.round(((cand.hp || 0) / Math.max(1, cand.maxHp || 1)) * 127);
