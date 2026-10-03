@@ -3725,8 +3725,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.43 宿主桥只接受 kernel 已解析的高置信单目标');
     ok(overrideSrc43.indexOf("__djscSkillTargetBridgeConsumed") >= 0,
         '10.43 同次技能发动的通用目标桥只消费一次');
-    ok(overrideSrc43.indexOf("eventAcceptsSkillTarget(next, player, decision.target)") >= 0,
-        '10.43 宿主桥再次校验当前选择事件合法目标');
+    ok(overrideSrc43.indexOf("eventAcceptsSkillTargetPlan(next, player, decision)") >= 0,
+        '10.43 宿主桥再次校验当前选择事件合法目标/目标组');
     const skillDirPos43 = overrideSrc43.indexOf('const skillDir = skillDirectionEffectModifier(card, player, target)');
     const bestActionPos43 = overrideSrc43.indexOf('const ba = _getBA(player)', skillDirPos43);
     ok(skillDirPos43 >= 0 && bestActionPos43 > skillDirPos43,
@@ -3828,6 +3828,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         type: 'skill', id: 'stage2_skill_44',
         targetObj: a1_44, target: 'a1_44', targetList: [a1_44, a2_44],
         targetRangeResolved: true,
+        skillTargetResolved: true,
+        skillTargetSingle: false,
         purpose: 'support', rule: 'aux', score: 9,
         targetIntent: 'support', targetConfidence: 0.75, targetInferred: true,
     };
@@ -3885,34 +3887,38 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(buttonAI44({ link: { name: 'sha' } }), 2,
         '10.44 非玩家 button.link → 保留原生评分');
 
-    /* E. chooseControl：仅唯一有效项+cancel2时推进；多选项保持原生。 */
-    const ctlOne44 = {
+    /* E. chooseControl：没有显式 controlChoice 一律原生；只有 planner 明确给出时才接管。 */
+    const nativeCtl44 = function () { return 2; };
+    const ctlNoPlan44 = {
         controls: ['continue44', 'cancel2'],
-        ai: function () { return 1; },
+        ai: nativeCtl44,
         set: function (k, v) { this[k] = v; return this; },
     };
-    ao44.bridgeSkillControlEvent(ctlOne44, me44, 'stage2_skill_44', baMulti44);
-    eq(ctlOne44.ai(), 0, '10.44 唯一有效 control vs cancel2 → 选择有效项');
+    ao44.bridgeSkillControlEvent(ctlNoPlan44, me44, 'stage2_skill_44', baMulti44);
+    eq(ctlNoPlan44.ai, nativeCtl44,
+        '10.44 唯一有效项也不能凭结构猜继续 → 无 controlChoice 时完全原生');
 
-    const nativeCtl44 = function () { return 2; };
-    const ctlMany44 = {
+    const ctlPlan44 = {
+        controls: ['modeA44', 'modeB44', 'cancel2'],
+        ai: function () { return 2; },
+        set: function (k, v) { this[k] = v; return this; },
+    };
+    ao44.bridgeSkillControlEvent(ctlPlan44, me44, 'stage2_skill_44', Object.assign({}, baMulti44, {
+        controlChoice: 'modeB44',
+    }));
+    eq(ctlPlan44.ai(), 1,
+        '10.44 planner 显式 controlChoice=modeB44 → 宿主选择对应索引1');
+
+    const ctlBadPlan44 = {
         controls: ['modeA44', 'modeB44', 'cancel2'],
         ai: nativeCtl44,
         set: function (k, v) { this[k] = v; return this; },
     };
-    ao44.bridgeSkillControlEvent(ctlMany44, me44, 'stage2_skill_44', baMulti44);
-    eq(ctlMany44.ai, nativeCtl44, '10.44 多个有效 control 含义不明 → 完全原生');
-
-    const ctlList44 = {
-        controls: ['cancel2'],
-        choiceList: ['唯一选项'],
-        ai: function () { return 1; },
-        set: function (k, v) { this[k] = v; return this; },
-    };
-    ao44.bridgeSkillControlEvent(ctlList44, me44, 'stage2_skill_44', baMulti44);
-    /* chooseControl content 会先扩成 [选项一,cancel2]；这里模拟扩展后的调用。 */
-    ctlList44.controls = ['选项一', 'cancel2'];
-    eq(ctlList44.ai(), 0, '10.44 choiceList 单项+取消 → 选择唯一有效项');
+    ao44.bridgeSkillControlEvent(ctlBadPlan44, me44, 'stage2_skill_44', Object.assign({}, baMulti44, {
+        controlChoice: 'missing44',
+    }));
+    eq(ctlBadPlan44.ai(), 2,
+        '10.44 显式 controlChoice 不存在于当前 controls → 回退原生');
 
     /* F. 结构守卫：新增宿主 hook + 对称卸载。 */
     const src44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js'), 'utf8');
