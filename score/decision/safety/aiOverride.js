@@ -160,7 +160,7 @@ function _parentEventOf(ev) {
 	} catch (e) { return null; }
 }
 
-export function resolveActiveSkillId(player, startEvent) {
+export function resolveActiveSkillContext(player, startEvent) {
 	try {
 		let ev = startEvent || (_status && _status.event) || null;
 		for (let depth = 0; ev && depth < 7; depth++) {
@@ -170,12 +170,17 @@ export function resolveActiveSkillId(player, startEvent) {
 				/* 真正 lib.skill 条目是技能对象；普通事件名 chooseTarget/phaseUse 等
 				 * 即使某些测试/扩展 Proxy 对未知 key 返回函数，也不能误认成技能。 */
 				const info = lib.skill && lib.skill[id];
-				if (info && typeof info === 'object') return id;
+				if (info && typeof info === 'object') return { id: id, event: ev };
 			}
 			ev = _parentEventOf(ev);
 		}
 		return null;
 	} catch (e) { return null; }
+}
+
+export function resolveActiveSkillId(player, startEvent) {
+	const ctx = resolveActiveSkillContext(player, startEvent);
+	return ctx ? ctx.id : null;
 }
 
 function _findActionTarget(ba) {
@@ -197,11 +202,10 @@ export function getSkillTargetBridgeDecision(player, sid, baOverride) {
 		if (!player || !sid) return null;
 		const ba = baOverride || _getBA(player);
 		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
-		/* 只桥接 scanner/skill kernel 自动推断出的高置信单方向技能。
-		 * mixed / 低置信 / 没有 provenance 的旧技能全部 fail-open，避免把一个技能内部
-		 * 第二、第三次不同目的的 chooseTarget 错绑到同一个目标。 */
+		/* 只桥接真正经过 kernel 合法目标池解析成功的高置信单目标动作。
+		 * 手工 ID 表（confidence=1）与源码推断都可进入；旧 action / mixed / 多目标均 fail-open。 */
 		const confidence = Number(ba.targetConfidence || 0);
-		if (ba.targetInferred !== true || confidence < 0.55) return null;
+		if (ba.skillTargetResolved !== true || ba.skillTargetSingle !== true || confidence < 0.55) return null;
 		const target = _findActionTarget(ba);
 		if (!target) return null;
 		const purpose = ba.purpose || ((ba.rule === 'attack' || ba.rule === 'control') ? 'attack'
@@ -279,6 +283,24 @@ export function eventAcceptsSkillTarget(next, player, target) {
 	} catch (e) { return false; }
 }
 
+export function bridgeSkillTargetChoiceOnce(next, player, skillContext, field, baOverride) {
+	try {
+		if (!skillContext || !skillContext.id) return next;
+		const ownerEvent = skillContext.event || null;
+		if (ownerEvent && ownerEvent.__djscSkillTargetBridgeConsumed) return next;
+		const out = bridgeSkillTargetEvent(next, player, skillContext.id, field, baOverride);
+		if (out && out.__djscSkillTargetDecision && ownerEvent) {
+			try {
+				ownerEvent.__djscSkillTargetBridgeConsumed = {
+					skillId: skillContext.id,
+					target: out.__djscSkillTargetDecision.targetName,
+				};
+			} catch (e) {}
+		}
+		return out;
+	} catch (e) { return next; }
+}
+
 export function bridgeSkillTargetEvent(next, player, sid, field, baOverride) {
 	try {
 		if (!next || !player || !sid || !field) return next;
@@ -317,9 +339,9 @@ function _hookSkillTargetChoice() {
 		if (typeof origChooseTarget === 'function') {
 			_protoBackup.chooseTarget = origChooseTarget;
 			proto.chooseTarget = function () {
-				const sid = resolveActiveSkillId(this, _status && _status.event);
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseTarget.apply(this, arguments);
-				return sid ? bridgeSkillTargetEvent(next, this, sid, 'ai') : next;
+				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai') : next;
 			};
 		}
 
@@ -327,9 +349,9 @@ function _hookSkillTargetChoice() {
 		if (typeof origChooseCardTarget === 'function') {
 			_protoBackup.chooseCardTarget = origChooseCardTarget;
 			proto.chooseCardTarget = function () {
-				const sid = resolveActiveSkillId(this, _status && _status.event);
+				const skillCtx = resolveActiveSkillContext(this, _status && _status.event);
 				const next = origChooseCardTarget.apply(this, arguments);
-				return sid ? bridgeSkillTargetEvent(next, this, sid, 'ai2') : next;
+				return skillCtx ? bridgeSkillTargetChoiceOnce(next, this, skillCtx, 'ai2') : next;
 			};
 		}
 		_skillTargetHooked = !!(_protoBackup.chooseTarget || _protoBackup.chooseCardTarget);
