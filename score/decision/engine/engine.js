@@ -5329,7 +5329,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
