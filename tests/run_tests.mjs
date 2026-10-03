@@ -3136,6 +3136,12 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     /* actor 隔离：另一角色不能把我的 CREATE 当成自己的 commitment。 */
     eq(tss41.evaluateRemovalChoice(other, enemy, enemy._j[0], rctx).selfCreated, false,
         '10.41 self-created 必须匹配 actor，不跨角色串账');
+    /* CREATE 后若状态被别人/自然结算移除，再次补挂不属于自己的反向操作。 */
+    enemy._j.length = 0;
+    eq(tss41.evaluateCreateConsistency(me, enemy, 'lebu', rctx).penalty, 0,
+        '10.41 自建状态被外部移除后重新补挂 → 不误判为 self reversal');
+    enemy._j.push(C41('lebu'));
+
 
     /* B1. 顺/拆若拿走装备而非状态，不得写 REMOVE-state。 */
     tss41.beginStrategicTurn(me);
