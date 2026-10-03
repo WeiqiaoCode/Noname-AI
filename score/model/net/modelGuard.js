@@ -8,6 +8,7 @@
  */
 
 import { dispositionOf } from '../../decision/relations/relations.js';
+import { isCandidateEligible, ensureCandidatePolicy, sameCandidateAction, PRIORITY_TIER } from '../../decision/state/actionCandidate.js';
 
 /* ================= 决策积分引擎 · 模型行为护栏 =================
  * 职责：模型输出动作后，执行前的最后一层"法律检查"。
@@ -141,6 +142,23 @@ export function guardCheck(me, action, context) {
             }
         }
 
+        /* ---- 红线 5：已有 Planner 严格验证的 forced-kill 时，必须执行同一候选 ----
+         * 检查独立于 target，因此结束回合、装备、无目标牌也不能绕过 forced policy。 */
+        if (context && context.killAvailable && isCandidateEligible(context.killAvailable)) {
+            const kp = ensureCandidatePolicy(context.killAvailable);
+            const isForcedKill = kp && kp.priorityTier === PRIORITY_TIER.FORCED;
+            const sameAction = sameCandidateAction(action, context.killAvailable);
+            if (isForcedKill && !sameAction) {
+                _recordBlock(me, action, RED_LINES.MISS_KILL, '存在已验证确定击杀序列');
+                return {
+                    ok: false,
+                    rule: RED_LINES.MISS_KILL,
+                    reason: '已有已验证确定击杀序列却放弃',
+                    fallback: context.killAvailable,
+                };
+            }
+        }
+
         /* ---- 红线 1：目标已死 / 目标缺失（支持数组 target，铁锁连环等多目标牌） ---- */
         if (action.target) {
             const r = _resolveTargets(action, context);
@@ -180,17 +198,6 @@ export function guardCheck(me, action, context) {
                 }
             }
 
-            /* ---- 红线 5：能击杀时放水 ---- */
-            if (context && context.killAvailable && action.type === 'card') {
-                const isAtk = ATK_IDS.indexOf(action.id) >= 0;
-                if (!isAtk && context.killAvailable.score > action.score + 5) {
-                    const isUtility = ['wuzhong', 'tao', 'wuxie', 'shan', 'jiu'].indexOf(action.id) >= 0;
-                    if (!isUtility) {
-                        _recordBlock(me, action, RED_LINES.MISS_KILL, '候选击杀分=' + context.killAvailable.score);
-                        return { ok: false, rule: RED_LINES.MISS_KILL, reason: '能击杀却放水', fallback: context.killAvailable };
-                    }
-                }
-            }
         }
 
         /* ---- 红线 6：无杀决斗（自伤） ---- */
@@ -234,11 +241,11 @@ function _fallbackAction(context) {
         if (!context || !Array.isArray(context.allCandidates)) return null;
         /* 优先选"结束回合" */
         for (const c of context.allCandidates) {
-            if (c.type === 'end') return c;
+            if (isCandidateEligible(c) && c.type === 'end') return c;
         }
         /* 次选：非攻击牌 */
         for (const c of context.allCandidates) {
-            if (c.type !== 'card') continue;
+            if (!isCandidateEligible(c) || c.type !== 'card') continue;
             if (ATK_IDS.indexOf(c.id) < 0) return c;
         }
         /* 最次：返回 null 让上层走原生 */

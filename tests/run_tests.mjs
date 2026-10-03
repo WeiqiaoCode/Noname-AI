@@ -2349,10 +2349,12 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.35 【杀】进入残局解前必须经过攻击范围门禁');
     ok(/steps\.push\(\{\s*id:\s*rangeWeapon\.id,\s*type:\s*'equip'/.test(src35),
         '10.35 远距离击杀序列显式先 push equip step');
-    ok(/type:\s*planBest\.action\.type === 'equip' \? 'equip' : 'card'/.test(src35),
-        '10.35 planner 第一动作是装备时返回 equip 类型');
-    ok(/if \(planBest\.action\.type === 'equip'\) \{\s*out\.target = null;\s*out\.targetObj = null;/.test(src35),
-        '10.35 装备动作同时清空 target/targetObj，不错误携带敌方 player target');
+    ok(/action:\s*firstCandidate/.test(src35) &&
+       src35.indexOf('sameCandidateAction(c, plannedFirst)') >= 0,
+        '10.35 planner 第一动作直接返回已验证的 canonical equip candidate');
+    ok(src35.indexOf('canonicalKill.targetObj = planBest.target') < 0 &&
+       src35.indexOf('canonicalKill.target = targetKey') < 0,
+        '10.35 装备/无目标首步保留 canonical target，不错误携带敌方 player target');
 
     const eng35 = fs35.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
     ok(/if \(best && best\.type === 'equip'\)\s*_finalTarget = null;/.test(eng35),
@@ -4836,6 +4838,149 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.48 StrategyBus 不保留旧绝对分差 5');
     ok(bus48.indexOf('normalizedMargin') >= 0 && bus48.indexOf('DECISION_MARGIN.CLEAR') >= 0,
         '10.48 StrategyBus 即使未来重新启用也复用统一 margin 契约');
+}
+
+/* ================= 10.49 Action utility / policy priority 分离 ================= */
+{
+    const fs49 = await import('node:fs');
+    const ac49 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'actionCandidate.js')).href);
+
+    const veto49 = ac49.makeActionCandidate({ type:'card', id:'lebu', score:7.25 });
+    ac49.vetoCandidate(veto49, '目标非法');
+    eq(veto49.score, 7.25, '10.49 veto 不修改真实 utility');
+    eq(ac49.isCandidateEligible(veto49), false, '10.49 veto candidate 结构上不可选');
+    eq(veto49.policy.vetoReason, '目标非法', '10.49 veto 原因进入 policy');
+
+    const normalHighUtil49 = ac49.makeActionCandidate({ type:'card', id:'a', score:8 });
+    const normalLowUtil49 = ac49.makeActionCandidate({ type:'card', id:'b', score:5 });
+    ac49.setCandidatePriority(normalHighUtil49, ac49.PRIORITY_TIER.NORMAL, 20, '');
+    ac49.setCandidatePriority(normalLowUtil49, ac49.PRIORITY_TIER.NORMAL, 90, '');
+    const normalSorted49 = [normalLowUtil49, normalHighUtil49].sort(ac49.compareActionCandidates);
+    eq(normalSorted49[0], normalHighUtil49, '10.49 normal tier 保持 utility-first，不让普通 priority 覆盖收益');
+
+    const critical9949 = ac49.makeActionCandidate({ type:'card', id:'sha', score:2 });
+    const critical10049 = ac49.makeActionCandidate({ type:'card', id:'wuzhong', score:1 });
+    ac49.setCandidatePriority(critical9949, ac49.PRIORITY_TIER.CRITICAL, 99, '可直接完成击杀');
+    ac49.setCandidatePriority(critical10049, ac49.PRIORITY_TIER.CRITICAL, 100, '高优先纯收益');
+    const criticalSorted49 = [critical9949, critical10049].sort(ac49.compareActionCandidates);
+    eq(criticalSorted49[0], critical10049, '10.49 critical tier 内显式 priorityValue 生效');
+
+    const forced49 = ac49.makeActionCandidate({ type:'equip', id:'qinglong', score:-2 });
+    ac49.setCandidatePriority(forced49, ac49.PRIORITY_TIER.FORCED, 11, '已验证击杀序列');
+    const tierSorted49 = [normalHighUtil49, critical10049, forced49].sort(ac49.compareActionCandidates);
+    eq(tierSorted49[0], forced49, '10.49 forced tier 高于 critical/normal，且无需伪造高 utility');
+    eq(forced49.score, -2, '10.49 forced priority 不污染原始 utility');
+
+    const eng49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    eq(eng49.indexOf('a.score += 999') < 0, true, '10.49 engine 删除 +999 灌爆收益');
+    eq(/Math\.min\(a\.score,\s*-(?:12|8|6)\)/.test(eng49), false,
+        '10.49 card/skill/equip/judge veto 不再伪造成负分');
+    ok(eng49.indexOf("const priorityReason = killCritical ? '可直接完成击杀' : '高优先纯收益'") >= 0,
+        '10.49 priority>=99 区分补刀与纯收益，不再把无中/五谷误标补刀');
+    ok(eng49.indexOf('acts.sort(compareActionCandidates)') >= 0 &&
+       eng49.indexOf('eligibleActs = acts.filter(isCandidateEligible)') >= 0,
+        '10.49 engine 统一按 policy comparator 排序并过滤 veto candidate');
+    ok(eng49.indexOf('applyChampionRule(eligibleActs') >= 0 &&
+       eng49.indexOf('deepThinkCritic(me, eligibleActs') >= 0,
+        '10.49 Champion/DeepThink 只消费 eligible candidates');
+
+    const planner49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    eq(/score:\s*100\s*\+\s*totalDmg/.test(planner49), false,
+        '10.49 Planner 击杀序列不再写入 100+ fake utility');
+    ok(planner49.indexOf('killRank:') >= 0 &&
+       planner49.indexOf("PRIORITY_TIER.FORCED") >= 0 &&
+       planner49.indexOf('setCandidatePriority(canonicalKill, tier') >= 0,
+        '10.49 Planner 使用内部 killRank + 显式 forced/critical policy');
+    ok(planner49.indexOf('samePolicyTier') >= 0,
+        '10.49 普通 Planner 改判不得跨 policy tier');
+
+    const guard49 = fs49.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    eq(/killAvailable\.score\s*>\s*action\.score\s*\+\s*5/.test(guard49), false,
+        '10.49 Guard 删除旧固定 +5 击杀分差');
+    ok(guard49.indexOf("priorityTier === PRIORITY_TIER.FORCED") >= 0,
+        '10.49 Guard 读取已验证 forced-kill policy');
+    ok(guard49.indexOf('isCandidateEligible(c)') >= 0,
+        '10.49 Guard fallback 不会重新选中 veto candidate');
+
+    const champ49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
+    const deep49 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+    ok(champ49.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
+        '10.49 Champion 只在当前 policy band 内复核');
+    ok(deep49.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
+        '10.49 DeepThink 只在当前 policy band 内复核');
+
+    const replay49 = fs49.readFileSync(join(_pkg, 'score', 'view', 'dashboard', 'replayPanel.js'), 'utf8');
+    ok(replay49.indexOf('真实收益评分：') >= 0 && replay49.indexOf('策略优先级：') >= 0,
+        '10.49 对局回放分别显示真实收益与策略优先级');
+    const narr49 = fs49.readFileSync(join(_pkg, 'score', 'cognition', 'explain', 'decisionNarrator.js'), 'utf8');
+    ok(narr49.indexOf('真实收益评分 ') >= 0 && narr49.indexOf('策略优先级 ') >= 0,
+        '10.49 决策解释器使用玩家可读的 utility / policy 说明');
+}
+
+
+/* ================= 10.50 Policy band / forced-kill provenance hardening ================= */
+{
+    const fs50 = await import('node:fs');
+    const ac50 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'state', 'actionCandidate.js')).href);
+
+    const n1 = ac50.makeActionCandidate({ type:'card', id:'sha', target:'p1', score:5 });
+    const n2 = ac50.makeActionCandidate({ type:'card', id:'sha', target:'p2', score:5 });
+    eq(ac50.sameCandidateAction(n1, n2), false,
+        '10.50 同 id 不同目标不是同一 action candidate');
+    const n1copy = ac50.makeActionCandidate({ type:'card', id:'sha', target:'p1', score:1 });
+    eq(ac50.sameCandidateAction(n1, n1copy), true,
+        '10.50 type+id+target 完全一致才视为同一候选');
+
+    const normalA = ac50.makeActionCandidate({ type:'card', id:'a', score:4 });
+    const normalB = ac50.makeActionCandidate({ type:'card', id:'b', score:3 });
+    ac50.setCandidatePriority(normalA, ac50.PRIORITY_TIER.NORMAL, 10, '');
+    ac50.setCandidatePriority(normalB, ac50.PRIORITY_TIER.NORMAL, 90, '');
+    eq(ac50.sameCandidatePolicyBand(normalA, normalB), true,
+        '10.50 normal 层仍允许 utility-first 复核，不锁普通 priorityValue');
+
+    const critical99 = ac50.makeActionCandidate({ type:'card', id:'sha', score:2 });
+    const critical100 = ac50.makeActionCandidate({ type:'card', id:'wuzhong', score:1 });
+    ac50.setCandidatePriority(critical99, ac50.PRIORITY_TIER.CRITICAL, 99, '击杀');
+    ac50.setCandidatePriority(critical100, ac50.PRIORITY_TIER.CRITICAL, 100, '纯收益');
+    eq(ac50.sameCandidatePolicyBand(critical99, critical100), false,
+        '10.50 critical 层不同 priorityValue 不得互相改判');
+    const critical99b = ac50.makeActionCandidate({ type:'card', id:'jiu', score:9 });
+    ac50.setCandidatePriority(critical99b, ac50.PRIORITY_TIER.CRITICAL, 99, '击杀准备');
+    eq(ac50.sameCandidatePolicyBand(critical99, critical99b), true,
+        '10.50 critical 同 tier+priorityValue 可在 band 内复核');
+
+    const planner50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    ok(planner50.indexOf('sameCandidateAction(c, plannedFirst)') >= 0 &&
+       planner50.indexOf('if (!firstCandidate) continue;') >= 0,
+        '10.50 Planner forced/critical 只能来自现存且目标精确匹配的 eligible candidate');
+    ok(planner50.indexOf("const certainty = (steps.length === 1 && guaranteedDmg >= hp) ? 'forced' : 'critical'") >= 0,
+        '10.50 只有当前单步确定击杀可进入 forced，多步/概率路线降为 critical');
+    eq(planner50.indexOf('const out = canonicalKill || {') >= 0, false,
+        '10.50 Planner 找不到 canonical candidate 时禁止合成新动作');
+    ok(planner50.indexOf('compareActionCandidates(proposed, best)') >= 0,
+        '10.50 Planner critical 提升仍服从统一 policy comparator');
+
+    const champ50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'championStrategy.js'), 'utf8');
+    const deep50 = fs50.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
+    ok(champ50.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
+        '10.50 Champion 不得跨 critical/forced priorityValue 改判');
+    ok(deep50.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
+        '10.50 DeepThink 不得跨 critical/forced priorityValue 改判');
+
+    const guard50 = fs50.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    ok(guard50.indexOf('sameCandidateAction(action, context.killAvailable)') >= 0,
+        '10.50 Guard forced-kill 使用精确候选身份而非“任意攻击牌”放行');
+    ok(guard50.indexOf('已有 Planner 严格验证的 forced-kill') <
+       guard50.indexOf('红线 1：目标已死 / 目标缺失'),
+        '10.50 forced-kill Guard 独立于 action.target，无目标动作不能绕过');
+    eq(guard50.indexOf("const isUtility = ['wuzhong', 'tao', 'wuxie', 'shan', 'jiu']") >= 0, false,
+        '10.50 forced-kill 不再允许 unrelated utility 例外绕过');
+
+    const eng50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    ok(eng50.indexOf('isCandidateEligible(a) && sameCandidateAction(a, refined)') >= 0,
+        '10.50 Engine 接回 Planner 结果时使用严格 action identity');
+    eq(eng50.indexOf('best.target = _a2.target') >= 0, false,
+        '10.50 Guard fallback 后禁止按相同 id 改写到另一个目标');
 }
 
 /* ---------- 汇总 ---------- */

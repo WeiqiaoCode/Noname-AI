@@ -16,6 +16,7 @@
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { cfg } from '../../foundation/config/util.js';
 import { log } from '../../foundation/diag/logger.js';
+import { normalizedMargin, DECISION_MARGIN } from '../../decision/state/decisionMargin.js';
 
 /* ================= 主入口：生成解释 ================= */
 export function narrate(entry) {
@@ -40,6 +41,11 @@ export function narrate(entry) {
         /* ② 主因：从 candidates[0] 的 reason 里抽取关键信息 */
         const mainReason = _extractReason(w.reason || '');
         if (mainReason) facts.push(mainReason);
+        const policy = w.policy || null;
+        const tierName = policy && policy.priorityTier === 'forced' ? '强制'
+            : (policy && policy.priorityTier === 'critical' ? '高' : '普通');
+        facts.push('真实收益评分 ' + (Number(w.score || 0).toFixed(2)) + '；策略优先级 ' + tierName +
+            ((policy && policy.priorityReason) ? '（' + policy.priorityReason + '）' : ''));
 
         /* ③ 目标价值 */
         if (w.target) {
@@ -57,7 +63,8 @@ export function narrate(entry) {
         if (entry.candidates && entry.candidates.length >= 2) {
             const second = entry.candidates[1];
             const gap = (w.score || 0) - (second.score || 0);
-            if (Math.abs(gap) < 1.5 && second.id !== w.id) {
+            const margin = normalizedMargin(w.score || 0, second.score || 0);
+            if (margin <= DECISION_MARGIN.CLOSE && second.id !== w.id) {
                 counterfactual.push(_describeAlternative(w, second, gap));
             }
         }

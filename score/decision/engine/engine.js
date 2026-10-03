@@ -147,7 +147,7 @@ import { shunshouBonus } from '../timing/shunshouTiming.js';
 import { deepValueBonus, deepCardValue, deepTargetValue, deepSituationValue } from '../../model/net/deepValue.js';
 import { recordTrigger, getDecayMultiplier, applyDecay, clearDecayLog, getDecayStats } from '../tuning/decayOpt.js';
 import { clearCompensation } from './scoreUnify.js';
-import { makeActionCandidate, runtimeScore, targetKey, candidateTargetValue } from '../state/actionCandidate.js';
+import { makeActionCandidate, runtimeScore, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
 import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
@@ -895,7 +895,7 @@ let _turnUse = 0, _lastTurnPlayer = null;
 
 /* ███████ 货币等量规则 · 基础元素定义 ███████
  * 基准单位：MONEY_UNIT = 1（1 货币 = 1 标准收益点）。
- * 规则：toMoney(pts) 把任意原始收益（含击杀 +999、灌爆值 ≈1003）折算成
+ * 规则：toMoney(pts) 把任意原始收益折算成
  *       有界的货币等量 —— 小额 1:1 线性，中额亚线性压缩，大额封顶。
  *       用途：统一给分入库基准，防止单次巨大收益主导 round 贡献分、破坏
  *       单回合线性动量与训练归一化，让「货币」成为全链条可比的基础元素。 */
@@ -929,7 +929,7 @@ function _updateMomentum(me, netGain) {
 		if (!cur) { _momPlayer = null; _momVal = 0; _momStreak = 0; return; }
 		if (_momPlayer !== cur) { _momPlayer = cur; _momVal = 0; _momStreak = 0; }
 		if (cur !== me) return;
-		/* ★ 货币化后取符号：单次巨额（击杀+999）不因数量级翻转方向 / 过冲步数 */
+		/* ★ 货币化后取符号：单次高收益不因数量级翻转方向 / 过冲步数 */
 		const money = toMoney(netGain);
 		const dir = money > 0 ? 1 : (money < 0 ? -1 : 0);
 		if (dir === 0) return;
@@ -2102,9 +2102,9 @@ function multiTurnCached(me) {
 /* ★ 基本出牌决策标准接入层
  * 在 bestAction 的 acts.sort 之前调用，把 cardPlayBrain 的五类标准
  * （纯收益>补刀>及时防御>控制>输出>装备即时 + 硬性否决）落到候选上：
- *  - 否决的牌：压到负分（输给结束回合 0 分，除非全场都不可打）
- *  - 补刀致命杀：顶到最高优先级（击杀收益最高）
- *  - 其余按标准优先级小幅加权（不改动技能与其它 30 个既有模块的权重）
+ *  - 否决的牌：写入 candidate.policy.veto，不再伪造负 utility。
+ *  - priority>=99：进入 critical 策略层，不再用 +999 灌爆 score。
+ *  - 其余优先级只记录为 policy 元数据，runtime score 始终保持真实 utility。
  */
 function applyBasicCardPlayRules(me, acts) {
 	try {
@@ -2133,15 +2133,19 @@ function applyBasicCardPlayRules(me, acts) {
 			const tidx = a.targetObj ? targets.findIndex(function (t) { return t && t.pp === a.targetObj; }) : -1;
 			const d = decideCard(a.id, ctx, tidx);
 			if (d.veto) {
-				a.score = Math.min(a.score, -12);
+				vetoCandidate(a, d.vetoReason);
 				a.reason = (a.reason || '') + '（[基本规则否决] ' + d.vetoReason + '）';
 				a.rule = 'veto';
 			} else if (d.priority >= 99) {
-				a.score += 999 + Math.max(0, a.score);
-				a.reason = (a.reason || '') + '（[补刀] 可收割残血敌）';
-				a.rule = 'kill';
+				const killCritical = d.category === 'output' &&
+					['sha', 'huosha', 'leisha'].indexOf(a.id) >= 0;
+				const priorityReason = killCritical ? '可直接完成击杀' : '高优先纯收益';
+				setCandidatePriority(a, PRIORITY_TIER.CRITICAL, d.priority, priorityReason);
+				a.reason = (a.reason || '') + '（[高优先] ' + priorityReason + '）';
+				a.rule = killCritical ? 'kill' : 'critical';
+				a.rulePriority = d.priority;
 			} else {
-				a.score += (d.priority - 50) * 0.2;
+				setCandidatePriority(a, PRIORITY_TIER.NORMAL, d.priority, '');
 				a.rule = d.category;
 				a.rulePriority = d.priority;
 			}
@@ -2331,24 +2335,24 @@ function applyBasicSkillRules(me, acts) {
 				&& _skillNeedsExternalTarget(sid, prof);
 			if (!d.veto && directional && d.targetRequired !== false
 				&& d.targetDecisionResolved !== false && d.targetIndex < 0 && skillTargets.length > 0) {
-				a.score = Math.min(a.score, -6);
+				vetoCandidate(a, '无合法' + (ti === 'support' ? '友方' : '敌方') + '目标');
 				a.reason = (a.reason || '') + '（[技能目标否决] 无合法' + (ti === 'support' ? '友方' : '敌方') + '目标）';
 				a.rule = 'veto-target';
 				return;
 			}
 			if (!d.veto && directional && d.targetRequired !== false
 				&& d.targetDecisionResolved !== false && skillTargets.length === 0) {
-				a.score = Math.min(a.score, -6);
+				vetoCandidate(a, '无合法目标');
 				a.reason = (a.reason || '') + '（[技能目标否决] 无合法目标）';
 				a.rule = 'veto-target';
 				return;
 			}
 			if (d.veto) {
-				a.score = Math.min(a.score, -6);
+				vetoCandidate(a, d.vetoReason);
 				a.reason = (a.reason || '') + '（[技能否决] ' + d.vetoReason + '）';
 				a.rule = 'veto';
 			} else {
-				a.score += (d.priority - 50) * 0.2;
+				setCandidatePriority(a, PRIORITY_TIER.NORMAL, d.priority, '');
 				a.rule = d.category;
 				a.rulePriority = d.priority;
 				/* ★ 按技能自身类别写回【专属目标】：敌方技→真敌，己方辅助/增益→真友
@@ -2437,12 +2441,13 @@ function applyBasicEquipRules(me, acts) {
 			ctx[slot] = slotHas[slot] || null;
 			const d = decideEquip(id, ctx);
 			if (d.veto) {
-				a.score = Math.min(a.score, -8);
+				vetoCandidate(a, d.vetoReason);
 				a.reason = (a.reason || '') + '（[装备否决] ' + d.vetoReason + '）';
 				a.rule = 'veto';
 			} else {
-				a.score += (d.priority - 60) * 0.2;
+				setCandidatePriority(a, PRIORITY_TIER.NORMAL, d.priority, '');
 				a.rule = 'equip:' + d.category;
+				a.rulePriority = d.priority;
 			}
 		});
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -2485,11 +2490,11 @@ function applyBasicJudgeRules(me, acts) {
 			/* 闪电等无单外部目标牌允许 target=null；其余目标牌若候选未绑定则只做保守规则判断。 */
 			const d = decideJudge(id, { me: { hp: me.hp }, target: t, targets: targets, hasRejudge: hasRejudge });
 			if (d.veto) {
-				a.score = Math.min(a.score, -8);
+				vetoCandidate(a, d.vetoReason);
 				a.reason = (a.reason || '') + '（[判定否决] ' + d.vetoReason + '）';
 				a.rule = 'veto';
 			} else {
-				a.score += (d.priority - 55) * 0.15;
+				setCandidatePriority(a, PRIORITY_TIER.NORMAL, d.priority, '');
 				a.rule = 'judge:' + d.category;
 				a.rulePriority = d.priority;
 			}
@@ -4114,6 +4119,9 @@ function bestAction() {
 		/* ★ 模型融合变量声明（best 确定后再执行融合逻辑） */
 		let modelConf = null, metaMod = null, intervention = 'skip';
 
+		/* ★ 统一候选 policy 默认值 */
+		acts.forEach(function (a) { try { ensureCandidatePolicy(a); } catch (e) {} });
+
 		/* ★ 基本出牌决策标准：对候选重排 + 硬性否决（cardPlayBrain） */
 		try { applyBasicCardPlayRules(me, acts); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
@@ -4174,13 +4182,16 @@ function bestAction() {
 		/* ★ 功能②'损失最小化：识别最大损失诱因，规避给正、冒险自曝给负 */
 		try { applyLossMinimizeBonus(me, acts); } catch (eLM) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eLM); }
 
-		acts.sort(function (a, b) { return b.score - a.score; });
-		const endAction = acts.filter(function (a) { return a.type === "end"; })[0] || { type: "end", id: "end", score: 0, reason: "结束回合" };
-		best = (acts[0] && acts[0].score > 0) ? acts[0] : endAction;
+		acts.sort(compareActionCandidates);
+		const endAction = acts.filter(function (a) { return a.type === "end"; })[0] || makeActionCandidate({ type: "end", id: "end", score: 0, reason: "结束回合" });
+		ensureCandidatePolicy(endAction);
+		let eligibleActs = acts.filter(isCandidateEligible);
+		const topEligible = eligibleActs[0] || endAction;
+		best = (candidatePriorityRank(topEligible) > 0 || topEligible.score > 0) ? topEligible : endAction;
 
-		/* ★ 暴露候选给 planner */
+		/* ★ Planner / Champion / DeepThink 只消费 eligible candidates；回放仍保留完整 acts。 */
 		try {
-			_status.djsc_lastCandidates = acts.slice(0, 8);
+			_status.djsc_lastCandidates = eligibleActs.slice(0, 8);
 			_status.djsc_lastBestT = bestT;
 			_status.djsc_lastBestTs = bestTs;
 			_status.djsc_lastSit = sit;
@@ -4193,14 +4204,9 @@ function bestAction() {
 			if (refined && refined !== best) {
 				/* Planner 后续仍要经过 Champion / DeepThink / Guard，因此 winner 必须回到
 				 * acts 中的 canonical candidate，禁止同一动作以两个不同对象继续参与排序。 */
-				let canonical = acts.find(function (a) { return a === refined; }) || null;
-				if (!canonical) {
-					canonical = acts.find(function (a) {
-						if (!a || a.id !== refined.id || a.type !== refined.type) return false;
-						if (refined.target != null && a.target != null && a.target !== refined.target) return false;
-						return true;
-					}) || null;
-				}
+				let canonical = acts.find(function (a) {
+					return a && isCandidateEligible(a) && sameCandidateAction(a, refined);
+				}) || null;
 				if (canonical && canonical !== refined) {
 					Object.assign(canonical, refined);
 					best = canonical;
@@ -4208,7 +4214,8 @@ function bestAction() {
 					best = refined;
 					if (!acts.some(function (a) { return a === refined; })) acts.push(refined);
 				}
-				acts.sort(function (a, b) { return b.score - a.score; });
+				acts.sort(compareActionCandidates);
+				eligibleActs = acts.filter(isCandidateEligible);
 
 				try {
 					if (best.target && typeof best.target === 'object' &&
@@ -4314,7 +4321,7 @@ function bestAction() {
 						/* ★ 接上 AI 强度档位（此前该系数算完没人用=死开关；中=1.0 时行为与原来完全一致） */
 						const champBoost = _baseBoost * strengthFactor;
 						if (champBoost > 0 && typeof applyChampionRule === 'function') {
-							const cr = applyChampionRule(acts, best, champBoost, {
+							const cr = applyChampionRule(eligibleActs, best, champBoost, {
 								heroId: (game && game.me && (game.me.name || game.me.name1)) || '',  /* ★ 当前英雄id，主键之一 */
 							});
 							if (cr && cr.replaced && cr.best && cr.best !== best) {
@@ -4355,7 +4362,7 @@ function bestAction() {
 		 * 产出思维链 thinking，若推翻了则给出替代建议。尊重冠军策略的最终定夺。 */
 		try {
 			if (best && typeof deepThinkCritic === 'function') {
-				const _dRes = deepThinkCritic(me, acts, best, {
+				const _dRes = deepThinkCritic(me, eligibleActs, best, {
 					modelP: (modelConf && modelConf.maxProb) || 0,
 					heroId: (me && (me.name || me.name1)) || '',
 				});
@@ -4493,11 +4500,11 @@ function bestAction() {
 					me: me,
 					state: { hp: me.hp, maxHp: me.maxHp },
 					candidates: (acts || []).slice(0, 6),
-					rule: best.type === 'card' || best.type === 'skill' ? { type: best.type, id: best.id, score: best.score, target: candidateTargetValue(best), reason: best.reason || '' } : null,
+					rule: best.type === 'card' || best.type === 'skill' ? { type: best.type, id: best.id, score: best.score, target: candidateTargetValue(best), reason: best.reason || '', policy: candidatePolicySnapshot(best) } : null,
 					model: modelConf ? { label: modelConf.label, confidence: modelConf.maxProb !== undefined ? modelConf.maxProb : (modelConf.confidence !== undefined ? modelConf.confidence : 0) } : null,
 					meta: metaMod ? { familiarity: metaMod.familiarity, modulator: metaMod.modulator, level: metaMod.level } : null,
 					bus: { winner: best.type + ':' + best.id, reason: (best.reason || '').slice(0, 60) },
-					final: { type: best.type, id: best.id, score: best.score, target: candidateTargetValue(best), reason: best.reason || '' },
+					final: { type: best.type, id: best.id, score: best.score, target: candidateTargetValue(best), reason: best.reason || '', policy: candidatePolicySnapshot(best) },
 					intervention: intervention || 'none',
 				});
 			}
@@ -4526,9 +4533,9 @@ function bestAction() {
 		try {
 			const _killCand = (function () {
 				for (const a of acts) {
-					if (a.type === 'card' && ['sha','juedou','huogong'].indexOf(a.id) >= 0) {
-						if (a.score > 0 && a.reason && a.reason.indexOf('击杀') >= 0) return a;
-					}
+					const p = ensureCandidatePolicy(a);
+					if (p && p.eligible !== false && p.priorityTier === PRIORITY_TIER.FORCED &&
+						p.priorityReason && p.priorityReason.indexOf('击杀') >= 0) return a;
 				}
 				return null;
 			})();
@@ -4538,20 +4545,19 @@ function bestAction() {
 				/* 触碰红线：用兜底动作替换 */
 				if (_guardRes.fallback) {
 					best = _guardRes.fallback;
-					/* ★ 衔接修复：护栏替换动作后，若兜底动作带目标则同步 bestT，
-					 * 避免"已换动作但目标仍是原目标"的字段自相矛盾。 */
+					/* 护栏 fallback 已经是 canonical candidate，禁止再按相同 id 改写目标。
+					 * 这里只同步 bestT 供后续日志/特征使用。 */
 					try {
-						if (best.target) {
-							for (const _a2 of acts) {
-								if (_a2.id === best.id && _a2.target && _a2.target !== best.target) {
-									best.target = _a2.target;
-									break;
-								}
-							}
+						if (best.targetObj) {
+							bestT = best.targetObj;
+						} else if (best.target && !Array.isArray(best.target)) {
+							bestT = (game.players || []).find(function (p) {
+								return p && (p.name1 || p.name || '') === best.target;
+							}) || bestT;
 						}
 					} catch (eSyncT) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSyncT); }
 				} else {
-					best = { type: 'end', id: 'end', score: 0, reason: '护栏拦截降级：' + _guardRes.reason };
+					best = makeActionCandidate({ type: 'end', id: 'end', score: 0, reason: '护栏拦截降级：' + _guardRes.reason });
 				}
 				applyGuardPenalty('chooseToUse', _guardRes.rule);
 				best.reason = (best.reason || '') + '（🛡️护栏：' + _guardRes.reason + '）';
@@ -4569,13 +4575,15 @@ function bestAction() {
 		if (best && best.type === 'equip') _finalTarget = null;
 		const _finalResult = {
 			action: action,
-			reason: best.reason + "（评分" + best.score + "，" + sit.mode + "×" + sit.tempo + "，阶段=" + stageLabel + "，性格=" + riskLabel + teamTip + seatTip + econTip + styleTip + forecastTip + mtTip + trendTip + (comboLen ? "，联动" + comboLen + "条" : "") + "）",
+			reason: best.reason + "（真实收益" + runtimeScore(best.score) + "，策略优先级=" + ensureCandidatePolicy(best).priorityTier +
+				"，" + sit.mode + "×" + sit.tempo + "，阶段=" + stageLabel + "，性格=" + riskLabel + teamTip + seatTip + econTip + styleTip + forecastTip + mtTip + trendTip + (comboLen ? "，联动" + comboLen + "条" : "") + "）",
 			strat: best.type === "skill" ? "chooseToUse" : (best.type === "equip" ? "equipAfter" : (best.type === "end" ? "switchToAuto" : "useCardAfter")),
 			rule: best.id,
 			target: _finalTarget,
 			recast: !!best.recast,
 			targetScore: Math.round(bestTs),
-			score: Math.round(best.score),
+			score: runtimeScore(best.score),
+			policy: candidatePolicySnapshot(best),
 		};
 		/* ★ 暴露给策略总线 */
 		try { _status.djsc_lastBest = _finalResult; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }

@@ -213,6 +213,14 @@ function _labelText(x) {
     return map[x] || x || '?';
 }
 
+function _priorityText(policy) {
+    if (!policy) return '普通';
+    if (policy.veto || policy.eligible === false) return '已否决';
+    if (policy.priorityTier === 'forced') return '强制';
+    if (policy.priorityTier === 'critical') return '高';
+    return '普通';
+}
+
 function _renderDecision(d, idx) {
     const iv = d.intervention || 'none';
     const ivColor = iv === 'model' ? '#7fe3a0' : (iv === 'blend' ? '#ffd479' : (iv === 'rule' ? '#ff9c9c' : '#888'));
@@ -224,8 +232,14 @@ function _renderDecision(d, idx) {
 
     if (d.final) {
         h += '<div style="padding-left:10px; color:#dbe7f5; margin-top:3px;">';
-        h += '▶ 最终选择：' + _esc(_actionText(d.final)) +
-             ' <span style="color:#888;">（评分 ' + _esc(d.final.score) + '）</span>';
+        h += '▶ 最终选择：' + _esc(_actionText(d.final));
+        h += '</div>';
+        h += '<div style="padding-left:10px; color:#9fb5c8; margin-top:2px;">';
+        h += '真实收益评分：' + _esc(d.final.score) +
+             '　策略优先级：' + _esc(_priorityText(d.final.policy));
+        if (d.final.policy && d.final.policy.priorityReason) {
+            h += '（' + _esc(d.final.policy.priorityReason) + '）';
+        }
         h += '</div>';
 
         const why = _plainReason(d.final.reason || (d.bus && d.bus.reason) || '');
