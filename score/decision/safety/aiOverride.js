@@ -167,7 +167,10 @@ export function resolveActiveSkillId(player, startEvent) {
 			const cand = [ev.skill, ev.sourceSkill, ev.skillName, ev.name];
 			for (const id of cand) {
 				if (typeof id !== 'string' || !id || id === SKILL_ID) continue;
-				if (lib.skill && lib.skill[id]) return id;
+				/* 真正 lib.skill 条目是技能对象；普通事件名 chooseTarget/phaseUse 等
+				 * 即使某些测试/扩展 Proxy 对未知 key 返回函数，也不能误认成技能。 */
+				const info = lib.skill && lib.skill[id];
+				if (info && typeof info === 'object') return id;
 			}
 			ev = _parentEventOf(ev);
 		}
