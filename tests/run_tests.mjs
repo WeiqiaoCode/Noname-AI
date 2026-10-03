@@ -4519,13 +4519,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.45 transaction 不保留未知原始 result 对象');
 }
 
-/* ================= 10.46 通用技能选牌策略：成本/交换 vs 给牌 =================
- * 不使用任何技能 ID 特判。验证：
- * A. 明确 loseCard/selfDiscard/selfLose → cost；
- * B. giveCard → give，不套弃牌策略；
- * C. cost 模式强保留保命牌，优先低价值/冗余牌；
- * D. unknown/give 仅保留极小机会成本；
- * E. aiOverride 的 chooseCard wrapper 实际消费这套策略。
+/* ================= 10.46 通用技能选牌策略 =================
+ * 语义由 profile + host contract 决定；牌的排序只使用通用资源事实。
  */
 {
     const fs46 = await import('node:fs');
@@ -4534,177 +4529,162 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const host46 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'adapt', 'host.js')).href);
 
     const costProf46 = { tags: { loseCard: 1.8, draw: 1.2 } };
-    const costProfSelf46 = { tags: { selfDiscard: -1.2 } };
     const giveProf46 = { tags: { giveCard: 1.5, aux: 1.0, loseCard: 0.8 } };
     const unknownProf46 = { tags: { aux: 1.0 } };
 
-    eq(sc46.classifySkillCardSelection(costProf46), 'cost',
-        '10.46 loseCard 语义 → 通用成本/交换选牌');
-    eq(sc46.classifySkillCardSelection(costProfSelf46), 'cost',
-        '10.46 selfDiscard 语义 → 通用成本/交换选牌');
-    eq(sc46.classifySkillCardSelection(giveProf46), 'give',
-        '10.46 giveCard 是强语义，即使同时有 loseCard 也不能套弃牌策略');
-    eq(sc46.classifySkillCardSelection(unknownProf46), 'unknown',
-        '10.46 无成本/给牌证据 → 语义未知，保持保守');
-    eq(sc46.classifySkillCardSelection(unknownProf46, {
-        skillInfo: { filterCard: true },
-    }), 'cost',
-        '10.46 宿主 filterCard 且默认丢失/弃置 → declarative 成本选牌');
+    eq(sc46.classifySkillCardSelection(costProf46), 'cost', '10.46 loseCard → cost');
+    eq(sc46.classifySkillCardSelection(giveProf46), 'give', '10.46 giveCard → give');
+    eq(sc46.classifySkillCardSelection(unknownProf46), 'unknown', '10.46 无证据 → unknown');
+    eq(sc46.classifySkillCardSelection(unknownProf46, { skillInfo: { filterCard: true } }), 'cost',
+        '10.46 host filterCard 默认消耗 → declarative cost');
     eq(sc46.classifySkillCardSelection(unknownProf46, {
         skillInfo: { filterCard: true, discard: false, lose: false },
-    }), 'unknown',
-        '10.46 宿主明确 discard:false/lose:false → 不擅自当成本');
-    eq(sc46.classifySkillCardSelection(giveProf46, {
-        skillInfo: { filterCard: true, discard: false, lose: false },
-    }), 'give',
-        '10.46 giveCard + 非弃置宿主契约 → 保持给牌语义');
+    }), 'unknown', '10.46 host 明确非消耗 → unknown');
 
-    const lowHpCtx46 = {
-        me: {
-            hp: 1, maxHp: 4,
-            shaCount: 3, shanCount: 2, wuxieCount: 1, jiuCount: 1,
-            hasZhuge: false, hasPaoxiao: false,
-        },
-    };
-    const taoCost46 = sc46.skillCardSelectionAdjustment('tao', costProf46,
-        Object.assign({ cardValue: 8 }, lowHpCtx46));
-    const wxCost46 = sc46.skillCardSelectionAdjustment('wuxie', costProf46,
-        Object.assign({ cardValue: 8 }, lowHpCtx46));
-    const jiuCost46 = sc46.skillCardSelectionAdjustment('jiu', costProf46,
-        Object.assign({ cardValue: 6 }, lowHpCtx46));
-    const shaCost46 = sc46.skillCardSelectionAdjustment('sha', costProf46,
-        Object.assign({ cardValue: 3 }, lowHpCtx46));
-    ok(taoCost46.veto && taoCost46.adjustment <= -6,
-        '10.46 低血成本选牌：桃强保留，不能拿去换牌');
-    ok(wxCost46.veto && wxCost46.adjustment <= -6,
-        '10.46 唯一无懈在成本选牌中强保留');
-    ok(jiuCost46.veto && jiuCost46.adjustment <= -6,
-        '10.46 濒死酒在成本选牌中强保留');
-    ok(shaCost46.adjustment > taoCost46.adjustment,
-        '10.46 三张杀的冗余杀明显优先于保命桃作为成本');
+    const low46 = sc46.skillCardSelectionAdjustment('resource_low_46', costProf46, {
+        me: { hp: 4, maxHp: 4, handSize: 5 }, cardValue: 2, duplicates: 1,
+    });
+    const high46 = sc46.skillCardSelectionAdjustment('resource_high_46', costProf46, {
+        me: { hp: 4, maxHp: 4, handSize: 5 }, cardValue: 8, duplicates: 1,
+    });
+    ok(low46.adjustment > high46.adjustment, '10.46 低价值资源优先作为成本');
 
-    const oneSha46 = sc46.skillCardSelectionAdjustment('sha', costProf46, {
-        me: { hp: 4, maxHp: 4, shaCount: 1, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
-        cardValue: 3,
+    const rich46 = sc46.skillCardSelectionAdjustment('resource_mid_46', costProf46, {
+        me: { hp: 4, maxHp: 4, handSize: 7 }, cardValue: 5, duplicates: 1,
     });
-    const threeSha46 = sc46.skillCardSelectionAdjustment('sha', costProf46, {
-        me: { hp: 4, maxHp: 4, shaCount: 3, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
-        cardValue: 3,
+    const scarce46 = sc46.skillCardSelectionAdjustment('resource_mid_46', costProf46, {
+        me: { hp: 4, maxHp: 4, handSize: 2 }, cardValue: 5, duplicates: 1,
     });
-    ok(threeSha46.adjustment > oneSha46.adjustment,
-        '10.46 同样是杀：3张时比唯一1张更适合作为技能成本');
+    const danger46 = sc46.skillCardSelectionAdjustment('resource_mid_46', costProf46, {
+        me: { hp: 1, maxHp: 4, handSize: 2 }, cardValue: 5, duplicates: 1,
+    });
+    ok(rich46.adjustment > scarce46.adjustment, '10.46 手牌稀缺提高机会成本');
+    ok(scarce46.adjustment > danger46.adjustment, '10.46 低血进一步提高资源保留成本');
 
-    const junk46 = sc46.skillCardSelectionAdjustment('generic_junk_46', costProf46, {
-        me: { hp: 4, maxHp: 4, shaCount: 1, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
-        cardValue: 1,
+    const one46 = sc46.skillCardSelectionAdjustment('resource_dup_46', costProf46, {
+        me: { hp: 4, maxHp: 4, handSize: 6 }, cardValue: 4, duplicates: 1,
     });
-    const useful46 = sc46.skillCardSelectionAdjustment('wuzhong', costProf46, {
-        me: { hp: 4, maxHp: 4, shaCount: 1, shanCount: 1, wuxieCount: 1, jiuCount: 0 },
-        cardValue: 8,
+    const three46 = sc46.skillCardSelectionAdjustment('resource_dup_46', costProf46, {
+        me: { hp: 4, maxHp: 4, handSize: 6 }, cardValue: 4, duplicates: 3,
     });
-    ok(junk46.adjustment > useful46.adjustment,
-        '10.46 普通低价值牌比高宿主价值锦囊更适合作为交换成本');
+    ok(three46.adjustment > one46.adjustment, '10.46 同名重复降低边际保留价值');
+    ok(high46.adjustment >= -1 && three46.adjustment <= 0.35, '10.46 策略偏置严格有界');
 
-    const giveTao46 = sc46.skillCardSelectionAdjustment('tao', giveProf46, {
-        me: { hp: 1, maxHp: 4 }, cardValue: 8,
+    const giveHigh46 = sc46.skillCardSelectionAdjustment('resource_high_46', giveProf46, {
+        me: { hp: 1, maxHp: 4, handSize: 2 }, cardValue: 8, duplicates: 1,
     });
-    const giveJunk46 = sc46.skillCardSelectionAdjustment('generic_junk_46', giveProf46, {
-        me: { hp: 1, maxHp: 4 }, cardValue: 1,
+    ok(Math.abs(giveHigh46.adjustment) <= 0.2, '10.46 give 不套成本模型');
+    const unknownHigh46 = sc46.skillCardSelectionAdjustment('resource_high_46', unknownProf46, {
+        me: { hp: 1, maxHp: 4, handSize: 2 }, cardValue: 8, duplicates: 1,
     });
-    ok(!giveTao46.veto && Math.abs(giveTao46.adjustment) <= 0.2
-        && Math.abs(giveJunk46.adjustment) <= 0.2,
-        '10.46 giveCard 不使用弃牌硬保留/强排序，只保留极小机会成本');
+    ok(Math.abs(unknownHigh46.adjustment) <= 0.2, '10.46 unknown 保持原生主导');
 
-    const unknown46 = sc46.skillCardSelectionAdjustment('tao', unknownProf46, {
-        me: { hp: 1, maxHp: 4 }, cardValue: 8,
-    });
-    ok(!unknown46.veto && Math.abs(unknown46.adjustment) <= 0.2,
-        '10.46 选牌语义未知时不擅自套成本策略');
-
-    /* aiOverride 集成：同样原生分数下，cost profile 应明显选低价值牌而避开低血桃。 */
+    const lowCard46 = { name: 'resource_low_46', v: 1 };
+    const dupA46 = { name: 'resource_dup_46', v: 4 };
+    const dupB46 = { name: 'resource_dup_46', v: 4 };
+    const dupC46 = { name: 'resource_dup_46', v: 4 };
+    const highCard46 = { name: 'resource_high_46', v: 8 };
     const me46 = {
-        name: 'me46', name1: 'me46', playerid: 'me46',
-        hp: 1, maxHp: 4,
-        getCards: function (zone) {
-            if (zone === 'h') {
-                return [
-                    { name: 'tao', owner: this, v: 8 },
-                    { name: 'sha', owner: this, v: 3 },
-                    { name: 'sha', owner: this, v: 3 },
-                    { name: 'sha', owner: this, v: 3 },
-                    { name: 'generic_junk_46', owner: this, v: 1 },
-                ];
-            }
-            return [];
-        },
-        hasSkill: function () { return false; },
+        name: 'me46', name1: 'me46', playerid: 'me46', hp: 1, maxHp: 4,
+        getCards: function (zone) { return zone === 'h' ? [lowCard46, dupA46, dupB46, dupC46, highCard46] : []; },
     };
-    const oldOwner46 = host46.get.owner;
-    const oldValue46 = host46.get.value;
-    host46.get.owner = function (card) { return card && card.owner; };
-    host46.get.value = function (card) { return card && card.v; };
+    [lowCard46, dupA46, dupB46, dupC46, highCard46].forEach(c => { c.owner = me46; });
 
-    const stage46 = { skillId: 'generic_cost_skill_46', transactionId: 'tx46', ordinal: 0 };
-    const wrapped46 = ao46.wrapSkillCardOpportunityAI(function () { return 5; }, me46, stage46, costProf46);
-    const scoreTao46 = wrapped46({ name: 'tao', owner: me46, v: 8 });
-    const scoreJunk46 = wrapped46({ name: 'generic_junk_46', owner: me46, v: 1 });
-    const scoreSha46 = wrapped46({ name: 'sha', owner: me46, v: 3 });
-    ok(scoreJunk46 > scoreSha46 && scoreSha46 > scoreTao46,
-        '10.46 chooseCard 集成：垃圾牌 > 冗余杀 > 低血桃 的成本选择顺序');
+    const oldOwner46 = host46.get.owner, oldValue46 = host46.get.value, oldName46 = host46.get.name;
+    host46.get.owner = card => card && card.owner;
+    host46.get.value = card => card && card.v;
+    host46.get.name = card => card && card.name;
 
-    const foreign46 = { name: 'other46' };
-    eq(wrapped46({ name: 'generic_junk_46', owner: foreign46, v: 1 }), 5,
-        '10.46 非当前玩家持有的牌不参与技能成本重排');
+    const wrapped46 = ao46.wrapSkillCardOpportunityAI(
+        function () { return 5; }, me46,
+        { skillId: 'generic_cost_skill_46', transactionId: 'tx46', ordinal: 0 },
+        costProf46
+    );
+    const scoreLow46 = wrapped46(lowCard46);
+    const scoreDup46 = wrapped46(dupA46);
+    const scoreHigh46 = wrapped46(highCard46);
+    ok(scoreLow46 > scoreDup46 && scoreDup46 > scoreHigh46,
+        '10.46 chooseCard 集成：低价值 > 重复中价值 > 高价值');
 
-    /* declarative 技能：直接 filterCard/check(card)，不调用 chooseCard()，通过 aiValue 接入。 */
+    const foreign46 = { name: 'foreign_46', v: 0, owner: { name: 'other46' } };
+    eq(wrapped46(foreign46), 5, '10.46 非本人牌完全原生');
+
     const oldSkillRegistry46 = host46.lib.skill;
     host46.lib.skill = Object.assign({}, oldSkillRegistry46);
-    host46.lib.skill.generic_decl_cost_46 = {
-        enable: 'phaseUse',
-        filterCard: true,
-        selectCard: [1, Infinity],
-        check: function (card) { return 6 - card.v; },
-    };
-    host46.lib.skill.generic_decl_give_46 = {
-        enable: 'phaseUse',
-        filterCard: true,
-        discard: false,
-        lose: false,
-        selectCard: [1, Infinity],
-    };
+    host46.lib.skill.generic_decl_cost_46 = { filterCard: true };
+    host46.lib.skill.generic_decl_move_46 = { filterCard: true, discard: false, lose: false };
+
     const declCostEvt46 = { skill: 'generic_decl_cost_46' };
     const declCostBA46 = { type: 'skill', id: 'generic_decl_cost_46', rule: 'aux' };
-    const declTaoValue46 = ao46.skillCardAIValueModifier(
-        me46, { name: 'tao', owner: me46 }, 8, declCostBA46, declCostEvt46);
-    const declJunkValue46 = ao46.skillCardAIValueModifier(
-        me46, { name: 'generic_junk_46', owner: me46 }, 1, declCostBA46, declCostEvt46);
-    ok(declTaoValue46 > 8 && declJunkValue46 < 1,
-        '10.46 declarative 成本技能：关键牌提高 aiValue、垃圾牌降低 aiValue，使原生 C-get.value 自然选垃圾');
+    const declLow46 = ao46.skillCardAIValueModifier(me46, lowCard46, 1, declCostBA46, declCostEvt46);
+    const declHigh46 = ao46.skillCardAIValueModifier(me46, highCard46, 8, declCostBA46, declCostEvt46);
+    ok(declLow46 < 1 && declHigh46 > 8,
+        '10.46 declarative filterCard/check 也消费同一套通用资源模型');
 
-    const declGiveEvt46 = { skill: 'generic_decl_give_46' };
-    const declGiveBA46 = { type: 'skill', id: 'generic_decl_give_46', rule: 'aux' };
+    const declMoveEvt46 = { skill: 'generic_decl_move_46' };
     eq(ao46.skillCardAIValueModifier(
-        me46, { name: 'generic_junk_46', owner: me46 }, 1, declGiveBA46, declGiveEvt46), 1,
-        '10.46 declarative 非弃置/给牌技能不通过 aiValue 套成本策略');
-    eq(ao46.skillCardAIValueModifier(
-        me46, { name: 'generic_junk_46', owner: me46 }, 1,
-        { type: 'skill', id: 'other_decl_46', rule: 'aux' }, declCostEvt46), 1,
-        '10.46 当前真实 skill 与 bestAction 不一致 → aiValue 不跨技能污染');
+        me46, lowCard46, 1, { type: 'skill', id: 'generic_decl_move_46', rule: 'aux' }, declMoveEvt46), 1,
+        '10.46 declarative 非消耗选牌不套成本模型');
+
     host46.lib.skill = oldSkillRegistry46;
+    host46.get.owner = oldOwner46; host46.get.value = oldValue46; host46.get.name = oldName46;
 
-    host46.get.owner = oldOwner46;
-    host46.get.value = oldValue46;
-
-    /* 结构守卫：策略模块本身不允许出现真实技能 ID。 */
     const choiceSrc46 = fs46.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillCardChoiceBrain.js'), 'utf8');
-    ok(choiceSrc46.indexOf("skillId === 'zhiheng'") < 0
-        && choiceSrc46.indexOf("skillId === 'rende'") < 0
-        && choiceSrc46.indexOf("skillId === 'lijian'") < 0,
-        '10.46 技能选牌策略无真实技能 ID 特判');
-    ok(choiceSrc46.indexOf("return 'cost'") >= 0
-        && choiceSrc46.indexOf("return 'give'") >= 0
-        && choiceSrc46.indexOf("return 'unknown'") >= 0,
-        '10.46 选牌策略按通用语义 cost/give/unknown 分流');
+    ok(choiceSrc46.indexOf('classifyHand') < 0
+        && choiceSrc46.indexOf('vetoDiscard') < 0
+        && choiceSrc46.indexOf("cardId === '") < 0,
+        '10.46 选牌策略无具体牌名分支');
+}
+
+/* ================= 10.47 通用多目标与资源辅助 ================= */
+{
+    const sp47 = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'skills', 'skillPlayBrain.js')).href);
+    const enemyProf47 = {
+        tags: { __targets: ['enemy'], ctrl: 1.5 },
+        targets: { intent: 'offense', confidence: 0.8, inferred: true },
+        classify: 'control',
+        profit: { base: 2, cost: { net: 0 }, multi: { final: 2 } },
+    };
+    const enemyCtx47 = {
+        me: { hp: 4, maxHp: 4 }, selectTargetRange: [2, 2],
+        targets: [
+            { pp: {}, isEnemy: true, isAlly: false, hp: 4, threat: 5, handCount: 3 },
+            { pp: {}, isEnemy: true, isAlly: false, hp: 1, threat: 2, handCount: 2 },
+            { pp: {}, isEnemy: true, isAlly: false, hp: 4, threat: 1, handCount: 4 },
+        ],
+    };
+    const fixed47 = sp47.decideSkill('generic_enemy_pair_47', enemyProf47, enemyCtx47);
+    eq(fixed47.targetIndexes.length, 2, '10.47 selectTarget=[2,2] 本身驱动多目标规划');
+    eq(fixed47.targetRangeResolved, true, '10.47 固定多目标数量解析完成');
+
+    const variable47 = sp47.decideSkill('generic_enemy_pair_47', enemyProf47,
+        Object.assign({}, enemyCtx47, { selectTargetRange: [1, 2] }));
+    eq(variable47.targetIndexes.length, 1, '10.47 可变目标只规划最小必要数量');
+    eq(variable47.targetRangeResolved, false, '10.47 可变数量保留宿主追加权');
+
+    const supportTargets47 = [
+        { pp: {}, isEnemy: false, isAlly: true, hp: 1, maxHp: 4, threat: 0, handCount: 5 },
+        { pp: {}, isEnemy: false, isAlly: true, hp: 3, maxHp: 4, threat: 0, handCount: 0 },
+    ];
+    const giveProf47 = {
+        tags: { __targets: ['ally'], aux: 1, giveCard: 1 },
+        targets: { intent: 'support', confidence: 0.8, inferred: true },
+        classify: 'aux',
+        profit: { base: 2, cost: { net: 0 }, multi: { final: 2 } },
+    };
+    eq(sp47.decideSkill('generic_give_47', giveProf47, {
+        me: { hp: 4, maxHp: 4 }, selectTargetRange: [1, 1], targets: supportTargets47,
+    }).targetIndex, 1, '10.47 给牌辅助考虑资源短缺');
+
+    const healProf47 = {
+        tags: { __targets: ['ally'], aux: 1, recover: 1 },
+        targets: { intent: 'support', confidence: 0.8, inferred: true },
+        classify: 'aux',
+        profit: { base: 2, cost: { net: 0 }, multi: { final: 2 } },
+    };
+    eq(sp47.decideSkill('generic_heal_47', healProf47, {
+        me: { hp: 4, maxHp: 4 }, selectTargetRange: [1, 1], targets: supportTargets47,
+    }).targetIndex, 0, '10.47 非给牌辅助仍按生存需求');
 }
 
 /* ---------- 汇总 ---------- */
