@@ -15,5 +15,13 @@
       "card": "sha",
       "reason": "决斗红线直接读取目标精确杀数量；#36仅登记，后续质量PR改为概率推断。"
     }
+  ],
+  "knownBehaviorDebt": [
+    {
+      "id": "global-tricks-nanman-empty-hand-hit-expectation",
+      "suite": "global_tricks",
+      "case": "三空手敌人南蛮 → 高期望命中",
+      "reason": "现有行为回归在4.0.9主分支已失败；#36只登记基线，不改AOE策略语义。"
+    }
   ]
 }
