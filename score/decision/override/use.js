@@ -30,7 +30,6 @@ import { evaluateWuxie } from '../response/wuxieEvaluator.js';
 
 const ORIG_KEY = '__djsc_orig_chooseToUse';
 const SENTINEL = '__djsc_overridden_use';
-const DEGRADE_WINDOW = 5000;
 const VETO_THRESHOLD = 8;  /* ★ 否决阈值：候选分差超过此值 → 硬否决低分牌 */
 const MAX_DYING_DEPTH = 6;      /* ★ 濒死事件链最大上溯层数 */
 const TAO_GUARD_KEY = '__djsc_tao_guard';  /* ★ 护栏安装哨兵（避免叠加） */
