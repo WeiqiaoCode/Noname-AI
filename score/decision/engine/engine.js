@@ -1426,10 +1426,27 @@ function installHooks() {
 				/* ★ Decision Transaction Commit：useCard 被宿主真正调用，才确认 card/equip 决策执行。 */
 				try {
 					const _actualId = (get && typeof get.name === 'function') ? get.name(args[0], me) : (args[0] && args[0].name);
-					const _actualT = Array.isArray(args[1]) ? args[1] : (args[1] ? [args[1]] : []);
-					const _actualTarget = _actualT.map(function (p) {
-						try { return p && (p.name1 || p.name || p.playerid || ''); } catch (e) { return ''; }
-					}).filter(Boolean);
+					/* useCard 在不同本体版本里的 targets 参数位置并不完全一致：
+					 * 不假定 args[1]，而是在后续参数中只提取真实 Player/Player[]。 */
+					const _actualTarget = [];
+					function _collectActualTarget(v) {
+						if (!v) return;
+						if (Array.isArray(v)) {
+							for (let i = 0; i < v.length; i++) _collectActualTarget(v[i]);
+							return;
+						}
+						let isPlayer = false;
+						try { isPlayer = !!(get && typeof get.itemtype === 'function' && get.itemtype(v) === 'player'); } catch (e) {}
+						if (!isPlayer) {
+							try { isPlayer = typeof v === 'object' && typeof v.countCards === 'function' && v.hp !== undefined; } catch (e) {}
+						}
+						if (!isPlayer) return;
+						try {
+							const k = v.name1 || v.name || v.playerid || '';
+							if (k && _actualTarget.indexOf(k) < 0) _actualTarget.push(k);
+						} catch (e) {}
+					}
+					for (let ai = 1; ai < args.length; ai++) _collectActualTarget(args[ai]);
 					const _pendingTx = peekDecisionTransaction(me);
 					if (_pendingTx && (_pendingTx.expected.type === 'card' || _pendingTx.expected.type === 'equip')) {
 						commitDecisionTransaction(me, {
