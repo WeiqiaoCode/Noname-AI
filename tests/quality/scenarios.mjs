@@ -1,0 +1,51 @@
+export const QUALITY_SCENARIOS = Object.freeze([
+	{
+		id: 'tao_rescue',
+		file: 'tests/behavior/tao_rescue.mjs',
+		title: '桃救援关系边界',
+		dimensions: ['identity', 'allySafety', 'resource'],
+		critical: true,
+	},
+	{
+		id: 'tiesuo',
+		file: 'tests/behavior/tiesuo.mjs',
+		title: '铁索连环状态转换',
+		dimensions: ['cardStrategy', 'allySafety', 'tactics'],
+		critical: true,
+	},
+	{
+		id: 'turn_consistency',
+		file: 'tests/behavior/turn_consistency.mjs',
+		title: '兵乐拆顺回合一致性',
+		dimensions: ['consistency', 'cardStrategy', 'resource'],
+		critical: true,
+	},
+	{
+		id: 'wuxie',
+		file: 'tests/behavior/wuxie.mjs',
+		title: '无懈响应价值与保护目标',
+		dimensions: ['response', 'team', 'resource'],
+		critical: true,
+	},
+	{
+		id: 'judge_control',
+		file: 'tests/behavior/judge_control.mjs',
+		title: '判定区控制目标',
+		dimensions: ['control', 'team', 'cardStrategy'],
+		critical: true,
+	},
+	{
+		id: 'global_tricks',
+		file: 'tests/behavior/global_tricks.mjs',
+		title: '全局锦囊净收益',
+		dimensions: ['cardStrategy', 'team', 'resource'],
+		critical: true,
+	},
+	{
+		id: 'jiedao',
+		file: 'tests/behavior/jiedao.mjs',
+		title: '借刀目标与收益',
+		dimensions: ['cardStrategy', 'tactics', 'team'],
+		critical: true,
+	},
+]);

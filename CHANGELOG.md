@@ -1,12 +1,49 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.9-test（semver 4.0.9-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.10-test（semver 4.0.10-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
 
 ---
+
+## v4.0.10-test AI决策质量基线（2026-10-04）
+
+> 本版本不调整 AI 候选评分、身份推断、Planner、Guard 或卡牌策略；目标是建立后续角色质量优化的可测量基线。
+
+### Decision Quality Baseline
+
+- 新增 `score/verification/decisionQuality.js`，提供纯观测的 Top-N 候选快照、候选解释、质量维度聚合与基线报告。
+- 新增固定质量场景目录 `tests/quality/scenarios.mjs`，首批复用现有真实行为回归：
+  - 桃救援关系边界；
+  - 铁索连环状态转换；
+  - 兵乐拆顺回合一致性；
+  - 无懈响应；
+  - 判定区控制；
+  - 全局锦囊；
+  - 借刀杀人。
+- 质量维度首批覆盖：identity / allySafety / resource / cardStrategy / tactics / consistency / response / team / control。
+- “verifiedRate”只表示**当前已覆盖回归场景正确率**，明确禁止把它宣传成 AI 总实力分。
+
+### 机器可读行为测试
+
+- `tests/behavior/_harness.mjs` 增加可选 JSON 输出。
+- 原有行为测试仍可独立运行；质量 runner 可以读取每条断言而不是只看进程退出码。
+- 新增 `tests/run_decision_quality_tests.mjs`，统一执行质量场景并生成维度报告。
+
+### 隐藏信息基线
+
+- 新增静态隐藏信息审计，检查决策 / 模型 / 认知层对明显对手别名进行精确隐藏手牌读取。
+- 当前已知债务显式登记，而不是为了“100分”隐藏问题。
+- 基线共识别 **8 条历史隐藏信息债务**：涉及 `engine` 铁索属性威胁、Planner 的 AOE/救援、旧 `strategyBus` 反制、`threat` 爆发威胁与 `modelGuard` 决斗红线。
+- 本版只登记这些历史问题，不改变决策语义；后续质量 PR 应逐步替换为公开事实 / 概率推断。
+- 从本版开始：**已知债务可以被修复，但不得新增同类读取**；新增隐藏信息读取直接阻断 CI。
+
+### Top-N 解释契约
+
+- Top-N 快照固定保存最终 winner、去重候选、score、reason、eligible、priority tier/value/reason。
+- 质量观测模块只读取候选，不得修改 score、policy 或排序结果。
 
 ## v4.0.9-test 统一执行网关（2026-10-04）
 

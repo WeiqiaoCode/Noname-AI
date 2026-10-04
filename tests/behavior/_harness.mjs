@@ -28,6 +28,7 @@ const _behaviorDir = dirname(fileURLToPath(import.meta.url));          /* .../te
 const _pkg = resolve(_behaviorDir, '..', '..');                        /* .../无名AI */
 /* host.js `../../../../../noname.js` 解析为仓库根（/workspace）的 noname.js */
 const _hostPath = resolve(_behaviorDir, '..', '..', '..', '..', 'noname.js');
+const _hostScopePath = join(dirname(_hostPath), 'package.json');
 
 /* ---------- 宿主桩（与 run_tests.mjs 同语义的通用 Proxy） ---------- */
 const _HOST_STUB = `/* 自动生成的测试宿主桩——behavior 测试脚手架负责回收，勿手改、勿打包 */
@@ -52,11 +53,29 @@ export default { lib, game, ui, get, ai, _status };
 /* ---------- 宿主桩生命周期：覆盖写入，退出时恢复/回收 ---------- */
 const _hadHost = existsSync(_hostPath);
 const _hostBackup = _hadHost ? readFileSync(_hostPath, 'utf8') : null;
+const _hadHostScope = existsSync(_hostScopePath);
+const _hostScopeBackup = _hadHostScope ? readFileSync(_hostScopePath, 'utf8') : null;
+
+/* Node 18 不会把仓库内 package.json 的 type=module 作用到上一级 noname.js。
+ * 临时给宿主桩所在目录建立 ESM scope；测试退出后原样恢复。 */
+try {
+    let scope = {};
+    if (_hostScopeBackup) {
+        try { scope = JSON.parse(_hostScopeBackup); } catch (_) { scope = {}; }
+    }
+    scope.type = 'module';
+    writeFileSync(_hostScopePath, JSON.stringify(scope, null, 2) + '\n', 'utf8');
+} catch (_) {}
+
 writeFileSync(_hostPath, _HOST_STUB, 'utf8');
 function _cleanupHost() {
     try {
         if (_hostBackup !== null) writeFileSync(_hostPath, _hostBackup, 'utf8');
         else if (!_hadHost && existsSync(_hostPath)) rmSync(_hostPath);
+    } catch (e) { /* 回收失败不阻断测试 */ }
+    try {
+        if (_hostScopeBackup !== null) writeFileSync(_hostScopePath, _hostScopeBackup, 'utf8');
+        else if (!_hadHostScope && existsSync(_hostScopePath)) rmSync(_hostScopePath);
     } catch (e) { /* 回收失败不阻断测试 */ }
 }
 process.on('exit', _cleanupHost);
@@ -87,8 +106,11 @@ export function loadScore(rel) {
 /* ---------- 最小断言框架 ---------- */
 let _pass = 0;
 const _fails = [];
+const _cases = [];
 export function ok(cond, name, extra) {
-    if (cond) { _pass++; process.stdout.write('.'); }
+    const passed = !!cond;
+    _cases.push({ name: String(name || ''), ok: passed, extra: extra ? String(extra) : '' });
+    if (passed) { _pass++; process.stdout.write('.'); }
     else { _fails.push(name + (extra ? '  >> ' + extra : '')); process.stdout.write('F'); }
 }
 export function eq(a, b, name) { ok(a === b, name, 'got ' + JSON.stringify(a) + ' want ' + JSON.stringify(b)); }
@@ -97,6 +119,14 @@ export function approx(a, b, tol, name) { ok(Math.abs(a - b) <= tol, name, 'got 
 /* ---------- 汇总退出 ---------- */
 export function finish(suiteName) {
     process.stdout.write('\n');
+    if (process.env.DJSC_QUALITY_JSON === '1') {
+        process.stdout.write('@@DJSC_QUALITY@@' + JSON.stringify({
+            suite: String(suiteName || ''),
+            passed: _pass,
+            failed: _fails.length,
+            cases: _cases,
+        }) + '\n');
+    }
     if (_fails.length) {
         process.stdout.write('[' + suiteName + '] ❌ ' + _pass + ' passed, ' + _fails.length + ' failed\n');
         _fails.forEach(function (f) { process.stdout.write('  - ' + f + '\n'); });

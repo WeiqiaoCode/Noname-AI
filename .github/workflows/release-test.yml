@@ -186,15 +186,13 @@ jobs:
 
           ### 本版修复
 
-          - 新增 Execution Gateway，统一 use / respond / discard / compare 的接管资格、熔断、降级、Host 调用与事务生命周期
-          - soft Stage、card/skill真实 Commit、end-turn Commit/Cancel 全部统一走 Gateway
-          - 接管层启停不再由各模块重复读取 hardOverride / override_* / circuit
-          - decisionHook 改为单次宿主调用监督员，不再因为检查失败重复执行 choose 事件
-          - engine 的 useCard / respond / effect / logSkill / die 观测 Hook 禁止异常后第二次调用宿主
-          - Host 当前事件抛错后不重入；清理临时改写并让后续事件通过 degrade/circuit 回退原生
-          - 无懈 chooseToUse 桥接的接管资格改按 respond 层统一解释
-          - 新增执行网关契约测试，阻止公共执行职责再次散回各模块
-          - 不修改评分、身份推断、Planner、Guard 与卡牌专项策略
+          - 新增 Decision Quality Baseline，不改 AI 策略，只建立可测量质量基线
+          - 首批统一纳入桃、铁索、兵乐拆顺、无懈、判定控制、全局锦囊、借刀等固定行为场景
+          - 行为测试支持机器可读断言，CI 可按 identity / allySafety / resource / cardStrategy / tactics / consistency / response / team / control 聚合
+          - 新增 Top-N 候选质量快照，保留 winner、score、reason 与 policy priority，不改写排序
+          - 新增隐藏信息回归审计；已知历史债务显式登记，新增同类隐藏手牌读取直接阻断 CI
+          - verifiedRate 只表示已覆盖回归场景正确率，不作为 AI 总实力分
+          - 不修改候选评分、身份推断、Planner、Guard 与现有卡牌专项策略
 
           ### 测试重点
 
