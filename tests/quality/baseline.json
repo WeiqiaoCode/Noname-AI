@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "version": "4.0.10-test",
+  "policy": {
+    "verifiedBehaviorMustNotRegress": true,
+    "knownHiddenInfoDebtMayNotIncrease": true,
+    "verifiedRateIsNotOverallStrengthScore": true
+  },
+  "knownHiddenInfoDebt": [
+    {
+      "id": "modelGuard-exact-opponent-sha-count",
+      "path": "score/model/net/modelGuard.js",
+      "receiver": "p",
+      "zone": "hs",
+      "card": "sha",
+      "reason": "决斗红线直接读取目标精确杀数量；#36仅登记，后续质量PR改为概率推断。"
+    }
+  ]
+}
