@@ -150,7 +150,8 @@ import { clearCompensation } from './scoreUnify.js';
 import { makeActionCandidate, runtimeScore, applyRelativeUtilityDelta, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
 import { buildDecisionTraceLines } from './decisionTrace.js';
 import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
-import { createDecisionTransaction, commitDecisionTransaction, peekDecisionTransaction, decisionTransactionStats, resetDecisionTransactionStats } from '../state/decisionTransaction.js';
+import { createDecisionTransaction, peekDecisionTransaction, decisionTransactionStats, resetDecisionTransactionStats } from '../state/decisionTransaction.js';
+import { commitExecution, executionGatewayStats, resetExecutionGateway } from '../execution/executionGateway.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
 import { getState as modelGetState, onGameEnd as modelOnGameEnd, forceTrain as modelForceTrain } from '../../model/net/modelState.js';  /* ★ 真正的 modelState */
@@ -1449,7 +1450,7 @@ function installHooks() {
 					for (let ai = 1; ai < args.length; ai++) _collectActualTarget(args[ai]);
 					const _pendingTx = peekDecisionTransaction(me);
 					if (_pendingTx && (_pendingTx.expected.type === 'card' || _pendingTx.expected.type === 'equip')) {
-						commitDecisionTransaction(me, {
+						commitExecution(me, {
 							type: 'card',
 							id: _actualId || '',
 							target: _actualTarget.length > 1 ? _actualTarget : (_actualTarget[0] || null),
@@ -1508,7 +1509,7 @@ function installHooks() {
 				 * 其它 skill 日志直接忽略，不能把当前事务误判为 mismatch。 */
 				if (_pendingTx && _pendingTx.expected.type === 'skill' && sid &&
 					sid === _pendingTx.expected.id) {
-					commitDecisionTransaction(me, { type: 'skill', id: sid, target: null });
+					commitExecution(me, { type: 'skill', id: sid, target: null });
 				}
 			} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
 			return r;
@@ -5608,6 +5609,7 @@ export function clearScoreState() {
 	try { resetReportShown(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionFeedback(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionTransactionStats(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try { resetExecutionGateway(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ 清理策略总线信号 */
 	try {
 		if (_status) {
@@ -5628,7 +5630,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _skillTargetRange, _isSingleTargetSkillProfile, decisionTransactionStats };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _skillTargetRange, _isSingleTargetSkillProfile, decisionTransactionStats, executionGatewayStats };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
