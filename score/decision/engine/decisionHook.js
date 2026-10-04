@@ -13,6 +13,8 @@
 
 import { getTrust, DECISION_REGISTRY } from './decisionRegistry.js';
 import { recordPull } from '../../model/train/bandit.js';
+import { invokeObservedHost } from '../execution/executionGateway.js';
+import { log } from '../../foundation/diag/logger.js';
 
 /* 已安装的钩子记录 */
 const _installed = {};
@@ -104,46 +106,50 @@ function installOne(name) {
         proto[ORIG_KEY] = orig;
 
         proto[name] = function (...args) {
-            try {
-                /* ★ 空值保护：选将阶段player可能未初始化，直接走原生 */
-                if (!this || !this.game || !this.game.me) {
-                    return orig.apply(this, args);
-                }
-
-                /* 获取 trust，决定是否接管 */
-                const trust = getTrust(name);
-                if (trust < 0.5) {
-                    /* trust 太低，直接走原生 AI */
-                    return orig.apply(this, args);
-                }
-
-                /* 记录一次 Bandit pull */
-                try { recordPull(name); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-                /* 走原生决策（暂时不接管，只做记录） */
-                const result = orig.apply(this, args);
-
-                /* ★ 三层防护：合法性检查 */
-                try {
-                    if (!_checkLegality(this, name, result, args)) {
-                        return orig.apply(this, args);
-                    }
-                } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-                /* ★ 三层防护：红线检查 */
-                try {
-                    const cardId = (result && result.name) ? result.name : (typeof result === 'string' ? result : null);
-                    const target = (args && args[0] && args[0].target) ? args[0].target : null;
-                    if (!_checkRedline(this, cardId, target)) {
-                        return orig.apply(this, args);
-                    }
-                } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-                return result;
-            } catch (e) {
-                /* 出错就走原生 */
+            /* decisionHook 是监督员，不是执行器。
+             * 它只能观察一次真实宿主调用，绝不能因为检查失败再次执行同一 chooseTo*。 */
+            if (!this || !this.game || !this.game.me) {
                 return orig.apply(this, args);
             }
+
+            const trust = getTrust(name);
+            if (trust < 0.5) {
+                return orig.apply(this, args);
+            }
+
+            try { recordPull(name); }
+            catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+            const host = invokeObservedHost({
+                decisionPoint: name,
+                orig: orig,
+                thisArg: this,
+                args: args,
+            });
+            if (!host.ok) {
+                try { log.warn('decision', name + ' 宿主调用异常：' + String(host.error && host.error.message || host.reason)); } catch (_) {}
+                return host.result;
+            }
+
+            const result = host.result;
+
+            /* 合法性/红线在这里仅做诊断。GameEvent 已经由宿主创建，
+             * 监督员没有资格“重跑一次原生决策”来试图修复结果。 */
+            try {
+                if (!_checkLegality(this, name, result, args)) {
+                    log.warn('decision', name + ' 观测到可疑合法性结果，保持宿主原结果');
+                }
+            } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+            try {
+                const cardId = (result && result.name) ? result.name : (typeof result === 'string' ? result : null);
+                const target = (args && args[0] && args[0].target) ? args[0].target : null;
+                if (!_checkRedline(this, cardId, target)) {
+                    log.warn('decision', name + ' 观测到红线风险，保持宿主原结果');
+                }
+            } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+            return result;
         };
 
         _installed[name] = true;
