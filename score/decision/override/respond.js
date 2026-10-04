@@ -12,50 +12,23 @@
  * 降级策略与 use.js 相同：单次异常 → 5 秒内走本体。
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
-import { cfg } from '../../foundation/config/util.js';
 // Author: Feisheng Original | License: GPL-3.0
 import { log } from '../../foundation/diag/logger.js';
 import { decideRespond } from '../basic/respondBrain.js';
 import { isAllyOf as relIsAlly, isEnemyOf } from '../relations/relations.js';
 import { evaluateTaoRescue } from '../safety/rescuePolicy.js';
 import { evaluateWuxie, shouldUseWuxie } from '../response/wuxieEvaluator.js';   /* ★ 无懈唯一权威策略源 */
-import { trip, isTripped } from './circuit.js';
+import { executionEligibility, invokeHost } from '../execution/executionGateway.js';
 
 const ORIG_KEY = '__djsc_orig_chooseToRespond';
 const SENTINEL = '__djsc_overridden_respond';
-const DEGRADE_WINDOW = 5000;
 
 /* ★ 仅作为 respondBrain 的「关键锦囊」特征输入（影响优先级排序），
  *   不再承担「是否出无懈」的最终政策；最终政策唯一来自 wuxieEvaluator。 */
 const CRITICAL_TRICKS = ['lebu', 'bingliang', 'nanman', 'wanjian', 'juedou', 'huogong', 'shandian'];
 
-const DEGRADED = new Map();
-
-function _isDegraded(player) {
-	const ts = DEGRADED.get(player);
-	if (!ts) return false;
-	if (Date.now() - ts > DEGRADE_WINDOW) {
-		DEGRADED.delete(player);
-		return false;
-	}
-	return true;
-}
-
-function _markDegraded(player) {
-	DEGRADED.set(player, Date.now());
-}
-
 function _shouldOverride(player, event) {
-	try {
-		if (!player || !event) return false;
-		if (player === game.me) return false;
-		try { if (player.isOnline2 && player.isOnline2()) return false; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		if (cfg('hardOverride', false) === false) return false;
-		if (isTripped('respond')) return false;
-		if (_isDegraded(player)) return false;
-		if (event[SENTINEL]) return false;
-		return true;
-	} catch (e) { return false; }
+	return executionEligibility('respond', player, event, { sentinel: SENTINEL }).ok;
 }
 
 function _keepShan(player) {
@@ -191,44 +164,37 @@ export function installRespondOverride() {
 				return orig.apply(this, args);
 			}
 
-			try { ev[SENTINEL] = true; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
 			const originalFilter = ev.filterCard;
-			ev.filterCard = function (card, p, e) {
-				try {
-					if (typeof originalFilter === 'function' && !originalFilter(card, p, e)) {
-						return false;
-					}
-					const should = _shouldRespond(p, card, e);
-					/* 统计打点 */
-					try {
-						if (!_status.djsc_overrideStats) {
-							_status.djsc_overrideStats = { use: {}, respond: {}, discard: {}, compare: {} };
-						}
-						const b = _status.djsc_overrideStats.respond;
-						const key = should ? 'allow' : 'block';
-						b[key] = (b[key] || 0) + 1;
-					} catch (e2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e2); }
-					return should;
-				} catch (err) { return false; }
-			};
-
-			let result;
-			try {
-				result = orig.apply(this, args);
-			} catch (eCall) {
-				try { ev.filterCard = originalFilter; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				try { delete ev[SENTINEL]; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				_markDegraded(player);
-				trip('respond', '原生 chooseToRespond 异常：' + eCall.message, 'fatal');
-				try { return orig.apply(this, args); } catch (e2) { return null; }
-			}
-
-			/* ★ 修复：直接返回原生结果，不要包装成 Promise
-			 * 原生 chooseToRespond 返回的是 GameEvent 对象（有 .set() 方法）
-			 * 包装成 Promise 会导致下游 next.set() 报错
-			 */
-			return result;
+			const host = invokeHost({
+				kind: 'respond',
+				player: player,
+				orig: orig,
+				thisArg: this,
+				args: args,
+				prepare: function () {
+					try { ev[SENTINEL] = true; } catch (_) {}
+					ev.filterCard = function (card, p, e) {
+						try {
+							if (typeof originalFilter === 'function' && !originalFilter(card, p, e)) return false;
+							const should = _shouldRespond(p, card, e);
+							try {
+								if (!_status.djsc_overrideStats) _status.djsc_overrideStats = { use: {}, respond: {}, discard: {}, compare: {} };
+								const b = _status.djsc_overrideStats.respond;
+								const key = should ? 'allow' : 'block';
+								b[key] = (b[key] || 0) + 1;
+							} catch (_) {}
+							return should;
+						} catch (_) { return false; }
+					};
+					return function () {
+						try { ev.filterCard = originalFilter; } catch (_) {}
+					};
+				},
+				/* 宿主 GameEvent 仍需使用改写后的 filterCard；成功时不提前恢复。 */
+				cleanupOnSuccess: false,
+				failureReason: function (e) { return '原生 chooseToRespond 异常：' + e.message; },
+			});
+			return host.result;
 		};
 
 		log.info('override', 'chooseToRespond 接管层已安装');
@@ -243,7 +209,6 @@ export function uninstallRespondOverride() {
 		if (!proto || !proto[ORIG_KEY]) return;
 		proto.chooseToRespond = proto[ORIG_KEY];
 		delete proto[ORIG_KEY];
-		DEGRADED.clear();
 		log.info('override', 'chooseToRespond 接管层已卸载');
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
