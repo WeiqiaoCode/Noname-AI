@@ -129,7 +129,7 @@ eq(report.hiddenInfo.newFindings, 0, '10.62 隐藏信息技术债不得扩散');
 
 const expectedDimensions = [
 	'identity', 'allySafety', 'resource', 'cardStrategy', 'tactics',
-	'consistency', 'response', 'team', 'control',
+	'consistency', 'response', 'team', 'control', 'strategy',
 ];
 for (const dim of expectedDimensions) {
 	ok(report.dimensions[dim] && report.dimensions[dim].cases > 0,
