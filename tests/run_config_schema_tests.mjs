@@ -25,6 +25,7 @@ const root = join(here, '..');
 const configSource = readFileSync(join(root, 'js', 'config', 'config.js'), 'utf8');
 const layoutSource = readFileSync(join(root, 'js', 'config', 'configLayout.js'), 'utf8');
 const specSource = readFileSync(join(root, 'score', 'foundation', 'config', 'configSpec.js'), 'utf8');
+const utilSource = readFileSync(join(root, 'score', 'foundation', 'config', 'util.js'), 'utf8');
 
 const schemaCheck = validateSchema();
 ok(schemaCheck.ok, '10.60 schema 自身无重复/漏分组/非法默认值', schemaCheck.errors.join(' | '));
@@ -65,6 +66,9 @@ ok(specSource.includes("from '../../../js/config/configSchema.js'") &&
 	!specSource.includes('gameProfileId') &&
 	!specSource.includes('modelBackendUrl'),
 	'10.60 ConfigSpec 只派生Schema，不保留旧群号/伪active预留项');
+
+ok(utilSource.includes("configDefault") && utilSource.includes("return configDefault(k, d)"),
+	'10.60 运行时cfg缺省值也回退唯一Schema');
 
 eq(pending().length, 0, '10.60 未接线预留项不再伪装成pending配置');
 eq(readiness().percent, 100, '10.60 已登记可配置项全部来自唯一Schema');
