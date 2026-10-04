@@ -56,6 +56,8 @@ import { focusBonus, broadcastIntent, installBroadcastHooks, uninstallBroadcastH
 import { refineBestWithPlan, planForDecision } from '../strategy/planner.js';
 import { strategize } from '../strategy/strategist.js';
 import { getModeStrategy, isSameCamp, isEnemy, applyModeBoost } from '../strategy/modeStrategy.js';
+import { getStrategicState, strategicStateSnapshot, resetStrategicState } from '../strategy/strategicState.js';
+import { applyStrategicIntentToCandidates } from '../strategy/intentAlignment.js';
 import { actionValue as relActionValue, exposureOf as relExposureOf, relationStateKey } from '../relations/relations.js';   /* ★ 统一收益/暴露系统入口 */
 import { autoRegister as globalAutoRegister, installProbes } from '../../foundation/runtime/globalScanner.js';
 import '../../foundation/runtime/missingModules.js';  // ★ 缺失模块补全：5个真正工作的模块
@@ -1873,6 +1875,8 @@ function _decisionSnapshotCandidate(c, conf) {
 		reason: (c.reason || "").slice(0, 120),
 		_feat: c._feat || null,
 		_conf: (conf && conf.maxProb) ? conf.maxProb : (typeof c._conf === 'number' ? c._conf : 0.3),
+		strategicAlignment: c.strategicAlignment ? Object.assign({}, c.strategicAlignment) : null,
+		policy: candidatePolicySnapshot(c),
 	};
 }
 
@@ -1940,6 +1944,7 @@ function _finalizeDecisionRecord(me, candidates, winner, elapsedMs, phaseMs) {
 
 		entry.elapsedMs = Math.max(0, Math.round(Number(elapsedMs) || 0));
 		entry.phaseMs = phaseMs && typeof phaseMs === 'object' ? Object.assign({}, phaseMs) : null;
+		entry.strategy = strategicStateSnapshot(me);
 		entry.candidates = (candidates || []).slice(0, 8).map(function (c) {
 			return _decisionSnapshotCandidate(c, null);
 		}).filter(Boolean);
@@ -3053,6 +3058,18 @@ function bestAction() {
 		try { _probShanCache.clear(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		/* ★ 缓存存活玩家，供 extractFeatures 复用，避免循环内重复遍历 */
 		const alivePlayers = (game.players || []).filter(function(p) { return p && p.alive !== false; });
+
+		/* ★ #37 Unified Objective / Strategic Intent
+		 * 只消费公开状态 + observer-specific identity posterior + 自身私有信息。
+		 * 同回合关键状态不变时复用；目标死亡/血线/身份后验/人数/自身进攻资源变化时刷新。 */
+		let strategicState = null;
+		try {
+			strategicState = getStrategicState(me);
+			if (_status) _status.djsc_strategicState = strategicStateSnapshot(me);
+		} catch (eSI) {
+			if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSI);
+		}
+
 		_markPhase('targets');
 		const acts = [];
 		/* ===== 趋势驱动策略（把 mt.overall 从提示升级为决策权重） ===== */
@@ -4249,6 +4266,12 @@ function bestAction() {
 		try { applyResourceMaximizeBonus(me, acts); } catch (eRM) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRM); }
 		/* ★ 功能②'损失最小化：识别最大损失诱因，规避给正、冒险自曝给负 */
 		try { applyLossMinimizeBonus(me, acts); } catch (eLM) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eLM); }
+
+		/* ★ #37 战略层不修改 score：
+		 * 只有明确 CRITICAL/FORCED 职责且候选高度对齐时提升 policy tier。
+		 * 普通 FOCUS/BALANCE/DEVELOP 只记录 alignment，仍由 utility 排序。 */
+		try { applyStrategicIntentToCandidates(acts, strategicState); }
+		catch (eSI) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSI); }
 
 		acts.sort(compareActionCandidates);
 		const endAction = acts.filter(function (a) { return a.type === "end"; })[0] || makeActionCandidate({ type: "end", id: "end", score: 0, reason: "结束回合" });
@@ -5605,6 +5628,7 @@ export function clearScoreState() {
 	try { resetReportShown(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionFeedback(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionTransactionStats(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try { resetStrategicState(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetExecutionGateway(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ 清理策略总线信号 */
 	try {
