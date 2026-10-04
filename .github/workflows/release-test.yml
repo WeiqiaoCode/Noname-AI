@@ -6,8 +6,15 @@ on:
       - ".github/workflows/release-test.yml"
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*-test"
+    paths:
+      - ".github/workflows/release-test.yml"
+      - "js/config/version.js"
+      - "info.json"
+      - "package.json"
 
 permissions:
   contents: read
@@ -137,7 +144,7 @@ jobs:
 
   release:
     name: Publish GitHub pre-release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: github.event_name == 'push' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main')
     needs: package
     runs-on: ubuntu-latest
     permissions:
@@ -149,7 +156,7 @@ jobs:
         with:
           name: UnknownAI-${{ needs.package.outputs.version }}
 
-      - name: Create pre-release
+      - name: Create or reuse test pre-release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,6 +164,20 @@ jobs:
           ASSET: ${{ needs.package.outputs.asset }}
         run: |
           set -euo pipefail
+
+          TAG="v$VERSION"
+
+          # Tag 触发时仍要求来源 Tag 与版本完全一致。
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "$GITHUB_REF_NAME" != "$TAG" ]]; then
+            echo "Tag/version mismatch: tag=$GITHUB_REF_NAME expected=$TAG"
+            exit 1
+          fi
+
+          # 同版本已经发布时保持幂等，避免 main 上后续发布配置调整重复创建。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to publish."
+            exit 0
+          fi
 
           cat > release-notes.md <<EOF
           ## 无名AI $VERSION 测试版
@@ -183,8 +204,9 @@ jobs:
           自动化 release gate 已在发布前执行通过。
           EOF
 
-          gh release create "$GITHUB_REF_NAME" "$ASSET" \
-            --verify-tag \
+          # gh release create 在 Tag 不存在时，会在 --target 指定提交上创建该 Tag。
+          gh release create "$TAG" "$ASSET" \
+            --target "$GITHUB_SHA" \
             --title "无名AI $VERSION 测试版" \
             --notes-file release-notes.md \
             --prerelease
