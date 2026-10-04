@@ -148,6 +148,7 @@ import { deepValueBonus, deepCardValue, deepTargetValue, deepSituationValue } fr
 import { recordTrigger, getDecayMultiplier, applyDecay, clearDecayLog, getDecayStats } from '../tuning/decayOpt.js';
 import { clearCompensation } from './scoreUnify.js';
 import { makeActionCandidate, runtimeScore, applyRelativeUtilityDelta, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
+import { buildDecisionTraceLines } from './decisionTrace.js';
 import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
@@ -1803,6 +1804,22 @@ function _getRoundNumber() {
 	return 0;
 }
 
+let _lastDecisionTraceKey = '';
+let _lastDecisionTraceTs = 0;
+
+function _decisionSnapshotCandidate(c, conf) {
+	if (!c) return null;
+	return {
+		type: c.type,
+		id: c.id,
+		target: candidateTargetValue(c),
+		score: c.score,
+		reason: (c.reason || "").slice(0, 120),
+		_feat: c._feat || null,
+		_conf: (conf && conf.maxProb) ? conf.maxProb : (typeof c._conf === 'number' ? c._conf : 0.3),
+	};
+}
+
 function recordDecision(me, layers, candidates, winner, conf) {
 	try {
 		const entry = {
@@ -1811,19 +1828,71 @@ function recordDecision(me, layers, candidates, winner, conf) {
 			player: (me && (me.name || me.name1)) || "?",
 			layers: layers,
 			candidates: (candidates || []).slice(0, 8).map(function (c) {
-				return {
-					type: c.type, id: c.id,
-					target: c.target || null,
-					score: c.score,
-					reason: (c.reason || "").slice(0, 80),
-					_feat: c._feat || null,
-				};
-			}),
-			winner: winner ? { type: winner.type, id: winner.id, score: winner.score, reason: (winner.reason || "").slice(0, 120), _conf: (conf && conf.maxProb) ? conf.maxProb : 0.3 } : null,
+				return _decisionSnapshotCandidate(c, null);
+			}).filter(Boolean),
+			winner: _decisionSnapshotCandidate(winner, conf),
+			elapsedMs: null,
 		};
 		DECISION_LOG.push(entry);
 		while (DECISION_LOG.length > DECISION_LOG_MAX) DECISION_LOG.shift();
-	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		return entry;
+	} catch (e) {
+		if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e);
+		return null;
+	}
+}
+
+function _emitDecisionTrace(entry) {
+	try {
+		const mode = String(cfg('testDecisionLog', '摘要') || '摘要');
+		if (mode === '关闭') return;
+		if (!entry || !entry.winner) return;
+
+		const target = Array.isArray(entry.winner.target)
+			? entry.winner.target.join('+')
+			: String(entry.winner.target || '');
+		const key = [entry.round, entry.player, entry.winner.type, entry.winner.id, target].join('|');
+		const now = Date.now();
+		if (key === _lastDecisionTraceKey && now - _lastDecisionTraceTs < 500) return;
+		_lastDecisionTraceKey = key;
+		_lastDecisionTraceTs = now;
+
+		const translate = function (id) {
+			try { return (lib.translate && lib.translate[id]) || id; } catch (e) { return id; }
+		};
+		const lines = buildDecisionTraceLines(entry, mode, translate);
+		for (const line of lines) {
+			try { game.log(line); } catch (e) {
+				try { console.log(line); } catch (_) {}
+			}
+		}
+	} catch (e) {
+		if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e);
+	}
+}
+
+function _finalizeDecisionRecord(me, candidates, winner, elapsedMs) {
+	try {
+		const player = (me && (me.name || me.name1)) || "?";
+		const round = _getRoundNumber();
+		let entry = DECISION_LOG.length ? DECISION_LOG[DECISION_LOG.length - 1] : null;
+		if (!entry || entry.player !== player || entry.round !== round) {
+			entry = recordDecision(me, {}, candidates, winner, null);
+		}
+		if (!entry) return null;
+
+		entry.elapsedMs = Math.max(0, Math.round(Number(elapsedMs) || 0));
+		entry.candidates = (candidates || []).slice(0, 8).map(function (c) {
+			return _decisionSnapshotCandidate(c, null);
+		}).filter(Boolean);
+		const oldConf = entry.winner && typeof entry.winner._conf === 'number' ? entry.winner._conf : 0.3;
+		entry.winner = _decisionSnapshotCandidate(winner, { maxProb: oldConf });
+		_emitDecisionTrace(entry);
+		return entry;
+	} catch (e) {
+		if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e);
+		return null;
+	}
 }
 
 /* ★ 自动特征发现的场景上下文构造器：把"本次决策"的关键事实折叠成布尔特征。
@@ -4618,6 +4687,14 @@ function bestAction() {
 			const stratResult = strategize(me, _status.event, _finalResult);
 			if (stratResult) _finalResult.strategist = stratResult;
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+		/* ★ 测试观测：记录“最终执行候选”与本次完整 bestAction 墙钟耗时。
+		 * 仅写日志/回放，不参与评分、排序或执行。 */
+		try {
+			const _decisionMs = Math.max(0, performance.now() - _perfT0);
+			_finalResult.decisionMs = Math.round(_decisionMs);
+			_finalizeDecisionRecord(me, acts, best, _decisionMs);
+		} catch (eTrace) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTrace); }
 
 		/* ★ 存入缓存 */
 		_lastBestAction = _finalResult;
