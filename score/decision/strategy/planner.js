@@ -26,6 +26,22 @@ import { targetKey, setCandidatePriority, ensureCandidatePolicy, PRIORITY_TIER, 
 
 const PLAN_TIMEOUT = 350;
 const LOOKAHEAD_DISCOUNT = 0.7;
+
+function _nowMs() {
+	try { return performance.now(); } catch (e) { return Date.now(); }
+}
+
+function _budgetExceeded(deadline) {
+	return Number.isFinite(deadline) && _nowMs() >= deadline;
+}
+
+function _plannerDeadline(options) {
+	if (options && Number.isFinite(options.deadline)) return options.deadline;
+	const budgetMs = options && Number.isFinite(options.budgetMs)
+		? Math.max(0, options.budgetMs)
+		: PLAN_TIMEOUT;
+	return _nowMs() + budgetMs;
+}
 /* ★【对局中卡死防护】全局节流：同一决策热循环内，短时间多次调用 planSequence 只执行一次完整规划。
  *   refineBestWithPlan 每次决策都会调用本函数；若每次都从零做多步杀搜索+候选展望，对局中每轮多次决策会累积成持续卡顿。
  *   这里按 1 秒抽样执行，既保留"残局秒杀/多步展望"的规划价值，又大幅削减对局内计算压力。 */
@@ -170,14 +186,16 @@ function _findRangeEnablingWeapon(me, target) {
 	} catch (e) { return null; }
 }
 
-function _findKillSequence(me, target) {
+function _findKillSequence(me, target, deadline) {
 	try {
+		if (_budgetExceeded(deadline)) return null;
 		if (!target || !target.isIn()) return null;
 		const hp = target.hp || 0;
 		if (hp <= 0) return null;
 		if (hp > 3) return null;
 
 		const hand = _handNames(me);
+		if (_budgetExceeded(deadline)) return null;
 		/* ★ 资源占用表：追踪已被前面步骤消耗的牌，避免同一张杀被重复计入。
 		 * 例如「酒+杀」已用掉那张杀，则后续「决斗看首杀」不能再算它。 */
 		const used = {};
@@ -240,6 +258,7 @@ function _findKillSequence(me, target) {
 			if (pS <= 0) guaranteedDmg += 1;
 		}
 
+		if (_budgetExceeded(deadline)) return null;
 		if (hand.has('huogong') && totalDmg < hp) {
 			const mySuits = new Set();
 			me.getCards('h').forEach(function (c) {
@@ -260,6 +279,7 @@ function _findKillSequence(me, target) {
 			}
 		}
 
+		if (_budgetExceeded(deadline)) return null;
 		if (hand.has('juedou') && totalDmg < hp) {
 			const mySha = _countCard(me, 'sha') - (used['sha'] || 0);   /* ★ 扣除已用的杀 */
 			const tgtHand = target.countCards ? target.countCards('h') : 0;
@@ -270,6 +290,7 @@ function _findKillSequence(me, target) {
 			}
 		}
 
+		if (_budgetExceeded(deadline)) return null;
 		if (hand.has('nanman') && totalDmg < hp) {
 			take('nanman');
 			steps.push({ id: 'nanman', expect: 0.8, dmg: 1, type: 'damage' });
@@ -281,6 +302,7 @@ function _findKillSequence(me, target) {
 			totalDmg += 0.8;
 		}
 
+		if (_budgetExceeded(deadline)) return null;
 		if (hand.has('zhujin') && totalDmg < hp) {
 			take('zhujin');
 			steps.push({ id: 'zhujin', expect: 0.9, dmg: 1, type: 'damage', target: targetKey(target) });
@@ -308,11 +330,13 @@ function _findKillSequence(me, target) {
 }
 
 /* ★ 多步展望（3 步 + 分支预测） */
-function _outlookScore(me, action, target) {
+function _outlookScore(me, action, target, deadline) {
 	try {
+		if (_budgetExceeded(deadline)) return null;
 		if (!action || !action.id) return 0;
 		const id = action.id;
 		const hand = _handNames(me);
+		if (_budgetExceeded(deadline)) return null;
 		let score = 0;
 
 		/* ===== 第 1 步：当前牌的即时收益 ===== */
@@ -407,6 +431,8 @@ function _outlookScore(me, action, target) {
 			else score += 0.5;
 		}
 
+		if (_budgetExceeded(deadline)) return null;
+
 		/* ===== 第 2 步：本次牌的「后续连招」展望 ===== */
 		try {
 			/* 拆牌类 → 下一步杀 加成 */
@@ -429,6 +455,8 @@ function _outlookScore(me, action, target) {
 				score += followUpCount * 0.4;
 			}
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+		if (_budgetExceeded(deadline)) return null;
 
 		/* ===== 第 3 步：敌方反应分支预测（粗略） ===== */
 		try {
@@ -480,14 +508,17 @@ function _outlookScore(me, action, target) {
 			}
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
+		if (_budgetExceeded(deadline)) return null;
 		return Math.round(score * 100) / 100;
 	} catch (e) { return 0; }
 }
 
-export function planSequence(me) {
+export function planSequence(me, options) {
 	try {
 		if (!me) return null;
-		const t0 = performance.now();
+		const t0 = _nowMs();
+		const deadline = _plannerDeadline(options);
+		if (_budgetExceeded(deadline)) return null;
 
 		const candidates = _status.djsc_lastCandidates || [];
 		const bestT = _status.djsc_lastBestT || null;
@@ -495,9 +526,13 @@ export function planSequence(me) {
 
 		let killSeq = null;
 		for (const p of (game.players || [])) {
+			if (_budgetExceeded(deadline)) {
+				log.warn('planner', '规划预算耗尽，放弃本轮 Planner 改判');
+				return null;
+			}
 			if (!p || p === me || !p.isIn()) continue;
 			if (!isEnemyOf(me, p)) continue;
-			const ks = _findKillSequence(me, p);
+			const ks = _findKillSequence(me, p, deadline);
 			if (!ks) continue;
 
 			/* Planner 只能提升宿主已经生成的真实合法候选，不能凭推演合成动作。
@@ -538,7 +573,7 @@ export function planSequence(me) {
 				alternatives: [],
 				all: [killSeq],
 				isKill: true,
-				elapsed: performance.now() - t0,
+				elapsed: _nowMs() - t0,
 			};
 		}
 
@@ -548,24 +583,33 @@ export function planSequence(me) {
 
 		if (ranked.length < 2) return null;
 
-		const sequences = ranked.map(function (c) {
-			const outlook = _outlookScore(me, c, bestT);
-			const total = (c.score || 0) + outlook * LOOKAHEAD_DISCOUNT;
-			return {
-				action: c,
-				baseScore: c.score || 0,
+		const sequences = [];
+		for (const candidate of ranked) {
+			if (_budgetExceeded(deadline)) {
+				log.warn('planner', '规划预算耗尽，放弃本轮 Planner 改判');
+				return null;
+			}
+			const outlook = _outlookScore(me, candidate, bestT, deadline);
+			if (outlook === null || _budgetExceeded(deadline)) {
+				log.warn('planner', '规划预算耗尽，放弃本轮 Planner 改判');
+				return null;
+			}
+			const total = (candidate.score || 0) + outlook * LOOKAHEAD_DISCOUNT;
+			sequences.push({
+				action: candidate,
+				baseScore: candidate.score || 0,
 				futureScore: outlook,
 				total: Math.round(total * 100) / 100,
-				steps: [c],
+				steps: [candidate],
 				isKill: false,
-			};
-		});
+			});
+		}
 
 		sequences.sort(function (a, b) { return b.total - a.total; });
 
-		const elapsed = performance.now() - t0;
-		if (elapsed > PLAN_TIMEOUT) {
-			log.warn('planner', '规划超时 ' + Math.round(elapsed) + 'ms，降级');
+		const elapsed = _nowMs() - t0;
+		if (_budgetExceeded(deadline)) {
+			log.warn('planner', '规划预算耗尽 ' + Math.round(elapsed) + 'ms，放弃本轮 Planner 改判');
 			return null;
 		}
 
@@ -582,14 +626,25 @@ export function planSequence(me) {
 	}
 }
 
-export function refineBestWithPlan(me, best, bestT) {
+export function planForDecision(me, options) {
+	try {
+		if (cfg('enablePlanner', true) === false) return null;
+		const now = Date.now();
+		if (now - _lastPlanT < PLAN_THROTTLE_MS) return null;
+		const plan = planSequence(me, options);
+		if (plan) _lastPlanT = now;
+		return plan;
+	} catch (e) {
+		return null;
+	}
+}
+
+export function refineBestWithPlan(me, best, bestT, precomputedPlan) {
 	try {
 		if (cfg('enablePlanner', true) === false) return best;
-		/* ★【对局中卡死防护】节流采样：1 秒内只做一次完整规划，其余直接放行 best */
-		const _now = Date.now();
-		if (_now - _lastPlanT < PLAN_THROTTLE_MS) return best;
-		const plan = planSequence(me);
-		if (plan) _lastPlanT = _now;   /* 仅在真正计算完成后占用节流窗口（空跑不占） */
+		/* Engine 可传入本次 bestAction 已计算过的 plan，避免为改判和日志各算一次。
+		 * 未传时保留兼容行为，由 planForDecision 统一处理节流与预算。 */
+		const plan = arguments.length >= 4 ? precomputedPlan : planForDecision(me);
 		if (!plan || !plan.best) return best;
 
 		const planBest = plan.best;
