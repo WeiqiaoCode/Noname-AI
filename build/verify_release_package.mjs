@@ -30,6 +30,10 @@ function existsAsModule(candidate) {
   return tries.find((p) => fs.existsSync(p) && fs.statSync(p).isFile()) || null;
 }
 
+function isAllowedHostDependency(spec) {
+  return /^(?:\.\.\/)+noname\.js(?:[?#].*)?$/.test(spec);
+}
+
 function collectRelativeSpecifiers(source) {
   const specs = [];
   const patterns = [
@@ -69,6 +73,7 @@ for (const rel of required) {
 const files = walk(root);
 const jsFiles = files.filter((f) => /\.(?:js|mjs)$/i.test(f));
 let checkedImports = 0;
+let externalHostImports = 0;
 let missingImports = 0;
 
 for (const file of jsFiles) {
@@ -82,6 +87,10 @@ for (const file of jsFiles) {
     const relSource = path.relative(root, file).replaceAll(path.sep, '/');
 
     if (candidate !== root && !candidate.startsWith(root + path.sep)) {
+      if (isAllowedHostDependency(rawSpec)) {
+        externalHostImports++;
+        continue;
+      }
       missingImports++;
       fail(relSource + ' imports outside packaged extension: ' + rawSpec);
       continue;
@@ -104,5 +113,6 @@ console.log(
   '[release-package-audit] OK: ' +
   files.length + ' files, ' +
   jsFiles.length + ' JS modules, ' +
-  checkedImports + ' relative imports verified.'
+  checkedImports + ' relative imports verified, ' +
+  externalHostImports + ' allowed host imports.'
 );
