@@ -158,6 +158,9 @@ ok(softSrc.includes('stageExecutionDecision') && !softSrc.includes('stageDecisio
 	'10.61 soft override事务Stage只走Gateway');
 ok(engineSrc.includes('commitExecution') && !engineSrc.includes('commitDecisionTransaction'),
 	'10.61 card/skill真实Commit只走Gateway');
+ok(engineSrc.includes('invokeObservedHost') &&
+	!/catch\s*\([^)]*\)\s*\{\s*try\s*\{\s*return\s+[A-Za-z_$][\w$]*\.apply\(this,\s*args\)/.test(engineSrc),
+	'10.61 use/respond/effect/die等宿主观测Hook不再异常后重复执行');
 ok(indexSrc.includes('isExecutionLayerEnabled') &&
 	!indexSrc.includes("cfg('hardOverride'") &&
 	!indexSrc.includes("isTripped('use')"),
