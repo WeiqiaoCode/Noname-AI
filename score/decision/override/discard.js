@@ -12,45 +12,18 @@
  * 降级策略与 use.js 相同。
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
-import { cfg } from '../../foundation/config/util.js';
 // 作者：飞升原创 | 許可：GPL-3.0
 import { log } from '../../foundation/diag/logger.js';
 import { cardValueOf } from '../threat/threat.js';
 import { decideDiscard } from '../basic/discardBrain.js';
-import { trip, isTripped } from './circuit.js';
+import { executionEligibility, invokeHost } from '../execution/executionGateway.js';
 import { isEnemyOf } from '../relations/relations.js';   /* ★ 指令 05 Stage B：敌我唯一权威源 */
 
 const ORIG_KEY = '__djsc_orig_chooseToDiscard';
 const SENTINEL = '__djsc_overridden_discard';
-const DEGRADE_WINDOW = 5000;
-
-const DEGRADED = new Map();
-
-function _isDegraded(player) {
-	const ts = DEGRADED.get(player);
-	if (!ts) return false;
-	if (Date.now() - ts > DEGRADE_WINDOW) {
-		DEGRADED.delete(player);
-		return false;
-	}
-	return true;
-}
-
-function _markDegraded(player) {
-	DEGRADED.set(player, Date.now());
-}
 
 function _shouldOverride(player, event) {
-	try {
-		if (!player || !event) return false;
-		if (player === game.me) return false;
-		try { if (player.isOnline2 && player.isOnline2()) return false; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		if (cfg('hardOverride', false) === false) return false;
-		if (isTripped('discard')) return false;
-		if (_isDegraded(player)) return false;
-		if (event[SENTINEL]) return false;
-		return true;
-	} catch (e) { return false; }
+	return executionEligibility('discard', player, event, { sentinel: SENTINEL }).ok;
 }
 
 /* ★ 修复：ai.check 返回值带关键牌保护 */
@@ -200,30 +173,25 @@ export function installDiscardOverride() {
 				return orig.apply(this, args);
 			}
 
-			try { ev[SENTINEL] = true; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
 			const originalCheck = ev.ai && ev.ai.check;
-			try {
-				if (!ev.ai) ev.ai = {};
-				ev.ai.check = _buildCheck(player);
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-			let result;
-			try {
-				result = orig.apply(this, args);
-			} catch (eCall) {
-				try { if (ev.ai) ev.ai.check = originalCheck; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				try { delete ev[SENTINEL]; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				_markDegraded(player);
-				trip('discard', '原生 chooseToDiscard 异常：' + eCall.message, 'fatal');
-				try { return orig.apply(this, args); } catch (e2) { return null; }
-			}
-
-			/* ★ 修复：直接返回原生结果，不要包装成 Promise
-			 * 原生 chooseToDiscard 返回的是 GameEvent 对象（有 .set() 方法）
-			 * 包装成 Promise 会导致下游 next.set() 报错
-			 */
-			return result;
+			const host = invokeHost({
+				kind: 'discard',
+				player: player,
+				orig: orig,
+				thisArg: this,
+				args: args,
+				prepare: function () {
+					try { ev[SENTINEL] = true; } catch (_) {}
+					if (!ev.ai) ev.ai = {};
+					ev.ai.check = _buildCheck(player);
+					return function () {
+						try { if (ev.ai) ev.ai.check = originalCheck; } catch (_) {}
+					};
+				},
+				cleanupOnSuccess: false,
+				failureReason: function (e) { return '原生 chooseToDiscard 异常：' + e.message; },
+			});
+			return host.result;
 		};
 
 		log.info('override', 'chooseToDiscard 接管层已安装');
@@ -238,7 +206,6 @@ export function uninstallDiscardOverride() {
 		if (!proto || !proto[ORIG_KEY]) return;
 		proto.chooseToDiscard = proto[ORIG_KEY];
 		delete proto[ORIG_KEY];
-		DEGRADED.clear();
 		log.info('override', 'chooseToDiscard 接管层已卸载');
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }

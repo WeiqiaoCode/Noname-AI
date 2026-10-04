@@ -17,8 +17,8 @@ import { installUseOverride, uninstallUseOverride } from './use.js';
 import { installRespondOverride, uninstallRespondOverride } from './respond.js';
 import { installDiscardOverride, uninstallDiscardOverride } from './discard.js';
 import { installCompareOverride, uninstallCompareOverride } from './compare.js';
-import { resetCircuit, circuitStatus, isTripped } from './circuit.js';
-import { cfg } from '../../foundation/config/util.js';
+import { resetCircuit, circuitStatus } from './circuit.js';
+import { isExecutionLayerEnabled, executionGatewayStats, resetExecutionGateway } from '../execution/executionGateway.js';
 import { log } from '../../foundation/diag/logger.js';
 
 let _installed = false;
@@ -26,20 +26,12 @@ const _installedLayers = { use: false, respond: false, discard: false, compare: 
 let _retryIv = null;
 
 function _layerEnabled(layer) {
-	try {
-		if (cfg('hardOverride', true) === false) return false;
-		const v = cfg('override_' + layer, true);
-		return v !== false;
-	} catch (e) { return false; }
+	return isExecutionLayerEnabled(layer);
 }
 
 function _tryInstallLayer(layer, installFn) {
 	try {
 		if (!_layerEnabled(layer)) return false;
-		if (isTripped(layer)) {
-			log.info('override', '[' + layer + '] 熔断中，跳过安装');
-			return false;
-		}
 		if (_installedLayers[layer]) return true;
 		installFn();
 		_installedLayers[layer] = true;
@@ -54,7 +46,6 @@ function _startRetryTimer() {
 	if (_retryIv) return;
 	_retryIv = setInterval(function () {
 		try {
-			if (cfg('hardOverride', true) === false) return;
 			retryOverrideLayers();
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	}, 10000);
@@ -69,10 +60,6 @@ function _stopRetryTimer() {
 
 export function installOverrideLayers() {
 	try {
-		if (cfg('hardOverride', true) === false) {
-			log.info('override', 'hardOverride 未开启，跳过接管层');
-			return;
-		}
 		let ok = 0;
 		if (_tryInstallLayer('use', installUseOverride)) ok++;
 		if (_tryInstallLayer('respond', installRespondOverride)) ok++;
@@ -93,11 +80,10 @@ export function installOverrideLayers() {
 export function retryOverrideLayers() {
 	try {
 		if (!_installed) return;
-		if (cfg('hardOverride', true) === false) return;
-		if (!_installedLayers.use     && !isTripped('use'))     _tryInstallLayer('use', installUseOverride);
-		if (!_installedLayers.respond && !isTripped('respond')) _tryInstallLayer('respond', installRespondOverride);
-		if (!_installedLayers.discard && !isTripped('discard')) _tryInstallLayer('discard', installDiscardOverride);
-		if (!_installedLayers.compare && !isTripped('compare')) _tryInstallLayer('compare', installCompareOverride);
+		if (!_installedLayers.use)     _tryInstallLayer('use', installUseOverride);
+		if (!_installedLayers.respond) _tryInstallLayer('respond', installRespondOverride);
+		if (!_installedLayers.discard) _tryInstallLayer('discard', installDiscardOverride);
+		if (!_installedLayers.compare) _tryInstallLayer('compare', installCompareOverride);
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
@@ -109,6 +95,7 @@ export function uninstallOverrideLayers() {
 		try { uninstallDiscardOverride(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		try { uninstallCompareOverride(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		resetCircuit();
+		resetExecutionGateway();
 		_installed = false;
 		_installedLayers.use = false;
 		_installedLayers.respond = false;
@@ -123,6 +110,7 @@ export function overrideStatus() {
 		return {
 			installed: _installed,
 			circuit: circuitStatus(),
+			gateway: executionGatewayStats(),
 			layers: {
 				use:     { enabled: _layerEnabled('use'),     installed: _installedLayers.use },
 				respond: { enabled: _layerEnabled('respond'), installed: _installedLayers.respond },

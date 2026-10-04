@@ -293,6 +293,7 @@ export function installScoreEngine() {
 			['proReady', './verification/professionalReadiness.js'],
 			/* ★ 连接性修复：事件总线此前从未被挂载（孤立模块）→ 统一走总线暴露 on/emit/off */
 			['eventBus', './foundation/runtime/eventBus.js'],
+			['executionGateway', './decision/execution/executionGateway.js'],
 		];
 		/* ★ P0-10：收集全部暴露任务，全部 settle 后按结果置 modular 状态与 modularReady */
 		const _exposeTasks = [];

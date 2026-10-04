@@ -15,36 +15,25 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
-import { stageDecisionTransaction, commitDecisionTransaction, cancelDecisionTransaction } from '../state/decisionTransaction.js';
+import {
+	executionEligibility,
+	stageExecutionDecision,
+	commitExecution,
+	cancelExecution,
+	invokeHost,
+	markExecutionFailure,
+} from '../execution/executionGateway.js';
 import { cfg } from '../../foundation/config/util.js';
 import { log } from '../../foundation/diag/logger.js';
 import { evaluateTaoRescue } from '../safety/rescuePolicy.js';
 import { evaluateWuxie } from '../response/wuxieEvaluator.js';
-import { trip, isTripped } from './circuit.js';
 
 const ORIG_KEY = '__djsc_orig_chooseToUse';
 const SENTINEL = '__djsc_overridden_use';
-const DEGRADE_WINDOW = 5000;
 const VETO_THRESHOLD = 8;  /* ★ 否决阈值：候选分差超过此值 → 硬否决低分牌 */
 const MAX_DYING_DEPTH = 6;      /* ★ 濒死事件链最大上溯层数 */
 const TAO_GUARD_KEY = '__djsc_tao_guard';  /* ★ 护栏安装哨兵（避免叠加） */
 const WUXIE_BRIDGE_KEY = '__djsc_wuxie_host_bridge';
-
-const DEGRADED = new Map();
-
-function _isDegraded(player) {
-	const ts = DEGRADED.get(player);
-	if (!ts) return false;
-	if (Date.now() - ts > DEGRADE_WINDOW) {
-		DEGRADED.delete(player);
-		return false;
-	}
-	return true;
-}
-
-function _markDegraded(player) {
-	DEGRADED.set(player, Date.now());
-}
 
 function _stat(action) {
 	try {
@@ -57,27 +46,22 @@ function _stat(action) {
 }
 
 function _shouldOverride(player, event) {
-	try {
-		if (!player || !event) return false;
-		if (player === game.me) return false;
-		try { if (player.isOnline2 && player.isOnline2()) return false; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		if (cfg('hardOverride', true) === false) return false;
-		if (isTripped('use')) return false;
-		if (_isDegraded(player)) return false;
-		try {
-			const parent = event.getParent && event.getParent();
-			if (parent && parent.name === 'chooseToUse') return false;
-			/* ★ 多步骤事件：选武将/选技能不接管（左慈化身等） */
-			if (parent && (parent.name === 'chooseToSkill' || parent.name === 'chooseToCharacter')) return false;
-		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		try {
-			if (_status.currentPhase && _status.currentPhase !== player) return false;
-		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		if (event[SENTINEL]) return false;
-		return true;
-	} catch (e) { return false; }
+	const gate = executionEligibility('use', player, event, {
+		sentinel: SENTINEL,
+		requireCurrentPhase: true,
+		extraGuard: function (_player, ev) {
+			try {
+				const parent = ev.getParent && ev.getParent();
+				if (parent && parent.name === 'chooseToUse') return 'nested-chooseToUse';
+				if (parent && (parent.name === 'chooseToSkill' || parent.name === 'chooseToCharacter')) {
+					return 'multi-step-host-choice';
+				}
+			} catch (_) {}
+			return true;
+		},
+	});
+	return gate.ok;
 }
-
 function _hasAvailableLimitedSkill(player) {
 	try {
 		const skills = player.skills || [];
@@ -167,11 +151,11 @@ function _bridgeWuxieChooseToUse(player, args) {
 	const base = { isWuxie: true, bridged: false, resolved: false, use: null, decision: null };
 
 	try {
-		/* 人类本机 / 在线玩家：绝不改写其 ai1；仍直接交回宿主。 */
-		if (!player || player === game.me) return base;
-		try { if (player.isOnline2 && player.isOnline2()) return base; } catch (e) {}
+		/* 无懈虽走 chooseToUse，但执行语义属于 respond：
+		 * 人类/联机/接管开关/熔断/降级统一交给 Execution Gateway。 */
 		if (cfg('responseAI', true) === false) return base;
-		if (cfg('hardOverride', true) === false) return base;
+		const gate = executionEligibility('respond', player, request, { allowMissingEvent: true });
+		if (!gate.ok) return base;
 
 		try {
 			if (request[WUXIE_BRIDGE_KEY]) return request[WUXIE_BRIDGE_KEY];
@@ -389,15 +373,13 @@ export function installUseOverride() {
 			try {
 				ba = bestAction();
 			} catch (e) {
-				_markDegraded(player);
-				trip('use', 'bestAction 异常：' + e.message, 'fatal');
+				markExecutionFailure('use', player, 'bestAction 异常：' + e.message, 'fatal');
 				_stat('error');
 				return orig.apply(this, args);
 			}
 			const dt = performance.now() - t0;
 			if (dt > 800) {
-				_markDegraded(player);
-				trip('use', 'bestAction 耗时 ' + Math.round(dt) + 'ms', 'warn');
+				markExecutionFailure('use', player, 'bestAction 耗时 ' + Math.round(dt) + 'ms', 'warn');
 				_stat('timeout');
 				return orig.apply(this, args);
 			}
@@ -408,68 +390,73 @@ export function installUseOverride() {
 			}
 
 			/* ★ Evaluate → Stage：hard override 也只登记事务，真正 useCard/endTurn 再 Commit。 */
-			try {
-				if (ba.__djscTransaction) stageDecisionTransaction(player, ba.__djscTransaction);
-			} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
+			try { stageExecutionDecision(player, ba, 'use'); }
+			catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
 
 			/* ============ ★ 硬接管 A：引擎说"结束回合" → 短路 ============ */
 			if (ba.action === 'C' && ba.rule === 'end') {
 				if (_hasAvailableLimitedSkill(player) || _hasForcedSkill(player)) {
 					_stat('pass-limited');
-					try { cancelDecisionTransaction(player, 'end-deferred-by-forced-skill'); } catch (eTx) {}
+					try { cancelExecution(player, 'end-deferred-by-forced-skill', 'use'); } catch (eTx) {}
 					return orig.apply(this, args);
 				}
 				_stat('endTurn');
-				try { ev[SENTINEL] = true; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				const origFilterEnd = ev.filterCard;
-				ev.filterCard = function () { return false; };
-				try {
-					const rEnd = orig.apply(this, args);
-					/* filterCard 全 false 已把“结束回合”真实提交给宿主。 */
-					try { commitDecisionTransaction(player, { type: 'end', id: 'end', target: null }); } catch (eTx) {}
-					return rEnd;
-				} catch (e) {
-					try { ev.filterCard = origFilterEnd; } catch (e2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e2); }
-					try { delete ev[SENTINEL]; } catch (e3) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e3); }
-					try { cancelDecisionTransaction(player, 'end-short-circuit-error'); } catch (eTx) {}
-					_markDegraded(player);
-					trip('use', 'filterCard 短路异常：' + e.message, 'fatal');
-					return orig.apply(this, args);
-				}
+				const host = invokeHost({
+					kind: 'use',
+					player: player,
+					orig: orig,
+					thisArg: this,
+					args: args,
+					prepare: function () {
+						try { ev[SENTINEL] = true; } catch (_) {}
+						ev.filterCard = function () { return false; };
+						return function () {
+							try { ev.filterCard = origFilterEnd; } catch (_) {}
+							try { delete ev[SENTINEL]; } catch (_) {}
+						};
+					},
+					cleanupOnSuccess: false,
+					onSuccess: function () {
+						/* filterCard 全 false 已把“结束回合”真实提交给宿主。 */
+						commitExecution(player, { type: 'end', id: 'end', target: null });
+					},
+					failureReason: function (e) { return 'filterCard 短路异常：' + e.message; },
+				});
+				if (!host.ok) cancelExecution(player, 'end-short-circuit-error', 'use');
+				return host.result;
 			}
 
 			/* ============ ★ 硬接管 B：否决低价值牌 ============ */
 			const origFilterVeto = ev.filterCard;
-			ev.filterCard = function (card, p, e) {
-				try {
-					/* 先执行原 filter */
-					if (typeof origFilterVeto === 'function' && !origFilterVeto(card, p, e)) return false;
-					/* 引擎否决检查 */
-					if (_shouldVeto(player, card)) {
-						_stat('veto');
-						return false;
-					}
-					return true;
-				} catch (err) {
-					/* 否决逻辑异常 → 降级为不否决（保守） */
-					try { return typeof origFilterVeto === 'function' ? origFilterVeto(card, p, e) : true; }
-					catch (e2) { return true; }
-				}
-			};
-
-			try {
-				const r = orig.apply(this, args);
-				/* ★ 恢复原 filter（不污染后续调用） */
-				try { ev.filterCard = origFilterVeto; } catch (eRestore) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRestore); }
-				_stat('pass');
-				return r;
-			} catch (e) {
-				try { ev.filterCard = origFilterVeto; } catch (e2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e2); }
-				_markDegraded(player);
-				trip('use', 'filterCard 否决异常：' + e.message, 'fatal');
-				_stat('error');
-				return orig.apply(this, args);
-			}
+			const host = invokeHost({
+				kind: 'use',
+				player: player,
+				orig: orig,
+				thisArg: this,
+				args: args,
+				prepare: function () {
+					ev.filterCard = function (card, p, e) {
+						try {
+							if (typeof origFilterVeto === 'function' && !origFilterVeto(card, p, e)) return false;
+							if (_shouldVeto(player, card)) {
+								_stat('veto');
+								return false;
+							}
+							return true;
+						} catch (err) {
+							try { return typeof origFilterVeto === 'function' ? origFilterVeto(card, p, e) : true; }
+							catch (_) { return true; }
+						}
+					};
+					return function () { try { ev.filterCard = origFilterVeto; } catch (_) {} };
+				},
+				cleanupOnSuccess: true,
+				onSuccess: function () { _stat('pass'); },
+				failureReason: function (e) { return 'filterCard 否决异常：' + e.message; },
+			});
+			if (!host.ok) _stat('error');
+			return host.result;
 		};
 
 		log.info('override', 'chooseToUse 硬接管层已安装（结束回合 + 低价值牌否决）');
@@ -484,7 +471,6 @@ export function uninstallUseOverride() {
 		if (!proto || !proto[ORIG_KEY]) return;
 		proto.chooseToUse = proto[ORIG_KEY];
 		delete proto[ORIG_KEY];
-		DEGRADED.clear();
 		log.info('override', 'chooseToUse 硬接管层已卸载');
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }

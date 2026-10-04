@@ -186,13 +186,14 @@ jobs:
 
           ### 本版修复
 
-          - 新增 configSchema 作为配置默认值、类型、分组、文案与枚举项的唯一真相源
-          - 玩家/开发者设置布局改为 Schema 驱动，不再在 configLayout 维护第二份 groups / explanations
-          - config.js 移除 init / item 重复定义，配置默认值与下拉项统一由 Schema 注入
-          - ConfigSpec 改为兼容适配层，不再保留旧默认值、旧群号或未接线伪配置
-          - 运行时 cfg 在宿主配置缺失时统一回退 Schema 默认值
-          - QQ群默认值统一为 1080487560
-          - 新增配置一致性门禁，阻止未登记设置、默认值漂移和布局漏项进入主分支
+          - 新增 Execution Gateway，统一 use / respond / discard / compare 的接管资格、熔断、降级、Host 调用与事务生命周期
+          - soft Stage、card/skill真实 Commit、end-turn Commit/Cancel 全部统一走 Gateway
+          - 接管层启停不再由各模块重复读取 hardOverride / override_* / circuit
+          - decisionHook 改为单次宿主调用监督员，不再因为检查失败重复执行 choose 事件
+          - engine 的 useCard / respond / effect / logSkill / die 观测 Hook 禁止异常后第二次调用宿主
+          - Host 当前事件抛错后不重入；清理临时改写并让后续事件通过 degrade/circuit 回退原生
+          - 无懈 chooseToUse 桥接的接管资格改按 respond 层统一解释
+          - 新增执行网关契约测试，阻止公共执行职责再次散回各模块
           - 不修改评分、身份推断、Planner、Guard 与卡牌专项策略
 
           ### 测试重点

@@ -18,7 +18,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
-import { stageDecisionTransaction } from '../state/decisionTransaction.js';
+import { stageExecutionDecision } from '../execution/executionGateway.js';
 import { skillProfileOf } from '../skills/skills.js';
 import { beginSkillChoiceStage } from '../skills/skillChoiceTransaction.js';
 import { classifySkillCardSelection, skillCardSelectionAdjustment } from '../skills/skillCardChoiceBrain.js';
@@ -98,10 +98,10 @@ function _getBA(player) {
 		const ba = bestAction();
 
 		/* ★ Evaluate → Stage：这里只登记待提交事务，不写学习/广播/回放。
-		 * 同状态重复询问时 engine 会返回同一事务；stageDecisionTransaction 本身幂等。
+		 * 同状态重复询问时 engine 会返回同一事务；Execution Gateway 的 Stage 本身幂等。
 		 * 局面变化时 engine state-key 立即重算，不再被“按回合缓存”遮蔽。 */
 		try {
-			if (ba && ba.__djscTransaction) stageDecisionTransaction(player, ba.__djscTransaction);
+			if (ba && ba.__djscTransaction) stageExecutionDecision(player, ba, 'soft');
 		} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
 
 		return ba;

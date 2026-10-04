@@ -150,7 +150,8 @@ import { clearCompensation } from './scoreUnify.js';
 import { makeActionCandidate, runtimeScore, applyRelativeUtilityDelta, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
 import { buildDecisionTraceLines } from './decisionTrace.js';
 import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
-import { createDecisionTransaction, commitDecisionTransaction, peekDecisionTransaction, decisionTransactionStats, resetDecisionTransactionStats } from '../state/decisionTransaction.js';
+import { createDecisionTransaction, peekDecisionTransaction, decisionTransactionStats, resetDecisionTransactionStats } from '../state/decisionTransaction.js';
+import { commitExecution, executionGatewayStats, resetExecutionGateway, invokeObservedHost } from '../execution/executionGateway.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
 import { getState as modelGetState, onGameEnd as modelOnGameEnd, forceTrain as modelForceTrain } from '../../model/net/modelState.js';  /* ★ 真正的 modelState */
@@ -1403,68 +1404,71 @@ function installHooks() {
 		orig.useCard = oUse;
 		proto.useCard = function () {
 			const me = this, args = arguments;
+
+			/* 观测前置逻辑彼此隔离，任何记录失败都不能阻止真实宿主调用。 */
 			try {
-				/* ★ 记录玩家出牌日志 */
 				addPlayerLog('useCard', {
 					card: args[0] ? (args[0].name || args[0].suit + args[0].number) : '?',
 					target: args[1] ? (args[1].name || '?') : null
 				});
-				/* ★ Strategic Transition V2：只记录动作前公开状态。
-				 * 是否真正 CREATE / REMOVE 由下一次决策的 before/after 差分确认；
-				 * 被无懈/无效的动作不会留下假 commitment。 */
-				try {
-					const _cid = (get && typeof get.name === 'function') ? get.name(args[0], me) : (args[0] && args[0].name);
-					const _tg = args[1];
-					const _target = Array.isArray(_tg) ? _tg[0] : _tg;
-					if (_target && typeof _target === 'object') {
-						beginStrategicAction(me, _cid, _target, {
-							relationOf: function (mi, t) { return dispositionOf(mi, t); },
-						});
-					}
-				} catch (eRec) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRec); }
-				const next = oUse.apply(this, args);
-				/* ★ Decision Transaction Commit：useCard 被宿主真正调用，才确认 card/equip 决策执行。 */
-				try {
-					const _actualId = (get && typeof get.name === 'function') ? get.name(args[0], me) : (args[0] && args[0].name);
-					/* useCard 在不同本体版本里的 targets 参数位置并不完全一致：
-					 * 不假定 args[1]，而是在后续参数中只提取真实 Player/Player[]。 */
-					const _actualTarget = [];
-					function _collectActualTarget(v) {
-						if (!v) return;
-						if (Array.isArray(v)) {
-							for (let i = 0; i < v.length; i++) _collectActualTarget(v[i]);
-							return;
-						}
-						let isPlayer = false;
-						try { isPlayer = !!(get && typeof get.itemtype === 'function' && get.itemtype(v) === 'player'); } catch (e) {}
-						if (!isPlayer) {
-							try { isPlayer = typeof v === 'object' && typeof v.countCards === 'function' && v.hp !== undefined; } catch (e) {}
-						}
-						if (!isPlayer) return;
-						try {
-							const k = v.name1 || v.name || v.playerid || '';
-							if (k && _actualTarget.indexOf(k) < 0) _actualTarget.push(k);
-						} catch (e) {}
-					}
-					for (let ai = 1; ai < args.length; ai++) _collectActualTarget(args[ai]);
-					const _pendingTx = peekDecisionTransaction(me);
-					if (_pendingTx && (_pendingTx.expected.type === 'card' || _pendingTx.expected.type === 'equip')) {
-						commitDecisionTransaction(me, {
-							type: 'card',
-							id: _actualId || '',
-							target: _actualTarget.length > 1 ? _actualTarget : (_actualTarget[0] || null),
-						});
-					}
-				} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
-				if (next && typeof next.then === "function") {
-					Promise.resolve(next).then(function () { try { scoreCardUse(me, args[0], args[1]); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); } }).catch(function () {});
-				} else {
-					try { scoreCardUse(me, args[0], args[1]); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+			try {
+				const _cid = (get && typeof get.name === 'function') ? get.name(args[0], me) : (args[0] && args[0].name);
+				const _tg = args[1];
+				const _target = Array.isArray(_tg) ? _tg[0] : _tg;
+				if (_target && typeof _target === 'object') {
+					beginStrategicAction(me, _cid, _target, {
+						relationOf: function (mi, t) { return dispositionOf(mi, t); },
+					});
 				}
-				return next;
-			} catch (e) {
-				try { return oUse.apply(this, args); } catch (e2) { return null; }
+			} catch (eRec) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRec); }
+
+			/* Execution Gateway 规则：真实宿主函数只允许调用一次。 */
+			const host = invokeObservedHost({ orig: oUse, thisArg: this, args: Array.from(args), decisionPoint: 'useCard' });
+			if (!host.ok) return host.result;
+			const next = host.result;
+
+			/* ★ Decision Transaction Commit：useCard 被宿主真正调用成功后才确认 card/equip。 */
+			try {
+				const _actualId = (get && typeof get.name === 'function') ? get.name(args[0], me) : (args[0] && args[0].name);
+				const _actualTarget = [];
+				function _collectActualTarget(v) {
+					if (!v) return;
+					if (Array.isArray(v)) {
+						for (let i = 0; i < v.length; i++) _collectActualTarget(v[i]);
+						return;
+					}
+					let isPlayer = false;
+					try { isPlayer = !!(get && typeof get.itemtype === 'function' && get.itemtype(v) === 'player'); } catch (e) {}
+					if (!isPlayer) {
+						try { isPlayer = typeof v === 'object' && typeof v.countCards === 'function' && v.hp !== undefined; } catch (e) {}
+					}
+					if (!isPlayer) return;
+					try {
+						const k = v.name1 || v.name || v.playerid || '';
+						if (k && _actualTarget.indexOf(k) < 0) _actualTarget.push(k);
+					} catch (e) {}
+				}
+				for (let ai = 1; ai < args.length; ai++) _collectActualTarget(args[ai]);
+				const _pendingTx = peekDecisionTransaction(me);
+				if (_pendingTx && (_pendingTx.expected.type === 'card' || _pendingTx.expected.type === 'equip')) {
+					commitExecution(me, {
+						type: 'card',
+						id: _actualId || '',
+						target: _actualTarget.length > 1 ? _actualTarget : (_actualTarget[0] || null),
+					});
+				}
+			} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
+
+			if (next && typeof next.then === "function") {
+				Promise.resolve(next).then(function () {
+					try { scoreCardUse(me, args[0], args[1]); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+				}).catch(function () {});
+			} else {
+				try { scoreCardUse(me, args[0], args[1]); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 			}
+			return next;
 		};
 	}
 
@@ -1478,15 +1482,12 @@ function installHooks() {
 		orig[m] = o;
 		proto[m] = function () {
 			const me = this, args = arguments;
-			try {
-				const r = o.apply(this, args);
-				if (handler) {
-					try { rec("effects", m); handler(me, args); } catch (eS) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eS); }
-				}
-				return r;
-			} catch (e) {
-				try { return o.apply(this, args); } catch (e2) { return null; }
+			const host = invokeObservedHost({ orig: o, thisArg: this, args: Array.from(args), decisionPoint: m });
+			if (!host.ok) return host.result;
+			if (handler) {
+				try { rec("effects", m); handler(me, args); } catch (eS) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eS); }
 			}
+			return host.result;
 		};
 	});
 
@@ -1497,21 +1498,18 @@ function installHooks() {
 		orig.logSkill = oLogSkill;
 		proto.logSkill = function () {
 			const me = this, args = arguments;
-			let r;
-			try { r = oLogSkill.apply(this, args); }
-			catch (e) { return oLogSkill.apply(this, args); }
+			const host = invokeObservedHost({ orig: oLogSkill, thisArg: this, args: Array.from(args), decisionPoint: 'logSkill' });
+			if (!host.ok) return host.result;
 			try {
 				const sid = (typeof args[0] === 'string') ? args[0] :
 					(args[0] && (args[0].name || args[0].skill || args[0].id)) || '';
 				const _pendingTx = peekDecisionTransaction(me);
-				/* logSkill 也会记录被动/旁路技能；只有 id 与待提交主动技能完全一致才 Commit。
-				 * 其它 skill 日志直接忽略，不能把当前事务误判为 mismatch。 */
 				if (_pendingTx && _pendingTx.expected.type === 'skill' && sid &&
 					sid === _pendingTx.expected.id) {
-					commitDecisionTransaction(me, { type: 'skill', id: sid, target: null });
+					commitExecution(me, { type: 'skill', id: sid, target: null });
 				}
 			} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
-			return r;
+			return host.result;
 		};
 	}
 
@@ -1522,17 +1520,15 @@ function installHooks() {
 		proto.respond = function () {
 			const me = this, args = arguments;
 			try {
-				/* ★ 记录玩家响应日志 */
 				addPlayerLog('respond', {
 					card: args[0] ? (args[0].name || args[0].suit + args[0].number) : '?'
 				});
-				const r = oRespond.apply(this, args);
-				/* respond 的第一个参数是 card */
-				try { deckConsume(args[0]); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				return r;
-			} catch (e) {
-				try { return oRespond.apply(this, args); } catch (e2) { return null; }
-			}
+			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+
+			const host = invokeObservedHost({ orig: oRespond, thisArg: this, args: Array.from(args), decisionPoint: 'respond' });
+			if (!host.ok) return host.result;
+			try { deckConsume(args[0]); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+			return host.result;
 		};
 	}
 
@@ -1621,10 +1617,11 @@ function installHooks() {
 						}
 					}
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				return oDie.apply(this, args);
 			} catch (e) {
-				try { return oDie.apply(this, args); } catch (e2) { return null; }
+				if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e);
 			}
+			const host = invokeObservedHost({ orig: oDie, thisArg: this, args: Array.from(args), decisionPoint: 'die' });
+			return host.result;
 		};
 	}
 
@@ -5608,6 +5605,7 @@ export function clearScoreState() {
 	try { resetReportShown(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionFeedback(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionTransactionStats(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try { resetExecutionGateway(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ 清理策略总线信号 */
 	try {
 		if (_status) {
@@ -5628,7 +5626,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _skillTargetRange, _isSingleTargetSkillProfile, decisionTransactionStats };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _skillTargetRange, _isSingleTargetSkillProfile, decisionTransactionStats, executionGatewayStats };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {

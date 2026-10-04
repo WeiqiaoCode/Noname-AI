@@ -12,41 +12,14 @@
  * 降级策略与 use.js 相同。
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
-import { cfg } from '../../foundation/config/util.js';
 import { log } from '../../foundation/diag/logger.js';
-import { trip, isTripped } from './circuit.js';
+import { executionEligibility, invokeHost } from '../execution/executionGateway.js';
 
 const ORIG_KEY = '__djsc_orig_chooseToCompare';
 const SENTINEL = '__djsc_overridden_compare';
-const DEGRADE_WINDOW = 5000;
-
-const DEGRADED = new Map();
-
-function _isDegraded(player) {
-	const ts = DEGRADED.get(player);
-	if (!ts) return false;
-	if (Date.now() - ts > DEGRADE_WINDOW) {
-		DEGRADED.delete(player);
-		return false;
-	}
-	return true;
-}
-
-function _markDegraded(player) {
-	DEGRADED.set(player, Date.now());
-}
 
 function _shouldOverride(player, event) {
-	try {
-		if (!player || !event) return false;
-		if (player === game.me) return false;
-		try { if (player.isOnline2 && player.isOnline2()) return false; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-		if (cfg('hardOverride', false) === false) return false;
-		if (isTripped('compare')) return false;
-		if (_isDegraded(player)) return false;
-		if (event[SENTINEL]) return false;
-		return true;
-	} catch (e) { return false; }
+	return executionEligibility('compare', player, event, { sentinel: SENTINEL }).ok;
 }
 
 function _compareValue(card, player, event) {
@@ -85,32 +58,27 @@ export function installCompareOverride() {
 				return orig.apply(this, args);
 			}
 
-			try { ev[SENTINEL] = true; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
 			const originalAi = ev.ai;
-			try {
-				if (!ev.ai) ev.ai = {};
-				ev.ai.check = function (card) {
-					try { return _compareValue(card, player, ev); } catch (e) { return 0; }
-				};
-			} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
-			let result;
-			try {
-				result = orig.apply(this, args);
-			} catch (eCall) {
-				try { ev.ai = originalAi; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				try { delete ev[SENTINEL]; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-				_markDegraded(player);
-				trip('compare', '原生 chooseToCompare 异常：' + eCall.message, 'fatal');
-				try { return orig.apply(this, args); } catch (e2) { return null; }
-			}
-
-			/* ★ 修复：直接返回原生结果，不要包装成 Promise
-			 * 原生 chooseToCompare 返回的是 GameEvent 对象（有 .set() 方法）
-			 * 包装成 Promise 会导致下游 next.set() 报错
-			 */
-			return result;
+			const host = invokeHost({
+				kind: 'compare',
+				player: player,
+				orig: orig,
+				thisArg: this,
+				args: args,
+				prepare: function () {
+					try { ev[SENTINEL] = true; } catch (_) {}
+					if (!ev.ai) ev.ai = {};
+					ev.ai.check = function (card) {
+						try { return _compareValue(card, player, ev); } catch (_) { return 0; }
+					};
+					return function () {
+						try { ev.ai = originalAi; } catch (_) {}
+					};
+				},
+				cleanupOnSuccess: false,
+				failureReason: function (e) { return '原生 chooseToCompare 异常：' + e.message; },
+			});
+			return host.result;
 		};
 
 		log.info('override', 'chooseToCompare 接管层已安装');
@@ -125,7 +93,6 @@ export function uninstallCompareOverride() {
 		if (!proto || !proto[ORIG_KEY]) return;
 		proto.chooseToCompare = proto[ORIG_KEY];
 		delete proto[ORIG_KEY];
-		DEGRADED.clear();
 		log.info('override', 'chooseToCompare 接管层已卸载');
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
