@@ -22,7 +22,7 @@ import { evaluateTiesuoActions, tiesuoUtilityToEngineRaw } from '../cards/tiesuo
 import { evaluateActionTransitionPenalty, beginStrategicAction, reconcileStrategicTransitions, beginStrategicTurn } from '../state/turnStrategicState.js';   /* ★ 回合内战略状态转移唯一权威源 */
 import { buildPlayerSnapshot, buildTargetCandidate } from '../state/playerSnapshot.js';   /* ★ 指令 05 Stage A+C：统一 Player State Snapshot + 目标候选契约（禁止再猜宿主字段） */
 import { codeGainOf, skillRuleOf, detectCombo, skillProfileOf, skillBranchesOf, checkBranch, skillStagesOf, skillInteractionOf, skillTagsOf } from '../skills/skills.js';
-import { cacheGet, cacheSet, checkStateChanged, initStateWatcher } from '../../foundation/storage/cache.js';
+import { cacheGet, cacheSet, checkStateChanged, initStateWatcher, stateKey } from '../../foundation/storage/cache.js';
 import { enemiesOf, isEnemyOf, isAllyOf, dispositionOf, situationFactor, targetScore, probHasBagua, probHasShan, hasVengeanceSkill, cardValueOf, clearThreatCache, seatPressure, forecastSummary, burstThreatOf, maxBurstThreat, threatOf, linkedChainValue } from '../threat/threat.js';
 import { isPlayerLinked } from '../state/playerState.js';   /* ★ 指令 02：唯一横置状态读取入口 */
 import { miniPredict, cardIdOf, MINI_W } from '../../model/net/mini-model.js';
@@ -2095,9 +2095,12 @@ function _calcAllyDamagePenalty(player, target, cardId) {
 }
 
 /* 统一动作评分：枚举所有候选动作（技能/卡牌/装备/结束）→ 打分 → 选最高 */
-/* ★ 决策缓存：100ms内不重复计算，减少CPU负载 */
+/* ★ 决策缓存：以 world-state + relation fingerprint 为主键。
+ * 同一状态允许短时间复用，任何公开局面/事件/敌我关系变化立即失效。 */
+const BEST_ACTION_CACHE_TTL = 1200;
 let _lastBestAction = null;
 let _lastBestActionTime = 0;
+let _lastBestActionStateKey = '';
 let _lastRelationStateKey = '';
 
 /* ============================================
@@ -2742,19 +2745,22 @@ function bestAction() {
 		if (_confirmed && _confirmed.length) {
 			_lastBestAction = null;
 			_lastBestActionTime = 0;
+			_lastBestActionStateKey = '';
 		}
 	} catch (eStrategicSync) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eStrategicSync); }
 
 	/* ★ World-state invalidation：
 	 * 身份明置、阵营/态度翻转、行为证据导致敌友关系变化时，即使 HP/手牌/装备均未变化，
 	 * 旧 bestAction 也必须立即失效。这里不识别“跳身份”事件，只比较统一 relation fingerprint。 */
+	let _currentRelationKey = '';
 	try {
 		const _relMe = (_status && _status.currentPhase) || game.me;
-		const _relKey = _relMe ? relationStateKey(_relMe) : '';
-		if (_relKey !== _lastRelationStateKey) {
-			_lastRelationStateKey = _relKey;
+		_currentRelationKey = _relMe ? relationStateKey(_relMe) : '';
+		if (_currentRelationKey !== _lastRelationStateKey) {
+			_lastRelationStateKey = _currentRelationKey;
 			_lastBestAction = null;
 			_lastBestActionTime = 0;
+			_lastBestActionStateKey = '';
 			clearThreatCache();
 		}
 	} catch (eRelState) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRelState); }
@@ -2763,11 +2769,20 @@ function bestAction() {
 	if (checkStateChanged()) {
 		_lastBestAction = null;
 		_lastBestActionTime = 0;
+		_lastBestActionStateKey = '';
 	}
 
-	/* ★ 缓存命中：100ms内直接返回上次结果。
-	 * Profiler 已在函数入口启动，缓存短路也必须闭合计时栈。 */
-	if (_lastBestAction && (Date.now() - _lastBestActionTime) < 100) {
+	/* ★ State-key cache：只有“公开局面 + 当前事件窗口 + 敌我关系”完全相同才复用。
+	 * TTL 仅是安全上限，不再是决定缓存正确性的主要依据。 */
+	let _decisionStateKey = '';
+	try {
+		_decisionStateKey = stateKey() + '::REL=' + _currentRelationKey;
+	} catch (eStateKey) {
+		_decisionStateKey = '';
+	}
+	if (_lastBestAction && _decisionStateKey &&
+		_lastBestActionStateKey === _decisionStateKey &&
+		(Date.now() - _lastBestActionTime) < BEST_ACTION_CACHE_TTL) {
 		try { perfMark('bestAction.cache', performance.now() - _perfT0); } catch (eP) {}
 		try { profEnd('bestAction'); } catch (eP) {}
 		return _lastBestAction;
@@ -4708,9 +4723,11 @@ function bestAction() {
 			try { profEnd('bestAction'); } catch (eP) {}
 		}
 
-		/* ★ 存入缓存 */
+		/* ★ 存入缓存：仅缓存本次计算开始时对应的 state-key。
+		 * bestAction 本身应为纯决策；若后处理意外改变公开状态，下一次 stateKey 会自然失效。 */
 		_lastBestAction = _finalResult;
 		_lastBestActionTime = Date.now();
+		_lastBestActionStateKey = _decisionStateKey || '';
 
 		return _finalResult;
 	} catch (e) {
