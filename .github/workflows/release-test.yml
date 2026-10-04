@@ -130,7 +130,10 @@ jobs:
           grep -q '^无名AI/info.json$' package-files.txt
           grep -q '^无名AI/js/' package-files.txt
           grep -q '^无名AI/score/' package-files.txt
-          grep -q '^无名AI/logs/今日修改日志.js
+          grep -q '^无名AI/logs/今日修改日志.js$' package-files.txt
+          grep -q '^无名AI/logs/WORK_TRAIL.js$' package-files.txt
+
+          if grep -Eq '^无名AI/(\.github|tests|build|DEV_GUIDE)/' package-files.txt; then
             echo "Development-only files leaked into release package."
             exit 1
           fi
