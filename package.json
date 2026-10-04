@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Community-maintained Noname AI extension and decision engine.",
   "scripts": {
-    "test": "node tests/run_tests.mjs && node tests/run_phase_aoe_tests.mjs && node tests/run_decision_trace_tests.mjs"
+    "test": "node tests/run_tests.mjs && node tests/run_phase_aoe_tests.mjs && node tests/run_decision_trace_tests.mjs && node tests/run_decision_transaction_tests.mjs"
   },
   "engines": {
     "node": ">=18"
