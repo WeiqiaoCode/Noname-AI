@@ -52,6 +52,9 @@ export function topCandidateSnapshot(entry, limit) {
 			priorityTier: policy.priorityTier || 'normal',
 			priorityValue: finite(policy.priorityValue, 0),
 			priorityReason: String(policy.priorityReason || ''),
+			strategicAlignment: candidate.strategicAlignment && typeof candidate.strategicAlignment === 'object'
+				? Object.assign({}, candidate.strategicAlignment)
+				: null,
 		});
 	};
 
