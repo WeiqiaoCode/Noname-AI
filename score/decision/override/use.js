@@ -152,11 +152,11 @@ function _bridgeWuxieChooseToUse(player, args) {
 	const base = { isWuxie: true, bridged: false, resolved: false, use: null, decision: null };
 
 	try {
-		/* 人类本机 / 在线玩家：绝不改写其 ai1；仍直接交回宿主。 */
-		if (!player || player === game.me) return base;
-		try { if (player.isOnline2 && player.isOnline2()) return base; } catch (e) {}
+		/* 无懈虽走 chooseToUse，但执行语义属于 respond：
+		 * 人类/联机/接管开关/熔断/降级统一交给 Execution Gateway。 */
 		if (cfg('responseAI', true) === false) return base;
-		if (cfg('hardOverride', true) === false) return base;
+		const gate = executionEligibility('respond', player, request, { allowMissingEvent: true });
+		if (!gate.ok) return base;
 
 		try {
 			if (request[WUXIE_BRIDGE_KEY]) return request[WUXIE_BRIDGE_KEY];
