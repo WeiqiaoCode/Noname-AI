@@ -68,13 +68,14 @@ ok(detail.some(x => x.includes('性能：') && x.includes('planner=7428ms') && x
 
 const engine = readFileSync(join(root, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
 const config = readFileSync(join(root, 'js', 'config', 'config.js'), 'utf8');
-const layout = readFileSync(join(root, 'js', 'config', 'configLayout.js'), 'utf8');
+const schema = await import(pathToFileURL(join(root, 'js', 'config', 'configSchema.js')).href + '?test=4.0.8');
 const panel = readFileSync(join(root, 'score', 'view', 'panel', 'panel.js'), 'utf8');
 
-ok(config.includes("testDecisionLog:") && config.includes("init: '摘要'"),
-	'10.53 测试版默认开启摘要决策日志');
-ok(layout.includes("'testDecisionLog'") && layout.includes('测试版决策可观测性'),
-	'10.53 决策日志设置进入战报与分析分组');
+ok(config.includes("testDecisionLog:") && schema.CONFIG_ITEMS.testDecisionLog.default === '摘要',
+	'10.53 测试版默认开启摘要决策日志（默认值来自Schema）');
+ok(schema.CONFIG_SECTIONS.some(s => s.id === 'player_report' && s.entries.includes('testDecisionLog')) &&
+	schema.CONFIG_ITEMS.testDecisionLog.description.includes('测试版决策可观测性'),
+	'10.53 决策日志由Schema归入战报与回放分组');
 ok(engine.includes("cfg('testDecisionLog', '摘要')"),
 	'10.53 engine 只通过配置开关决定是否显示测试日志');
 ok(engine.includes("_deferEffect('decision-trace'") &&
