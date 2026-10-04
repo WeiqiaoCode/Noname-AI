@@ -147,6 +147,9 @@ ok(engineSource.indexOf("applyStrategicIntentToCandidates(acts, strategicState)"
 	'10.62 Strategic Intent在canonical排序前应用');
 ok(traceSource.includes("strategyText(entry.strategy)") && traceSource.includes("战略："),
 	'10.62 Decision Trace展示Role Objective与Intent');
+ok(engineSource.includes('Strategic Policy Barrier') &&
+	engineSource.includes('sameCandidatePolicyBand(strategicTop, best)'),
+	'10.62 Champion/DeepThink不得跨越CRITICAL/FORCED战略职责');
 
 process.stdout.write('\n\n' + formatQualityBaseline(report) + '\n');
 process.stdout.write('known behavior debt: ' + knownBehaviorDebt.length +
