@@ -3,6 +3,31 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	EXECUTION_KINDS,
+	createExecutionGatewayCore,
+} from '../score/decision/execution/executionGatewayCore.js';
+import {
+	createDecisionTransaction,
+	stageDecisionTransaction,
+	commitDecisionTransaction,
+	cancelDecisionTransaction,
+	resetDecisionTransactionStats,
+	peekDecisionTransaction,
+} from '../score/decision/state/decisionTransaction.js';
+
+let currentPhase = null;
+const gateway = createExecutionGatewayCore({
+	config: function (_key, fallback) { return fallback; },
+	isTripped: function () { return false; },
+	trip: function () {},
+	getGameMe: function () { return null; },
+	getCurrentPhase: function () { return currentPhase; },
+	stageTransaction: stageDecisionTransaction,
+	commitTransaction: commitDecisionTransaction,
+	cancelTransaction: cancelDecisionTransaction,
+	peekTransaction: peekDecisionTransaction,
+});
+
+const {
 	executionEligibility,
 	invokeHost,
 	invokeObservedHost,
@@ -11,12 +36,7 @@ import {
 	cancelExecution,
 	executionGatewayStats,
 	resetExecutionGateway,
-} from '../score/decision/execution/executionGateway.js';
-import {
-	createDecisionTransaction,
-	resetDecisionTransactionStats,
-	peekDecisionTransaction,
-} from '../score/decision/state/decisionTransaction.js';
+} = gateway;
 
 let pass = 0;
 const fails = [];
