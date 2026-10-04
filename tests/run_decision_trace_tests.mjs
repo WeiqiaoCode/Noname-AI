@@ -35,6 +35,13 @@ const entry = {
 		team: { focus:'SP刘备' },
 		multiturn: { overall:'stable' },
 	},
+	phaseMs: {
+		planner: 7428,
+		candidates: 531,
+		telemetry: 472,
+		targets: 126,
+		context: 42,
+	},
 };
 const tr = id => ({ sha:'杀', guohe:'过河拆桥', lebu:'乐不思蜀' }[id] || id);
 
@@ -56,6 +63,8 @@ ok(detail.some(x => x.includes('候选：') && x.includes('1.杀→SP刘备') &&
 	'10.53 详细模式列出前三候选');
 ok(detail.some(x => x.includes('阶段=mid') && x.includes('风险=medium') && x.includes('集火=SP刘备')),
 	'10.53 详细模式显示关键策略信号');
+ok(detail.some(x => x.includes('性能：') && x.includes('planner=7428ms') && x.includes('candidates=531ms')),
+	'10.53 详细模式显示按耗时排序的性能热点');
 
 const engine = readFileSync(join(root, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
 const config = readFileSync(join(root, 'js', 'config', 'config.js'), 'utf8');
@@ -68,7 +77,7 @@ ok(layout.includes("'testDecisionLog'") && layout.includes('测试版决策可�
 	'10.53 决策日志设置进入战报与分析分组');
 ok(engine.includes("cfg('testDecisionLog', '摘要')"),
 	'10.53 engine 只通过配置开关决定是否显示测试日志');
-ok(engine.includes('_finalizeDecisionRecord(me, acts, best, _decisionMs)'),
+ok(engine.includes('_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs)'),
 	'10.53 日志在最终 bestAction 候选确定后写入');
 ok(engine.includes('_finalResult.decisionMs = Math.round(_decisionMs)'),
 	'10.53 最终结果暴露只读 decisionMs 性能诊断');

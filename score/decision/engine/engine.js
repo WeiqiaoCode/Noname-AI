@@ -22,7 +22,7 @@ import { evaluateTiesuoActions, tiesuoUtilityToEngineRaw } from '../cards/tiesuo
 import { evaluateActionTransitionPenalty, beginStrategicAction, reconcileStrategicTransitions, beginStrategicTurn } from '../state/turnStrategicState.js';   /* ★ 回合内战略状态转移唯一权威源 */
 import { buildPlayerSnapshot, buildTargetCandidate } from '../state/playerSnapshot.js';   /* ★ 指令 05 Stage A+C：统一 Player State Snapshot + 目标候选契约（禁止再猜宿主字段） */
 import { codeGainOf, skillRuleOf, detectCombo, skillProfileOf, skillBranchesOf, checkBranch, skillStagesOf, skillInteractionOf, skillTagsOf } from '../skills/skills.js';
-import { cacheGet, cacheSet, checkStateChanged, initStateWatcher } from '../../foundation/storage/cache.js';
+import { cacheGet, cacheSet, checkStateChanged, initStateWatcher, stateKey } from '../../foundation/storage/cache.js';
 import { enemiesOf, isEnemyOf, isAllyOf, dispositionOf, situationFactor, targetScore, probHasBagua, probHasShan, hasVengeanceSkill, cardValueOf, clearThreatCache, seatPressure, forecastSummary, burstThreatOf, maxBurstThreat, threatOf, linkedChainValue } from '../threat/threat.js';
 import { isPlayerLinked } from '../state/playerState.js';   /* ★ 指令 02：唯一横置状态读取入口 */
 import { miniPredict, cardIdOf, MINI_W } from '../../model/net/mini-model.js';
@@ -53,7 +53,7 @@ import { loadFeedback, recordSkillUse, flushFeedback, feedbackCount } from '../.
 import { multiTurnForecast } from '../strategy/multiturn.js';
 import { loadStyleFeedback, recordStyleOutcome, flushStyleFeedback, recordPlayerTag, saveStyleFeedback } from '../../perception/feedback/styleFeedback.js';
 import { focusBonus, broadcastIntent, installBroadcastHooks, uninstallBroadcastHooks, readIntents, snapshotBroadcast } from '../../perception/team/teamBroadcast.js';
-import { refineBestWithPlan, planSequence } from '../strategy/planner.js';
+import { refineBestWithPlan, planForDecision } from '../strategy/planner.js';
 import { strategize } from '../strategy/strategist.js';
 import { getModeStrategy, isSameCamp, isEnemy, applyModeBoost } from '../strategy/modeStrategy.js';
 import { actionValue as relActionValue, exposureOf as relExposureOf, relationStateKey } from '../relations/relations.js';   /* ★ 统一收益/暴露系统入口 */
@@ -1832,6 +1832,7 @@ function recordDecision(me, layers, candidates, winner, conf) {
 			}).filter(Boolean),
 			winner: _decisionSnapshotCandidate(winner, conf),
 			elapsedMs: null,
+			phaseMs: null,
 		};
 		DECISION_LOG.push(entry);
 		while (DECISION_LOG.length > DECISION_LOG_MAX) DECISION_LOG.shift();
@@ -1871,7 +1872,7 @@ function _emitDecisionTrace(entry) {
 	}
 }
 
-function _finalizeDecisionRecord(me, candidates, winner, elapsedMs) {
+function _finalizeDecisionRecord(me, candidates, winner, elapsedMs, phaseMs) {
 	try {
 		const player = (me && (me.name || me.name1)) || "?";
 		const round = _getRoundNumber();
@@ -1882,6 +1883,7 @@ function _finalizeDecisionRecord(me, candidates, winner, elapsedMs) {
 		if (!entry) return null;
 
 		entry.elapsedMs = Math.max(0, Math.round(Number(elapsedMs) || 0));
+		entry.phaseMs = phaseMs && typeof phaseMs === 'object' ? Object.assign({}, phaseMs) : null;
 		entry.candidates = (candidates || []).slice(0, 8).map(function (c) {
 			return _decisionSnapshotCandidate(c, null);
 		}).filter(Boolean);
@@ -2095,9 +2097,12 @@ function _calcAllyDamagePenalty(player, target, cardId) {
 }
 
 /* 统一动作评分：枚举所有候选动作（技能/卡牌/装备/结束）→ 打分 → 选最高 */
-/* ★ 决策缓存：100ms内不重复计算，减少CPU负载 */
+/* ★ 决策缓存：以 world-state + relation fingerprint 为主键。
+ * 同一状态允许短时间复用，任何公开局面/事件/敌我关系变化立即失效。 */
+const BEST_ACTION_CACHE_TTL = 1200;
 let _lastBestAction = null;
 let _lastBestActionTime = 0;
+let _lastBestActionStateKey = '';
 let _lastRelationStateKey = '';
 
 /* ============================================
@@ -2730,6 +2735,21 @@ function pickKillTarget(me, tsMap, cur) {
 
 function bestAction() {
 	const _perfT0 = performance.now();
+	const _perfPhases = {};
+	let _phaseT0 = _perfT0;
+	function _markPhase(name) {
+		try {
+			const now = performance.now();
+			const dt = Math.max(0, now - _phaseT0);
+			_perfPhases[name] = (_perfPhases[name] || 0) + dt;
+			_phaseT0 = now;
+		} catch (e) {}
+	}
+	function _phaseSnapshot() {
+		const out = {};
+		for (const k of Object.keys(_perfPhases)) out[k] = Math.round(_perfPhases[k]);
+		return out;
+	}
 	profStart('bestAction');
 
 	/* 上一次战略动作已经结算后，用真实公开状态差分确认 CREATE/REMOVE。
@@ -2742,19 +2762,22 @@ function bestAction() {
 		if (_confirmed && _confirmed.length) {
 			_lastBestAction = null;
 			_lastBestActionTime = 0;
+			_lastBestActionStateKey = '';
 		}
 	} catch (eStrategicSync) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eStrategicSync); }
 
 	/* ★ World-state invalidation：
 	 * 身份明置、阵营/态度翻转、行为证据导致敌友关系变化时，即使 HP/手牌/装备均未变化，
 	 * 旧 bestAction 也必须立即失效。这里不识别“跳身份”事件，只比较统一 relation fingerprint。 */
+	let _currentRelationKey = '';
 	try {
 		const _relMe = (_status && _status.currentPhase) || game.me;
-		const _relKey = _relMe ? relationStateKey(_relMe) : '';
-		if (_relKey !== _lastRelationStateKey) {
-			_lastRelationStateKey = _relKey;
+		_currentRelationKey = _relMe ? relationStateKey(_relMe) : '';
+		if (_currentRelationKey !== _lastRelationStateKey) {
+			_lastRelationStateKey = _currentRelationKey;
 			_lastBestAction = null;
 			_lastBestActionTime = 0;
+			_lastBestActionStateKey = '';
 			clearThreatCache();
 		}
 	} catch (eRelState) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRelState); }
@@ -2763,15 +2786,25 @@ function bestAction() {
 	if (checkStateChanged()) {
 		_lastBestAction = null;
 		_lastBestActionTime = 0;
+		_lastBestActionStateKey = '';
 	}
 
-	/* ★ 缓存命中：100ms内直接返回上次结果。
-	 * Profiler 已在函数入口启动，缓存短路也必须闭合计时栈。 */
-	if (_lastBestAction && (Date.now() - _lastBestActionTime) < 100) {
+	/* ★ State-key cache：只有“公开局面 + 当前事件窗口 + 敌我关系”完全相同才复用。
+	 * TTL 仅是安全上限，不再是决定缓存正确性的主要依据。 */
+	let _decisionStateKey = '';
+	try {
+		_decisionStateKey = stateKey() + '::REL=' + _currentRelationKey;
+	} catch (eStateKey) {
+		_decisionStateKey = '';
+	}
+	if (_lastBestAction && _decisionStateKey &&
+		_lastBestActionStateKey === _decisionStateKey &&
+		(Date.now() - _lastBestActionTime) < BEST_ACTION_CACHE_TTL) {
 		try { perfMark('bestAction.cache', performance.now() - _perfT0); } catch (eP) {}
 		try { profEnd('bestAction'); } catch (eP) {}
 		return _lastBestAction;
 	}
+	_markPhase('preflight');
 
 	/* ★ 兜底声明：防止作用域问题导致 best is not defined */
 	let best = { type: "end", id: "end", score: 0, reason: "初始化兜底" };
@@ -2781,6 +2814,25 @@ function bestAction() {
 			try { perfMark('bestAction', performance.now() - _perfT0); } catch (eP) {}
 			try { profEnd('bestAction'); } catch (eP) {}
 			return null;
+		}
+
+		/* 单次决策关系 memo：只在本次 bestAction 内存活，不跨状态/回合复用。
+		 * 复用既有 isEnemyOf / isAllyOf 结果，不改变三态关系语义。 */
+		const _enemyRelationMemo = new Map();
+		const _allyRelationMemo = new Map();
+		function _isEnemyMemo(target) {
+			if (!target) return false;
+			if (_enemyRelationMemo.has(target)) return _enemyRelationMemo.get(target);
+			const value = !!isEnemyOf(me, target);
+			_enemyRelationMemo.set(target, value);
+			return value;
+		}
+		function _isAllyMemo(target) {
+			if (!target) return false;
+			if (_allyRelationMemo.has(target)) return _allyRelationMemo.get(target);
+			const value = !!isAllyOf(me, target);
+			_allyRelationMemo.set(target, value);
+			return value;
 		}
 
 		/* ===== 调用拆分的子模块 ===== */
@@ -2843,6 +2895,7 @@ function bestAction() {
 		/* ===== 敌方爆发威胁（连弩 + 多杀）===== */
 		const burst = maxBurstThreat(me);
 		const mt = multiTurnCached(me);
+		_markPhase('context');
 		/* ===== 目标分缓存：每玩家只算一次，供所有卡牌共用 =====
 		 * - tsMap：pp 对象 → targetScore 数值
 		 * - bestT / bestTs：当前局势下全局最优目标及其分数（与具体卡牌无关）
@@ -2855,7 +2908,7 @@ function bestAction() {
 				if (pp === me) continue;
 				try { if (pp.isDead ? pp.isDead() : (pp.hp !== undefined && pp.hp <= 0)) continue; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				/* ★ 友方减免：友方目标分数大幅降低，防止 AI 乱打队友 */
-				const isAlly = !isEnemyOf(me, pp);
+				const isAlly = !_isEnemyMemo(pp);
 				let ts = targetScore(me, pp);
 				if (isAlly) ts *= 0.1; // 友方分数打1折
 				/* C 阶段 clamp：目标分规范值域 [0, 15]。
@@ -2938,6 +2991,7 @@ function bestAction() {
 		try { _probShanCache.clear(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		/* ★ 缓存存活玩家，供 extractFeatures 复用，避免循环内重复遍历 */
 		const alivePlayers = (game.players || []).filter(function(p) { return p && p.alive !== false; });
+		_markPhase('targets');
 		const acts = [];
 		/* ===== 趋势驱动策略（把 mt.overall 从提示升级为决策权重） ===== */
 		const trend = mt ? mt.overall : "stable";
@@ -3477,7 +3531,7 @@ function bestAction() {
 							/* ★ 敌我系统判"是否该救"：isAllyOf(含行为推断软翻转)识别真队友。
 							 *   替换旧 isSameCamp——身份未明时保守视敌会漏救真队友 */
 							let isFriend = false;
-							try { isFriend = isAllyOf(me, p); } catch (eCamp) { isFriend = false; }
+							try { isFriend = _isAllyMemo(p); } catch (eCamp) { isFriend = false; }
 							if (isFriend && !dyingAlly) dyingAlly = p;
 							else if (!isFriend && !dyingEnemy) dyingEnemy = p;
 						}
@@ -3583,7 +3637,7 @@ function bestAction() {
 						for (const p of (game.players || [])) {
 							if (!p || p === me) continue;
 							if (p.alive === false || (p.hp || 0) > 0) continue;
-							if (isAllyOf(me, p)) { dyingAlly = p; break; }   /* 敌我系统：真队友濒死才救（身份未明也能识别） */
+							if (_isAllyMemo(p)) { dyingAlly = p; break; }   /* 敌我系统：真队友濒死才救（身份未明也能识别） */
 						}
 						if (dyingAlly) {
 							const hpDeficit = Math.max(1, -(dyingAlly.hp || 0) + 1);
@@ -3660,10 +3714,10 @@ function bestAction() {
 					let isAlly = false;
 					let isEnemy = false;
 					try {
-						isAlly = isAllyOf(me, cardTarget);
-						isEnemy = isEnemyOf(me, cardTarget);
+						isAlly = _isAllyMemo(cardTarget);
+						isEnemy = _isEnemyMemo(cardTarget);
 					} catch (eR) {
-						try { isEnemy = isEnemyOf(me, cardTarget); } catch (e2) { isEnemy = false; }
+						try { isEnemy = _isEnemyMemo(cardTarget); } catch (e2) { isEnemy = false; }
 						isAlly = !isEnemy;
 					}
 
@@ -3895,7 +3949,7 @@ function bestAction() {
 								let linkedEnemy = null;
 								for (const [pp] of tsMap) {
 									if (!pp || pp === me) continue;
-									try { if (isEnemyOf(me, pp) && isPlayerLinked(pp)) { linkedEnemy = pp; break; } } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+									try { if (_isEnemyMemo(pp) && isPlayerLinked(pp)) { linkedEnemy = pp; break; } } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 								}
 								if (linkedEnemy) {
 									let cv = 0;
@@ -3906,7 +3960,7 @@ function bestAction() {
 							try {
 								enemyAttrThreat = (game.players || []).some(function (p) {
 									if (!p || p === me || p.alive === false) return false;
-									try { if (!isEnemyOf(me, p)) return false; } catch (e) { return false; }
+									try { if (!_isEnemyMemo(p)) return false; } catch (e) { return false; }
 									return _hasNature(p);
 								});
 							} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -4058,7 +4112,7 @@ function bestAction() {
 					}
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				if (!tgt) return;
-				if (isAllyOf(me, tgt)) {
+				if (_isAllyMemo(tgt)) {
 					/* ★ 不刻意加规则，让模型自己学：
 					 *   打队友的惩罚不写死，而是把"是否打队友"作为特征写进 130 维特征
 					 *   模型从对局反馈中自己学习这个特征的权重
@@ -4150,9 +4204,15 @@ function bestAction() {
 			_status.djsc_lastEcon = econ;
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
-		/* ★ 规划器：用多步视角微调 best */
+		_markPhase('candidates');
+
+		/* ★ 规划器：每次 bestAction 最多计算一次。
+		 * decisionPlan 同时供 winner 改判与后续回放/日志使用，禁止为了 layers.plan 再次规划。 */
+		let decisionPlan = null;
 		try {
-			const refined = refineBestWithPlan(me, best, bestT);
+			decisionPlan = planForDecision(me);
+			try { _status.djsc_lastDecisionPlan = decisionPlan || null; } catch (ePlanState) {}
+			const refined = refineBestWithPlan(me, best, bestT, decisionPlan);
 			if (refined && refined !== best) {
 				/* Planner 后续仍要经过 Champion / DeepThink / Guard，因此 winner 必须回到
 				 * acts 中的 canonical candidate，禁止同一动作以两个不同对象继续参与排序。 */
@@ -4179,13 +4239,15 @@ function bestAction() {
 			}
 		} catch (eP) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eP); }
 
+		_markPhase('planner');
+
 		/* ★ P0-1 精度模式：给所有动作算特征，学得最全 */
 		try {
 			const _buf = new Int8Array(FEATURE_DIM);
 			const ctx = {
 				bestT: bestT,
 				bestTs: bestTs,
-				isEnemy: bestT ? isEnemyOf(me, bestT) : false,
+				isEnemy: bestT ? _isEnemyMemo(bestT) : false,
 				focusTarget: focus ? focus.target : null,
 			};
 			/* 手机优化：只给前15个动作算特征，时间限制20ms */
@@ -4344,6 +4406,8 @@ function bestAction() {
 			}
 		} catch (eCL) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eCL); }
 
+		_markPhase('model');
+
 		/* ★ M07：把「动作类型 → 代号」抽成一个小函数，供 Guard 后重算时复用 */
 		function actionForBest(b) {
 			if (!b) return "B";
@@ -4419,16 +4483,15 @@ function bestAction() {
 					advice: mt ? mt.advice : "",
 				},
 			};
-			/* ★ 把规划序列一起记入 layers */
+			/* ★ 复用本次 bestAction 已计算的 decisionPlan；观测层不得再次触发 Planner。 */
 			try {
-				const plan = planSequence(me);
-				if (plan && plan.best) {
+				if (decisionPlan && decisionPlan.best) {
 					layers.plan = {
-						isKill: plan.isKill || false,
-						total: plan.best.total,
-						futureScore: plan.best.futureScore || 0,
-						steps: (plan.best.steps || []).map(function (s) { return s.id || s; }).slice(0, 3),
-						alternatives: (plan.alternatives || []).map(function (alt) {
+						isKill: decisionPlan.isKill || false,
+						total: decisionPlan.best.total,
+						futureScore: decisionPlan.best.futureScore || 0,
+						steps: (decisionPlan.best.steps || []).map(function (s) { return s.id || s; }).slice(0, 3),
+						alternatives: (decisionPlan.alternatives || []).map(function (alt) {
 							return { id: alt.action && alt.action.id, total: alt.total };
 						}).slice(0, 2),
 					};
@@ -4478,6 +4541,8 @@ function bestAction() {
 				}
 			}
 		} catch (eB) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eB); }
+		_markPhase('observability');
+
 		/* ===== ★ 模型护栏：执行前的最后一道法律检查 ===== */
 		try {
 			const _killCand = (function () {
@@ -4514,6 +4579,8 @@ function bestAction() {
 		} catch (eGuard) {
 			try { console.error('[模型护栏] 集成异常：', eGuard); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		}
+
+		_markPhase('guard');
 
 		/* ★ M07：Guard 可能已把 best 换成"结束回合"，动作代号要以最终 best 重新算，避免 action≠rule */
 		action = actionForBest(best);
@@ -4603,7 +4670,7 @@ function bestAction() {
 					const _fx = extractFeatures(me, best, {
 						bestT: bestT,
 						bestTs: bestTs,
-						isEnemy: bestT ? isEnemyOf(me, bestT) : false,
+						isEnemy: bestT ? _isEnemyMemo(bestT) : false,
 						focusTarget: focus ? focus.target : null,
 					}, _fb);
 					featToUse = Array.from(_fx);
@@ -4663,7 +4730,7 @@ function bestAction() {
 						if (a === best) continue;
 						if (a.type === 'skill' && a.score >= best.score - 1) {
 							try {
-								settleEntries.push({ me: me, action: a, target: bestT, isEnemy: !!bestT && isEnemyOf(me, bestT) });
+								settleEntries.push({ me: me, action: a, target: bestT, isEnemy: !!bestT && _isEnemyMemo(bestT) });
 							} catch (eSE) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSE); }
 							if (settleEntries.length >= 4) break;   /* 上限保护 */
 						}
@@ -4692,12 +4759,16 @@ function bestAction() {
 			if (stratResult) _finalResult.strategist = stratResult;
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
+		_markPhase('telemetry');
+
 		/* ★ 测试观测：记录“最终执行候选”与本次完整 bestAction 墙钟耗时。
 		 * 仅写日志/回放，不参与评分、排序或执行。 */
 		try {
 			const _decisionMs = Math.max(0, performance.now() - _perfT0);
+			const _phaseMs = _phaseSnapshot();
 			_finalResult.decisionMs = Math.round(_decisionMs);
-			_finalizeDecisionRecord(me, acts, best, _decisionMs);
+			_finalResult.phaseMs = _phaseMs;
+			_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs);
 			try { perfMark('bestAction', _decisionMs); } catch (eP) {}
 			try { profEnd('bestAction'); } catch (eP) {}
 		} catch (eTrace) {
@@ -4706,9 +4777,11 @@ function bestAction() {
 			try { profEnd('bestAction'); } catch (eP) {}
 		}
 
-		/* ★ 存入缓存 */
+		/* ★ 存入缓存：仅缓存本次计算开始时对应的 state-key。
+		 * bestAction 本身应为纯决策；若后处理意外改变公开状态，下一次 stateKey 会自然失效。 */
 		_lastBestAction = _finalResult;
 		_lastBestActionTime = Date.now();
+		_lastBestActionStateKey = _decisionStateKey || '';
 
 		return _finalResult;
 	} catch (e) {
@@ -5740,8 +5813,12 @@ export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninst
       reg.mount('exportAllAndDownload', window.__DJSC_PANEL.exportAllAndDownload);
       reg.mount('importAllFromFile', window.__DJSC_PANEL.importAllFromFile);
     }
-    /* ★ 挂载战术规划函数 */
-    reg.mount('plan', planSequence);
+    /* ★ 战术规划面板只读取最近一次 bestAction 已计算的 plan。
+     * 观测/UI 不得为了显示面板再次触发昂贵 Planner。 */
+    reg.mount('plan', function () {
+      try { return (_status && _status.djsc_lastDecisionPlan) || null; }
+      catch (e) { return null; }
+    });
   } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
   /* ★ 统一给所有 window.__DJSC 下的函数加 _real: true 标记 */

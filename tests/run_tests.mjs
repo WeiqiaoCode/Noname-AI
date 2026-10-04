@@ -5163,6 +5163,247 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+/* ================= 10.54 Planner 单次计算 / 协作式预算 ================= */
+{
+    const fs54 = await import('node:fs');
+    const planner54 = fs54.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    const eng54 = fs54.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+
+    ok(planner54.indexOf('function _budgetExceeded(deadline)') >= 0 &&
+       planner54.indexOf('function _plannerDeadline(options)') >= 0,
+        '10.54 Planner 建立统一 deadline/budget 入口');
+
+    ok(planner54.indexOf('for (const p of (game.players || []))') >= 0 &&
+       planner54.indexOf("if (_budgetExceeded(deadline)) {\n\t\t\t\tlog.warn('planner', '规划预算耗尽") >= 0,
+        '10.54 敌人遍历过程中检查预算，而非事后才判断');
+
+    ok(planner54.indexOf('for (const candidate of ranked)') >= 0 &&
+       planner54.indexOf('_outlookScore(me, candidate, bestT, deadline)') >= 0,
+        '10.54 普通候选展望逐候选检查并传递 deadline');
+
+    ok(planner54.indexOf('_findKillSequence(me, p, deadline)') >= 0 &&
+       planner54.indexOf('function _findKillSequence(me, target, deadline)') >= 0,
+        '10.54 残局击杀搜索也受同一个 Planner deadline 约束');
+
+    eq(/if\s*\(elapsed\s*>\s*PLAN_TIMEOUT\)/.test(planner54), false,
+        '10.54 删除“全部算完后才超时”的旧事后判断');
+
+    ok(planner54.indexOf('export function planForDecision(me, options)') >= 0 &&
+       planner54.indexOf('const plan = planSequence(me, options)') >= 0,
+        '10.54 Planner 节流与预算统一由 planForDecision 管理');
+
+    ok(planner54.indexOf('export function refineBestWithPlan(me, best, bestT, precomputedPlan)') >= 0 &&
+       planner54.indexOf('arguments.length >= 4 ? precomputedPlan : planForDecision(me)') >= 0,
+        '10.54 refineBestWithPlan 支持消费预计算 plan，兼容旧调用');
+
+    ok(eng54.indexOf("import { refineBestWithPlan, planForDecision } from '../strategy/planner.js'") >= 0,
+        '10.54 Engine 只导入 planForDecision，不再直接导入 planSequence');
+
+    eq((eng54.match(/planSequence\s*\(/g) || []).length, 0,
+        '10.54 Engine 中不存在直接 planSequence 调用，观测层不能二次规划');
+
+    eq((eng54.match(/decisionPlan\s*=\s*planForDecision\(me\)/g) || []).length, 1,
+        '10.54 每次 bestAction 只有一个 Planner 计算入口');
+
+    ok(eng54.indexOf('refineBestWithPlan(me, best, bestT, decisionPlan)') >= 0 &&
+       eng54.indexOf('if (decisionPlan && decisionPlan.best)') >= 0,
+        '10.54 Planner 改判与 layers.plan 复用同一 decisionPlan');
+
+    eq(eng54.indexOf('const plan = planSequence(me)') >= 0, false,
+        '10.54 决策日志不再绕过节流重复规划');
+
+    ok(eng54.indexOf("reg.mount('plan', function ()") >= 0 &&
+       eng54.indexOf('_status.djsc_lastDecisionPlan') >= 0,
+        '10.54 战术规划面板只读取最近一次 decisionPlan，不主动触发 Planner');
+}
+
+
+/* ================= 10.55 State-key bestAction 缓存 ================= */
+{
+    const fs55 = await import('node:fs');
+    const cache55 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'storage', 'cache.js')).href + '?pr31-state-cache');
+    const eng55 = fs55.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+
+    let ownHand = [{ name:'sha', suit:'spade', number:7 }];
+    let enemyHandCount = 3;
+    let hiddenEnemyHandReads = 0;
+    let ownCardStat = { sha:0 };
+    let ownSkillStat = { testSkill:0 };
+
+    const me55 = {
+        playerid:'me55', name:'me55', alive:true, hp:4, maxHp:4,
+        countCards:function(zone) { return zone === 'h' ? ownHand.length : 0; },
+        getCards:function(zone) {
+            if (zone === 'h') return ownHand;
+            return [];
+        },
+        getStat:function(kind) {
+            if (kind === 'card') return ownCardStat;
+            if (kind === 'skill') return ownSkillStat;
+            return { card:ownCardStat, skill:ownSkillStat };
+        },
+        isLinked:function() { return false; },
+    };
+    const enemy55 = {
+        playerid:'enemy55', name:'enemy55', alive:true, hp:3, maxHp:4,
+        countCards:function(zone) { return zone === 'h' ? enemyHandCount : 0; },
+        getCards:function(zone) {
+            if (zone === 'h') {
+                hiddenEnemyHandReads++;
+                return [{ name:'shan', suit:'heart', number:2 }];
+            }
+            return [];
+        },
+        isLinked:function() { return false; },
+    };
+
+    hostStub.game.me = me55;
+    hostStub.game.players = [me55, enemy55];
+    hostStub.game.alivePlayers = [me55, enemy55];
+    hostStub._status.currentPhase = me55;
+    hostStub._status.roundNumber = 2;
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:1, skill:'' };
+
+    const k1 = cache55.stateKey();
+    const k1b = cache55.stateKey();
+    eq(k1b, k1, '10.55 完全相同 world-state 生成稳定 fingerprint');
+    eq(hiddenEnemyHandReads, 0, '10.55 stateKey 不读取其他玩家隐藏手牌内容');
+
+    enemy55.hp = 2;
+    const kHp = cache55.stateKey();
+    ok(kHp !== k1, '10.55 对手 HP 变化立即改变 stateKey');
+    enemy55.hp = 3;
+
+    enemyHandCount = 2;
+    const kHandCount = cache55.stateKey();
+    ok(kHandCount !== k1, '10.55 对手公开手牌数量变化立即改变 stateKey');
+    enemyHandCount = 3;
+
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:2, skill:'' };
+    const kEvent = cache55.stateKey();
+    ok(kEvent !== k1, '10.55 当前事件 step/window 变化立即改变 stateKey');
+
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:1, skill:'', target:enemy55 };
+    const kEventTarget = cache55.stateKey();
+    ok(kEventTarget !== k1, '10.55 同一事件步骤的 target 变化也立即失效');
+
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:1, skill:'' };
+
+    ownHand = [{ name:'tao', suit:'heart', number:7 }];
+    const kOwnCard = cache55.stateKey();
+    ok(kOwnCard !== k1, '10.55 决策者自己手牌内容变化即使数量相同也失效');
+    ownHand = [{ name:'sha', suit:'spade', number:7 }];
+
+    ownSkillStat = { testSkill:1 };
+    const kSkillUse = cache55.stateKey();
+    ok(kSkillUse !== k1, '10.55 本回合技能使用次数变化立即改变 stateKey');
+    ownSkillStat = { testSkill:0 };
+
+    ownCardStat = { sha:1 };
+    const kCardUse = cache55.stateKey();
+    ok(kCardUse !== k1, '10.55 本回合出牌次数变化立即改变 stateKey');
+    ownCardStat = { sha:0 };
+
+    ok(eng55.indexOf('const BEST_ACTION_CACHE_TTL = 1200') >= 0,
+        '10.55 bestAction 使用保守 1.2s 安全 TTL');
+    ok(eng55.indexOf("_decisionStateKey = stateKey() + '::REL=' + _currentRelationKey") >= 0,
+        '10.55 bestAction cache key 同时包含 world-state 与 relation fingerprint');
+    ok(eng55.indexOf('_lastBestActionStateKey === _decisionStateKey') >= 0,
+        '10.55 只有完全相同 state-key 才允许复用 bestAction');
+    eq(/Date\.now\(\)\s*-\s*_lastBestActionTime\)\s*<\s*100\b/.test(eng55), false,
+        '10.55 删除旧 100ms 纯时间缓存判断');
+    ok(eng55.indexOf("_lastBestActionStateKey = '';\n\t\t\tclearThreatCache()") >= 0,
+        '10.55 relation 变化同步失效 bestAction state-key');
+    ok((eng55.match(/_lastBestActionStateKey = '';/g) || []).length >= 3,
+        '10.55 strategic/world/relation 三类状态变化均可清空 state-key');
+}
+
+
+/* ================= 10.56 bestAction 分阶段性能观测 ================= */
+{
+    const fs56 = await import('node:fs');
+    const eng56 = fs56.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const trace56 = fs56.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'decisionTrace.js'), 'utf8');
+    const panel56 = fs56.readFileSync(join(_pkg, 'score', 'view', 'panel', 'panel.js'), 'utf8');
+
+    for (const phase of ['preflight','context','targets','candidates','planner','model','observability','guard','telemetry']) {
+        ok(eng56.indexOf("_markPhase('" + phase + "')") >= 0,
+            '10.56 bestAction 记录阶段耗时：' + phase);
+    }
+
+    ok(eng56.indexOf('_finalResult.phaseMs = _phaseMs') >= 0 &&
+       eng56.indexOf('_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs)') >= 0,
+        '10.56 最终结果与 DECISION_LOG 均携带 phaseMs');
+
+    ok(eng56.indexOf('entry.phaseMs = phaseMs') >= 0,
+        '10.56 决策回放记录保存 phaseMs 快照');
+
+    ok(trace56.indexOf("lines.push('性能：'") >= 0 &&
+       trace56.indexOf(".sort(function (a, b) { return b.ms - a.ms; })") >= 0,
+        '10.56 详细日志按耗时排序输出性能热点');
+
+    ok(panel56.indexOf('性能热点：') >= 0,
+        '10.56 决策回放面板显示性能热点');
+
+    eq(/_perfPhases\[[^\]]+\]\s*=\s*[^;]*score/.test(eng56), false,
+        '10.56 性能观测数据不写入 candidate score');
+}
+
+
+/* ================= 10.57 非关键学习持久化异步化 ================= */
+{
+    const fs57 = await import('node:fs');
+    const auto57 = fs57.readFileSync(join(_pkg, 'score', 'model', 'features', 'autoFeature.js'), 'utf8');
+
+    ok(auto57.indexOf('const AUTO_FEATURE_SAVE_DEBOUNCE_MS = 500') >= 0 &&
+       auto57.indexOf('let _autoFeatureSaveTimer = null') >= 0,
+        '10.57 AutoFeature 建立独立 500ms 写盘合并窗口');
+
+    ok(auto57.indexOf('_autoFeatureSaveTimer = setTimeout(_flushAutoFeatureStore, AUTO_FEATURE_SAVE_DEBOUNCE_MS)') >= 0,
+        '10.57 AutoFeature 持久化离开当前决策同步路径');
+
+    const recordStart57 = auto57.indexOf('export function recordDecisionContext(context)');
+    const settleStart57 = auto57.indexOf('export function settleDecisionContext(context, reward, win)');
+    const recordBody57 = recordStart57 >= 0 && settleStart57 > recordStart57
+        ? auto57.slice(recordStart57, settleStart57)
+        : '';
+    eq(recordBody57.indexOf('_lsSet(') >= 0, false,
+        '10.57 recordDecisionContext 不再直接同步写 localStorage');
+
+    ok(auto57.indexOf('_flushAutoFeatureStore();') >= 0,
+        '10.57 定时器不可用时保留同步持久化兜底，不丢学习数据');
+}
+
+
+/* ================= 10.58 单次 bestAction 关系 memo ================= */
+{
+    const fs58 = await import('node:fs');
+    const eng58 = fs58.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const bestStart58 = eng58.indexOf('function bestAction()');
+    const bestEnd58 = eng58.indexOf('function rulesDecide()', bestStart58);
+    const bestBody58 = bestStart58 >= 0 && bestEnd58 > bestStart58
+        ? eng58.slice(bestStart58, bestEnd58)
+        : '';
+
+    ok(bestBody58.indexOf('const _enemyRelationMemo = new Map()') >= 0 &&
+       bestBody58.indexOf('const _allyRelationMemo = new Map()') >= 0,
+        '10.58 敌友 memo 仅创建在单次 bestAction 生命周期内');
+
+    ok(bestBody58.indexOf('const value = !!isEnemyOf(me, target)') >= 0 &&
+       bestBody58.indexOf('const value = !!isAllyOf(me, target)') >= 0,
+        '10.58 memo miss 仍委托既有敌友权威入口，不重写关系算法');
+
+    eq((bestBody58.match(/isEnemyOf\(me,\s*/g) || []).length, 1,
+        '10.58 bestAction 直接敌方推断收敛到 memo miss 一处');
+    eq((bestBody58.match(/isAllyOf\(me,\s*/g) || []).length, 1,
+        '10.58 bestAction 直接友方推断收敛到 memo miss 一处');
+
+    ok(bestBody58.indexOf('_isEnemyMemo(') >= 0 &&
+       bestBody58.indexOf('_isAllyMemo(') >= 0,
+        '10.58 候选评分/特征/后检测复用单次决策关系结果');
+}
+
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
