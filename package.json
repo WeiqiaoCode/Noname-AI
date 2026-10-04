@@ -1,6 +1,6 @@
 {
   "name": "noname-ai",
-  "version": "4.0.5-test",
+  "version": "4.0.6-test",
   "private": true,
   "type": "module",
   "description": "Community-maintained Noname AI extension and decision engine.",
