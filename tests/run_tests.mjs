@@ -5163,6 +5163,57 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 }
 
+/* ================= 10.54 Planner 单次计算 / 协作式预算 ================= */
+{
+    const fs54 = await import('node:fs');
+    const planner54 = fs54.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
+    const eng54 = fs54.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+
+    ok(planner54.indexOf('function _budgetExceeded(deadline)') >= 0 &&
+       planner54.indexOf('function _plannerDeadline(options)') >= 0,
+        '10.54 Planner 建立统一 deadline/budget 入口');
+
+    ok(planner54.indexOf('for (const p of (game.players || []))') >= 0 &&
+       planner54.indexOf("if (_budgetExceeded(deadline)) {\n\t\t\t\tlog.warn('planner', '规划预算耗尽") >= 0,
+        '10.54 敌人遍历过程中检查预算，而非事后才判断');
+
+    ok(planner54.indexOf('for (const candidate of ranked)') >= 0 &&
+       planner54.indexOf('_outlookScore(me, candidate, bestT, deadline)') >= 0,
+        '10.54 普通候选展望逐候选检查并传递 deadline');
+
+    ok(planner54.indexOf('_findKillSequence(me, p, deadline)') >= 0 &&
+       planner54.indexOf('function _findKillSequence(me, target, deadline)') >= 0,
+        '10.54 残局击杀搜索也受同一个 Planner deadline 约束');
+
+    eq(/if\s*\(elapsed\s*>\s*PLAN_TIMEOUT\)/.test(planner54), false,
+        '10.54 删除“全部算完后才超时”的旧事后判断');
+
+    ok(planner54.indexOf('export function planForDecision(me, options)') >= 0 &&
+       planner54.indexOf('const plan = planSequence(me, options)') >= 0,
+        '10.54 Planner 节流与预算统一由 planForDecision 管理');
+
+    ok(planner54.indexOf('export function refineBestWithPlan(me, best, bestT, precomputedPlan)') >= 0 &&
+       planner54.indexOf('arguments.length >= 4 ? precomputedPlan : planForDecision(me)') >= 0,
+        '10.54 refineBestWithPlan 支持消费预计算 plan，兼容旧调用');
+
+    ok(eng54.indexOf("import { refineBestWithPlan, planForDecision } from '../strategy/planner.js'") >= 0,
+        '10.54 Engine 只导入 planForDecision，不再直接导入 planSequence');
+
+    eq((eng54.match(/planSequence\s*\(/g) || []).length, 0,
+        '10.54 Engine 中不存在直接 planSequence 调用，观测层不能二次规划');
+
+    eq((eng54.match(/decisionPlan\s*=\s*planForDecision\(me\)/g) || []).length, 1,
+        '10.54 每次 bestAction 只有一个 Planner 计算入口');
+
+    ok(eng54.indexOf('refineBestWithPlan(me, best, bestT, decisionPlan)') >= 0 &&
+       eng54.indexOf('if (decisionPlan && decisionPlan.best)') >= 0,
+        '10.54 Planner 改判与 layers.plan 复用同一 decisionPlan');
+
+    eq(eng54.indexOf('const plan = planSequence(me)') >= 0, false,
+        '10.54 决策日志不再绕过节流重复规划');
+}
+
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
