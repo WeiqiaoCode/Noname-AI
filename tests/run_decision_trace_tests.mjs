@@ -77,7 +77,7 @@ ok(layout.includes("'testDecisionLog'") && layout.includes('测试版决策可�
 	'10.53 决策日志设置进入战报与分析分组');
 ok(engine.includes("cfg('testDecisionLog', '摘要')"),
 	'10.53 engine 只通过配置开关决定是否显示测试日志');
-ok(engine.includes('_finalizeDecisionRecord(me, acts, best, _decisionMs)'),
+ok(engine.includes('_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs)'),
 	'10.53 日志在最终 bestAction 候选确定后写入');
 ok(engine.includes('_finalResult.decisionMs = Math.round(_decisionMs)'),
 	'10.53 最终结果暴露只读 decisionMs 性能诊断');
