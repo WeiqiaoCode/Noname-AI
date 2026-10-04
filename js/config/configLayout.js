@@ -5,6 +5,7 @@
  */
 
 const QQ_GROUP = '1080487560';
+const FEEDBACK_URL = 'https://wj.qq.com/s2/28087292/uhbn/';
 
 export function arrangeConfig(source, lib, game) {
     const groups = [
@@ -284,6 +285,20 @@ export function arrangeConfig(source, lib, game) {
         name: '<span class="djsc-setting-action-row djsc-about-copy"><span class="djsc-setting-name">QQ群：<span class="djsc-feedback-number">' + QQ_GROUP + '</span></span><button type="button" class="djsc-setting-action">复制</button></span>',
         onclick: function () {
             copyGroupNumber(this.querySelector('.djsc-setting-action'));
+            return false;
+        },
+    };
+
+    result.feedbackSurvey = {
+        clear: true,
+        name: '<span class="djsc-setting-action-row djsc-about-feedback"><span class="djsc-setting-name">问题反馈问卷<div class="djsc-setting-desc">提交Bug、异常行为、测试结果与改进建议。</div></span><button type="button" class="djsc-setting-action">填写</button></span>',
+        onclick: function () {
+            try {
+                const opened = window.open(FEEDBACK_URL, '_blank', 'noopener,noreferrer');
+                if (!opened && window.location) window.location.href = FEEDBACK_URL;
+            } catch (_) {
+                try { window.location.href = FEEDBACK_URL; } catch (_) {}
+            }
             return false;
         },
     };
