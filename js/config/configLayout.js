@@ -16,7 +16,7 @@ export function arrangeConfig(source, lib, game) {
         ['override', '三、原生 AI 接管', ['hardOverride', 'override_use', 'override_respond', 'override_discard', 'override_compare', 'openOverridePanel']],
         ['memory', '四、记忆与反馈', ['decisionFeedback', 'skillFeedback', 'styleFeedback', 'crossGameMemory', 'playerMemory', 'openMemoryPanel']],
         ['training', '五、模型与训练', ['useTrainedModel', 'aiStrength', 'championBoost', 'useResidual', 'learningRate', 'forceTrain', 'showSampleCount', 'showModelStatus', 'autoFixModel']],
-        ['report', '六、战报与分析', ['showReport', 'archiveGames', 'showLog', 'persist', 'narrator', 'openPanel', 'openArchivePanel', 'openSkillPanel', 'openSkillBreakdownPanel', 'openFeedbackPanel', 'openReplayPanel', 'openComparePanel', 'openNarratorPanel', 'openSmartPanel']],
+        ['report', '六、战报与分析', ['showReport', 'archiveGames', 'showLog', 'testDecisionLog', 'persist', 'narrator', 'openPanel', 'openArchivePanel', 'openSkillPanel', 'openSkillBreakdownPanel', 'openFeedbackPanel', 'openReplayPanel', 'openComparePanel', 'openNarratorPanel', 'openSmartPanel']],
         ['data', '七、数据管理', ['exportTrainingData', 'exportAllData', 'importTrainingData', 'importOverwrite', 'importMerge', 'openExportPanel', 'clearSamples']],
         ['gamelog', '八、对局日志与分享', ['logRetain', 'qqGroup', 'clearGameLogs']],
         ['diagnostics', '九、高级与诊断', ['openHotSwapPanel', 'openSharedPanel', 'openEvolutionPanel', 'openDecisionDashboard', 'openCalibratorPanel', 'profiler', 'openProfilerPanel', 'openHealthPanel', 'openSelfCheck', 'openGuardPanel', 'openPostCheckPanel', 'openPsychologyMonitor', 'openComboMonitor', 'openMemoryMonitor', 'openAutoFeatureMonitor', 'openSoftMetricsMonitor', 'openPostCheckMonitor', 'openProfilerMonitor', 'openTrainBufferMonitor', 'openFullMonitor']],
@@ -77,7 +77,8 @@ export function arrangeConfig(source, lib, game) {
         // ===== 战报与分析 =====
         showReport: '显示战报，每局结束后自动弹出战报总结。',
         archiveGames: '自动归档对局，把每局的战报保存下来，随时可以回看。',
-        showLog: '显示日志，在游戏界面显示AI的决策日志，方便调试和观察。',
+        showLog: '显示积分明细日志，保留原有调试输出。',
+        testDecisionLog: '测试版决策可观测性：摘要模式在左侧对局日志显示最终动作、次选、分差和耗时；详细模式额外显示前3候选与阶段/风险/集火等关键信号。只读决策结果，不参与AI评分。',
         persist: '持久化存储，所有设置和数据都会保存，重启游戏不丢失。',
         narrator: '解说模式，AI会用文字解说自己的每一步操作，像看比赛解说一样。',
         openPanel: '打开主面板，显示AI的所有状态和数据。',
