@@ -221,7 +221,6 @@ export function invokeHost(options) {
 
 	try {
 		if (typeof options.prepare === 'function') cleanup = options.prepare() || null;
-		_stats.hostCalls++;
 		_inc(kind, 'hostCalls');
 		const result = orig.apply(thisArg, args);
 		if (typeof options.onSuccess === 'function') {
@@ -245,7 +244,6 @@ export function invokeHost(options) {
 		if (options.fallback === false) return { ok: false, result: null, error, reason: 'host-error' };
 
 		try {
-			_stats.fallbacks++;
 			_inc(kind, 'fallbacks');
 			const fallbackResult = orig.apply(thisArg, args);
 			return { ok: false, fallback: true, result: fallbackResult, error, reason: 'fallback-ok' };
@@ -265,7 +263,6 @@ export function invokeObservedHost(options) {
 	const orig = options.orig;
 	if (typeof orig !== 'function') return { ok: false, result: null, reason: 'missing-host-function' };
 	try {
-		_stats.hostCalls++;
 		_inc(EXECUTION_KINDS.OBSERVE, 'hostCalls');
 		const result = orig.apply(options.thisArg, Array.isArray(options.args) ? options.args : []);
 		return { ok: true, result, reason: 'host-ok' };
