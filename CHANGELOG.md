@@ -1,10 +1,68 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.4-test（semver 4.0.4-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.5-test（semver 4.0.5-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
+
+---
+
+## v4.0.5-test 决策性能专项（2026-10-04）
+
+> 针对玩家反馈的 20 秒级 AI 等待进行第一轮低风险性能优化。本版本优先消除已确认的重复计算与失效缓存问题，不降低搜索深度、不关闭 Planner、不减少 Guard/身份判断。
+
+### Planner 单次计算
+
+- 每次 `bestAction()` 最多执行一次 Planner。
+- Planner 改判、决策日志与战术规划面板复用同一份 `decisionPlan`。
+- 战术规划面板只读取最近一次真实决策产生的 plan，不再为了显示 UI 额外触发 Planner。
+
+### 真正的 Planner 时间预算
+
+- 原 `PLAN_TIMEOUT=350ms` 仅在全部计算结束后检查，无法阻止实际长时间阻塞。
+- 新增 cooperative deadline，并传递到：
+  - 敌人遍历
+  - 残局击杀序列
+  - 普通候选展望
+- 一旦预算耗尽，Planner 放弃本轮改判并保留基础 canonical best，不产生半成品候选。
+
+### State-key 决策缓存
+
+- 旧缓存仅依赖 100ms TTL；现在改为 **state fingerprint + 1.2s 安全 TTL**。
+- 指纹纳入：
+  - 当前行动者
+  - 决策者自己的实际手牌
+  - 全员公开 HP / maxHP / 手牌数量 / 横置 / 判定区 / 装备区
+  - 当前事件 name/type/skill/step/player/source/target/targets/card/parent
+  - 回合
+  - 敌我关系 fingerprint
+- 对手只读取公开手牌数量，**不读取隐藏手牌内容**。
+- 任一关键状态变化立即失效缓存。
+
+### 分阶段性能诊断
+
+`bestAction` 现在额外记录：
+
+- preflight
+- context
+- targets
+- candidates
+- planner
+- model
+- observability
+- guard
+- telemetry
+
+详细测试日志和决策回放会按耗时显示热点，例如：
+
+`planner=7428ms｜candidates=531ms｜telemetry=472ms`
+
+便于下一轮性能优化直接针对真实热点。
+
+### 暂不异步化训练/反馈
+
+训练样本、异步后检测与当前 `_status` / 特征快照存在时间窗口语义。本版不为追求表面速度直接把这些逻辑整体搬到 `setTimeout`，避免训练样本错配局面。后续只有 `telemetry` 被实测证明是主要热点时再做快照化异步队列。
 
 ---
 
