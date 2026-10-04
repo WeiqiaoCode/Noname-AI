@@ -14,14 +14,14 @@ try {
 
 // ===== 隐藏水印（不影响功能） =====
 const __AUTHOR__ = "飞升原创";
-const __CONTACT__ = "交流群: 123456789";
+const __CONTACT__ = "交流群: 1080487560";
 const __VERSION__ = "v" + VERSION;
 // ====================================
 /*
  * ============================================
  * // Wydawca: Feisheng Original
- * 交流群: 123456789
- * v4.0.3-test
+ * 交流群: 1080487560
+ * v4.0.6-test
  * 版权所有，侵权必究
  * ============================================
  */
@@ -76,7 +76,7 @@ const __VERSION__ = "v" + VERSION;
 
 		const loaded = 24 - failed.length;
 		console.log('%c[无名AI v' + VERSION + '] ✅ 扩展加载完成！', 'color: #00d4ff; font-weight: bold;');
-		console.log('%c作者: 飞升原创 | 交流群: 123456789', 'color: #aaa; font-size: 10px;');
+		console.log('%c作者: 飞升原创 | 交流群: 1080487560', 'color: #aaa; font-size: 10px;');
 		/* ★ P1-29：面板实为 24 个（13 + 11），日志与数量口径对齐 */
 		if (failed.length) {
 			console.warn('[无名AI] ⚠️ 面板挂载 ' + loaded + '/24 完成，失败 ' + failed.length + ' 个：' + failed.join('、'));
