@@ -60,9 +60,11 @@ score/
 │   ├── log/                     cognitiveLog.js
 │   └── (根)                     deepThink.js metaCognition.js situationEval.js moodState.js
 │
-├── decision/                    L4 决策内核（74）
+├── decision/                    L4 决策内核（75）
 │   ├── engine/                  engine.js decisionHook.js decisionRegistry.js
 │   │                            scoreUnify.js scoreSelfMod.js
+│   ├── state/                   actionCandidate.js decisionMargin.js decisionTransaction.js
+│   │                            gamePhase.js playerSnapshot.js playerState.js turnStrategicState.js
 │   ├── strategy/                strategy.js strategist.js strategyBus.js championStrategy.js
 │   │                            counterStrategy.js modeStrategy.js planner.js recommend.js
 │   │                            pickRecommend.js comboChain.js treeSearch.js
