@@ -5298,6 +5298,37 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 }
 
 
+/* ================= 10.56 bestAction 分阶段性能观测 ================= */
+{
+    const fs56 = await import('node:fs');
+    const eng56 = fs56.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const trace56 = fs56.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'decisionTrace.js'), 'utf8');
+    const panel56 = fs56.readFileSync(join(_pkg, 'score', 'view', 'panel', 'panel.js'), 'utf8');
+
+    for (const phase of ['preflight','context','targets','candidates','planner','model','observability','guard','telemetry']) {
+        ok(eng56.indexOf("_markPhase('" + phase + "')") >= 0,
+            '10.56 bestAction 记录阶段耗时：' + phase);
+    }
+
+    ok(eng56.indexOf('_finalResult.phaseMs = _phaseMs') >= 0 &&
+       eng56.indexOf('_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs)') >= 0,
+        '10.56 最终结果与 DECISION_LOG 均携带 phaseMs');
+
+    ok(eng56.indexOf('entry.phaseMs = phaseMs') >= 0,
+        '10.56 决策回放记录保存 phaseMs 快照');
+
+    ok(trace56.indexOf("lines.push('性能：'") >= 0 &&
+       trace56.indexOf(".sort(function (a, b) { return b.ms - a.ms; })") >= 0,
+        '10.56 详细日志按耗时排序输出性能热点');
+
+    ok(panel56.indexOf('性能热点：') >= 0,
+        '10.56 决策回放面板显示性能热点');
+
+    eq(/_perfPhases\[[^\]]+\]\s*=\s*[^;]*score/.test(eng56), false,
+        '10.56 性能观测数据不写入 candidate score');
+}
+
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
