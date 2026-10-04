@@ -61,6 +61,11 @@ const again = commitDecisionTransaction(player, { type: 'card', id: 'sha', targe
 eq(again.reason, 'no-pending', '10.59 同一事务不可重复提交');
 eq(committed, 1, '10.59 重复宿主事件不会重复学习');
 
+/* engine 缓存可能再次返回同一结果对象：已提交事务绝不能复活。 */
+eq(stageDecisionTransaction(player, tx2), null, '10.59 committed 事务不可重新 stage');
+eq(tx2.state, 'committed', '10.59 committed 终态不会被 TTL/stage 改写');
+eq(peekDecisionTransaction(player), null, '10.59 committed 事务不会重新进入 pending');
+
 const tx3 = createDecisionTransaction(
 	{ type: 'card', id: 'guohe', target: '敌B' },
 	function () { committed++; }
@@ -82,6 +87,21 @@ ok(stats.staged >= 4, '10.59 stats 记录 staged');
 eq(stats.committed, 1, '10.59 stats 只计真实 commit');
 ok(stats.mismatched >= 2, '10.59 stats 记录 mismatch');
 ok(stats.cancelled >= 1, '10.59 stats 记录 cancel');
+
+/* 新事务会替换旧 pending，旧事务明确标记 superseded。 */
+const tx5 = createDecisionTransaction({ type: 'card', id: 'sha' }, function () {});
+const tx6 = createDecisionTransaction({ type: 'card', id: 'tao' }, function () {});
+stageDecisionTransaction(player, tx5);
+stageDecisionTransaction(player, tx6);
+eq(tx5.state, 'superseded', '10.59 新评估事务替换旧 pending');
+eq(peekDecisionTransaction(player).id, tx6.id, '10.59 pending 指向最新事务');
+
+/* 生命周期重置不仅清统计，也必须清跨局 pending。 */
+resetDecisionTransactionStats();
+eq(peekDecisionTransaction(player), null, '10.59 reset 清除跨局 pending');
+const resetStats = decisionTransactionStats();
+eq(resetStats.evaluated, 0, '10.59 reset 清零事务统计');
+eq(resetStats.committed, 0, '10.59 reset 清零 commit 统计');
 
 process.stdout.write('\n');
 if (fails.length) {
