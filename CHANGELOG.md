@@ -1,12 +1,47 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.7-test（semver 4.0.7-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.8-test（semver 4.0.8-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
 
 ---
+
+## v4.0.8-test 配置单一真相源（2026-10-04）
+
+> 本版本只收敛配置架构，不修改 AI 评分、身份推断、Planner、Guard 或卡牌专项策略。
+
+### Config Schema
+
+- 新增 `js/config/configSchema.js`，成为配置默认值、类型、枚举项、玩家/开发者归属、板块顺序、标签与说明的唯一权威源。
+- 玩家设置与开发者设置的 8+8 板块改由 Schema 生成；`configLayout.js` 不再维护第二份 groups / explanations。
+- 卡牌策略的“基本牌 / 锦囊牌 / 装备牌 / 其他”层级也进入 Schema；铁索继续归属锦囊牌。
+- 锁定状态（隐藏信息隔离、关系判断边界、最终合法性校验、异常降级保护）继续以不可关闭状态展示。
+
+### 默认值与兼容层
+
+- `config.js` 不再写 `init` / `item`，只保留功能回调与宿主配置对象外壳；默认值和枚举项由 Schema 注入。
+- `score/foundation/config/configSpec.js` 改为 Schema 兼容适配层，不再维护旧默认值、旧群号或未接线“伪配置”。
+- 运行时 `cfg()` 在宿主配置缺失时统一回退 Schema 默认值。
+- QQ群号统一从 Schema 读取，默认值固定为 **1080487560**。
+- 冠军策略默认值以实际游戏设置为准保持 **0（关闭）**，不再与旧 ConfigSpec 的 6 冲突。
+
+### 配置审计门禁
+
+新增 `tests/run_config_schema_tests.mjs`，自动检查：
+
+- section / key 重复；
+- 布局引用不存在的配置；
+- 非隐藏配置未进入布局；
+- enum 默认值不在 options；
+- `config.js` 出现未登记 Schema 的真实设置/动作；
+- Schema 引用不存在的 `config.js` 功能；
+- `config.js` 重新写入 `init` / `item`；
+- ConfigSpec 默认值与 Schema 漂移；
+- 运行时 cfg 默认值未回退 Schema。
+
+未接线实验位不再作为 active/pending 配置展示；真正接线后必须先登记 Schema 才能进入设置系统。
 
 ## v4.0.7-test 决策事务化（2026-10-04）
 

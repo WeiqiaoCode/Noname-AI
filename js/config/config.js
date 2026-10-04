@@ -25,6 +25,7 @@ const _antiPiracy = {
 import { lib, game, ui, get, ai, _status } from '../shared/utils.js';
 import { openStateCardPanel } from '../../score/view/dashboard/stateCards.js';
 import { arrangeConfig } from './configLayout.js';
+import { applyConfigSchema } from './configSchema.js';
 import { changelog } from './changelog.js';
 import { VERSION } from './version.js';  /* ★ P2-35：版本号唯一权威源，UI 不写死 */
  import { zhong } from './identities/zhong.js';
@@ -340,7 +341,7 @@ export let config = {
 	engineBd: { clear: true, name: '<hr aria-hidden="true"><div style="color: #7fe3a0; text-align:center; padding: 8px;">▸ 引擎开关与参数</div>' },
 
 	/* ===== 总开关 ===== */
-	decisionScore: { name: '✅ 决策积分引擎总开关', init: true },
+	decisionScore: { name: '✅ 决策积分引擎总开关'},
 
 	/* ===== 决策模式 ===== */
 		/* 🎯 决策模式 */
@@ -362,54 +363,38 @@ export let config = {
 	aiBd: { clear: true, name: '<div style="color: #9ad8ff; text-align:center; padding: 4px;">▸ AI 增强</div>' },
 	decisionFeedback: { 
 		name: '📝 决策维度反馈（目标/阶段/留牌三维度学习）', 
-		intro: 'AI 会从三个维度评估决策质量：打谁最优、当前阶段该激进还是保守、手牌该留什么弃什么',
-		init: true 
-	},
+		intro: 'AI 会从三个维度评估决策质量：打谁最优、当前阶段该激进还是保守、手牌该留什么弃什么'},
 	responseAI: { 
 		name: '🛡️ 响应/弃牌 AI 增强（AI 学会留闪/桃/无懈）', 
-		intro: 'AI 不再无脑出牌，会根据局势留闪防杀、留桃保命、留无懈防关键锦囊',
-		init: true 
-	},
+		intro: 'AI 不再无脑出牌，会根据局势留闪防杀、留桃保命、留无懈防关键锦囊'},
 	broadcastAI: { 
 		name: '📡 AI 广播协作（同阵营 AI 共享攻击意图形成集火）', 
-		intro: '忠臣/反贼AI会互相通气：我要打谁了，你也一起打，形成集火秒杀',
-		init: true 
-	},
+		intro: '忠臣/反贼AI会互相通气：我要打谁了，你也一起打，形成集火秒杀'},
 	compareAI: { 
 		name: '🎲 拼点/选牌 AI 微调（保留高点数牌用于拼点）', 
-		intro: 'AI 会记住高点数的牌，留着拼点用，而不是随便打出去',
-		init: true 
-	},
+		intro: 'AI 会记住高点数的牌，留着拼点用，而不是随便打出去'},
 	adaptiveDifficulty: { 
 		name: '📈 自适应难度（AI 根据你的近期战绩自动调整强度）', 
-		intro: '你连胜AI就变强，你连败AI就放水，永远让你觉得势均力敌',
-		init: false 
-	},
+		intro: '你连胜AI就变强，你连败AI就放水，永远让你觉得势均力敌'},
 	enablePlanner: { 
 		name: '🎯 战术规划器（多步连招 + 残局解）', 
-		intro: 'AI 会提前想两步：先出什么、再出什么，怎么连招一套带走；残局会算最优解',
-		init: true 
-	},
+		intro: 'AI 会提前想两步：先出什么、再出什么，怎么连招一套带走；残局会算最优解'},
 		/* 🎯 规划深度（1=单步 2=两步展望） */
 	psychologyLayer: {
 		name: '🧠 博弈策略层（威慑姿态 / 意图识别 / 压迫力 / 策略保留）',
 		intro: 'AI 会摆出进攻架势、判断对手是真强还是试探、评估心理压迫价值、保留无用牌作消耗',
-		init: true,
 	},
 	comboChain: {
 		name: '🔗 连招链（铁索火攻 / 拆防连杀 / 酒杀斩杀 / AOE顺拆 / 连弩爆发）',
 		intro: 'AI 会识别手牌里的连招组合，并按起手优先级执行',
-		init: true,
 	},
 	narrator: {
 		name: '💬 决策解释器（自然语言解释每次决策）',
 		intro: '把引擎信号翻译成人话：因为…所以…；如果…就会…',
-		init: true,
 	},
 	profiler: {
 		name: '⏱️ 性能分析器（记录各阶段耗时）',
 		intro: '轻微开销，用于诊断卡顿。默认开，不想要可关',
-		init: true,
 	},
 
 	/* ===== 接管原生 AI ===== */
@@ -417,12 +402,11 @@ export let config = {
 	hardOverride: {
 		name: '⚠️ 硬接管层（4 层独立熔断，异常自动降级到软接管）',
 		intro: '开启后：<br>① 引擎说"结束回合"→ 立即结束<br>② 引擎选的牌不可用 → 回退原生 AI<br>③ 出牌顺序/目标选择仍由软接管驱动<br>④ 任意层异常 3 次 → 该层自动熔断 30 秒',
-		init: true,
 	},
-	override_use: { name: '⚠️ 硬接管 · 出牌决策（仅做"结束回合"短路）', init: true },
-	override_respond: { name: '⚠️ 硬接管 · 响应决策（保留闪/桃/无懈）', init: true },
-	override_discard: { name: '⚠️ 硬接管 · 弃牌决策（弃低价值牌）', init: true },
-	override_compare: { name: '⚠️ 硬接管 · 拼点决策（按赢率选牌）', init: true },
+	override_use: { name: '⚠️ 硬接管 · 出牌决策（仅做"结束回合"短路）'},
+	override_respond: { name: '⚠️ 硬接管 · 响应决策（保留闪/桃/无懈）'},
+	override_discard: { name: '⚠️ 硬接管 · 弃牌决策（弃低价值牌）'},
+	override_compare: { name: '⚠️ 硬接管 · 拼点决策（按赢率选牌）'},
 
 	/* ===== 分值倍率 ===== */
 	rateBd: { clear: true, name: '<div style="color: #9ad8ff; text-align:center; padding: 4px;">▸ 分值倍率</div>' },
@@ -441,55 +425,40 @@ export let config = {
 	memoryBd: { clear: true, name: '<div style="color: #9ad8ff; text-align:center; padding: 4px;">▸ 记忆/学习</div>' },
 	crossGameMemory: {
 		name: '🧠 跨局记忆（记住武将打法风格，跨局累积，所有模式生效）',
-		init: true,
 	},
 	skillFeedback: {
 		name: '📚 技能矩阵反馈闭环（AI 会随对局自动学习修正技能评分）',
-		init: true,
 	},
 	styleFeedback: {
 		name: '🎨 对手风格反馈（用胜负修正风格标签可信度）',
-		init: true,
 	},
 	playerMemory: {
 		name: '👤 对手长期记忆（记住每个玩家的身份偏好 / 行为画像 / 仇恨度）',
 		intro: 'AI 跨局记住与你交手过的玩家，越玩越懂对方',
-		init: true,
 	},
 
 	/* ===== 战报/日志 ===== */
 	reportBd: { clear: true, name: '<div style="color: #9ad8ff; text-align:center; padding: 4px;">▸ 战报/日志</div>' },
 	showReport: {
 		name: '📊 结算战报（终局后弹出对局图文报告）',
-		init: true,
 	},
 	archiveGames: {
 		name: '📁 战报归档（每局保存，最多 30 局）',
-		init: true,
 	},
-	showLog: { name: '📋 对局日志显示积分明细', init: false },
+	showLog: { name: '📋 对局日志显示积分明细'},
 	testDecisionLog: {
 		name: '🧪 测试决策日志',
-		init: '摘要',
-		intro: '测试版默认显示摘要，让玩家确认无名AI正在运行，并看到最终动作、次选、分差、原因和本次决策耗时。详细模式额外显示前3候选和阶段/风险/集火等关键信号；关闭后不向左侧对局日志写入决策摘要。',
-		item: {
-			'关闭': '关闭（只保留内部决策回放）',
-			'摘要': '摘要（推荐测试：最终+次选+耗时）',
-			'详细': '详细（前3候选+关键策略信号）',
-		},
-	},
-	persist: { name: '💾 结算保存历史（localStorage）', init: false },
+		intro: '测试版默认显示摘要，让玩家确认无名AI正在运行，并看到最终动作、次选、分差、原因和本次决策耗时。详细模式额外显示前3候选和阶段/风险/集火等关键信号；关闭后不向左侧对局日志写入决策摘要。',	},
+	persist: { name: '💾 结算保存历史（localStorage）'},
 
 	/* ===== 牌堆感知 ===== */
 	deckBd: { clear: true, name: '<div style="color: #9ad8ff; text-align:center; padding: 4px;">▸ 牌堆感知</div>' },
 	deckAwareness: {
 		name: '🎴 牌堆感知（追踪剩余牌，修正判定/摸牌概率）',
-		init: true,
 	},
 		/* 📊 牌堆预测权重（影响 AOE/判定类卡牌评分） */
 	deckConsumeAllPlayers: {
 		name: '👥 感知所有玩家的牌（不只是 AI 自己）',
-		init: true,
 	},
 
 	/* ===== 训练/蒸馏 ===== */
@@ -641,13 +610,11 @@ export let config = {
 
 		useTrainedModel: {
 			name: '🤖 启用训练模型（默认开启，新手开箱即用，日志显示 M 标签）',
-			init: true,
 		},
 
 		/* 🔧 模型高级配置 */
 		useResidual: {
 			name: '🔗 启用残差连接（默认关闭，开启后训练更稳定）',
-			init: false,
 		},
 
 		/* 🎚️ AI 强度档位：缩放"冠军策略"对决策的影响力系数。
@@ -655,34 +622,16 @@ export let config = {
 		 *   且旧代码里该系数算完从未被使用（死开关）。现已真正接到冠军策略提权上。 */
 		aiStrength: {
 			name: '🎚️ AI 强度（冠军策略影响力档位）',
-			init: '中',
-			intro: '缩放"冠军策略"对决策的影响力：极弱=0（纯规则，不接管）、弱=0.3、中=1.0（默认，与历史行为一致）、强=1.6、极强=2.0。档位只放大影响力，不提升模型本身的正确率——判断有误时，档位越高错误也被放大得越明显。',
-			item: {
-				'极弱': '极弱（影响力×0·纯规则）',
-				'弱': '弱（影响力×0.3·明显放水）',
-				'中': '中（影响力×1.0·默认平衡）',
-				'强': '强（影响力×1.6·全力）',
-				'极强': '极强（影响力×2.0·非"接近完美"）',
-			},
-		},
+			intro: '缩放"冠军策略"对决策的影响力：极弱=0（纯规则，不接管）、弱=0.3、中=1.0（默认，与历史行为一致）、强=1.6、极强=2.0。档位只放大影响力，不提升模型本身的正确率——判断有误时，档位越高错误也被放大得越明显。',		},
 
 		/* 🗂️ 对局日志自存：绕开内核"录像只留 20 条"的限制 */
 		logRetain: {
 			name: '🗂️ 对局日志保留局数（扩展自存，不受内核 20 条限制）',
-			init: '100',
-			intro: '每局结束自动把完整日志（AI决策链 + 玩家实际操作 + 出牌统计 + 胜负结论）存进扩展自己的日志库，与内核录像互不影响。0=不限（会占本地存储）。',
-			item: {
-				'50': '50 局（省空间）',
-				'100': '100 局（推荐）',
-				'200': '200 局（留得多）',
-				'0': '不限（注意存储容量）',
-			},
-		},
+			intro: '每局结束自动把完整日志（AI决策链 + 玩家实际操作 + 出牌统计 + 胜负结论）存进扩展自己的日志库，与内核录像互不影响。0=不限（会占本地存储）。',		},
 
 		/* 📮 交流群号：样本满额一键复制 */
 		qqGroup: {
 			name: '📮 交流群号（样本满额时一键复制）',
-			init: '1080487560',
 			intro: '样本攒满后可将导出文件发送到反馈与交流QQ群 1080487560；留空则只提示导出文件名。',
 		},
 
@@ -707,43 +656,11 @@ export let config = {
 
 		learningRate: {
 			name: '📈 学习率（越大训练越快）',
-			init: '0.005',
-			intro: '0.00005~0.01，默认0.005平衡',
-			item: {
-				'0.00005': '0.00005（近冻结，几乎不学）',
-				'0.0001': '0.0001（极慢极限）',
-				'0.0002': '0.0002（极慢超微）',
-				'0.0003': '0.0003（极慢微稳）',
-				'0.0004': '0.0004（极慢很稳）',
-				'0.0005': '0.0005（极慢稳）',
-				'0.0006': '0.0006（很慢稳）',
-				'0.0007': '0.0007（很慢偏稳）',
-				'0.0008': '0.0008（很慢）',
-				'0.0009': '0.0009（慢超稳）',
-				'0.001': '0.001（极慢超稳）',
-				'0.002': '0.002（很慢很稳）',
-				'0.003': '0.003（慢但稳）',
-				'0.004': '0.004（偏慢稳定）',
-				'0.005': '0.005（平衡推荐）',
-				'0.006': '0.006（偏快）',
-				'0.007': '0.007（较快）',
-				'0.008': '0.008（很快）',
-				'0.009': '0.009（非常快）',
-				'0.010': '0.010（极快最快）',
-			},
-		},
+			intro: '0.00005~0.01，默认0.005平衡',		},
 
 		championBoost: {
 			name: '🏆 冠军策略（写入引擎的同类型最高分决策提权）',
-			init: '0',
-			intro: '训练完成后，从样本里按决策类型聚合，挑出每类价值最高的冠军决策，固化为默认策略写入引擎。此项设置命中冠军动作的加分强度：0=关闭、3=轻微、6=明显、10=强执。既能把样本训练出的最高分决策固化长期优先，又可通过归零随时关闭。需要在模型提升后才会自动固化一次。',
-			item: {
-				'0': '0（关闭冠军策略提权）',
-				'3': '3（轻微：冠军动作略优先）',
-				'6': '6（明显：冠军动作明显优先）',
-				'10': '10（强：倾向固化的最高分决策）',
-			},
-		},
+			intro: '训练完成后，从样本里按决策类型聚合，挑出每类价值最高的冠军决策，固化为默认策略写入引擎。此项设置命中冠军动作的加分强度：0=关闭、3=轻微、6=明显、10=强执。既能把样本训练出的最高分决策固化长期优先，又可通过归零随时关闭。需要在模型提升后才会自动固化一次。',		},
 
 		/* 🔄 模型更新模式 */
 
@@ -1253,7 +1170,6 @@ export let config = {
 	identityBd: { clear: true, name: '<div style="color: #9ad8ff; text-align:center; padding: 4px;">▸ 身份匹配</div>' },
 	autoIdentityMatch: {
 		name: '🎭 身份自动匹配（主公→守护型，反贼→张飞型，忠臣→诸葛亮型，内奸→独狼型）',
-		init: false,
 	},
 
 	/* ===== 📊 实时状态检测（大按钮） ===== */
@@ -1456,5 +1372,6 @@ export let config = {
 
 };
 
+config = applyConfigSchema(config);
 config = arrangeConfig(config, lib, game);
 config.updateLog = { clear: true, nopointer: true, name: changelog, onclick: function () { return false; } };

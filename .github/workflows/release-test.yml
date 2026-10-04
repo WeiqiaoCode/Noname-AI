@@ -186,15 +186,14 @@ jobs:
 
           ### 本版修复
 
-          - 引入 Evaluate → Stage → Commit → Outcome 决策事务边界
-          - bestAction 评估阶段不再直接把推荐动作写入训练、回放、AutoFeature 或团队广播
-          - Player.useCard 作为卡牌真实执行 Commit 点，动作/目标不匹配时推荐事务直接作废
-          - 主动技能只在匹配的 logSkill 出现后 Commit，旁路/被动技能不会误提交
-          - hard override 明确结束回合后 Commit end 事务；无法可靠确认的 soft end 不猜测
-          - committed / mismatched / cancelled / expired / superseded 事务不可复活
-          - 新局重置同时清除 pending，避免跨局污染
-          - soft override 移除“按回合”粗缓存，统一复用 state fingerprint 缓存
-          - 不修改评分公式、Planner 深度、身份推断、Guard 与卡牌专项策略
+          - 新增 configSchema 作为配置默认值、类型、分组、文案与枚举项的唯一真相源
+          - 玩家/开发者设置布局改为 Schema 驱动，不再在 configLayout 维护第二份 groups / explanations
+          - config.js 移除 init / item 重复定义，配置默认值与下拉项统一由 Schema 注入
+          - ConfigSpec 改为兼容适配层，不再保留旧默认值、旧群号或未接线伪配置
+          - 运行时 cfg 在宿主配置缺失时统一回退 Schema 默认值
+          - QQ群默认值统一为 1080487560
+          - 新增配置一致性门禁，阻止未登记设置、默认值漂移和布局漏项进入主分支
+          - 不修改评分、身份推断、Planner、Guard 与卡牌专项策略
 
           ### 测试重点
 
