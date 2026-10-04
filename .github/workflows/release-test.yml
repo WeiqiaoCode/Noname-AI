@@ -1,0 +1,190 @@
+name: Test Release Package
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release-test.yml"
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*-test"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build test package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      asset: ${{ steps.version.outputs.asset }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Read and verify version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node --input-type=module -e "import { VERSION_SEMVER } from './js/config/version.js'; process.stdout.write(VERSION_SEMVER)")"
+          DISPLAY_VERSION="$(node --input-type=module -e "import { VERSION } from './js/config/version.js'; process.stdout.write(VERSION)")"
+
+          if [[ -z "$VERSION" || -z "$DISPLAY_VERSION" ]]; then
+            echo "Version source returned an empty value."
+            exit 1
+          fi
+
+          if [[ "$VERSION" != *-test ]]; then
+            echo "Test release workflow only accepts *-test versions. Got: $VERSION"
+            exit 1
+          fi
+
+          if [[ "$DISPLAY_VERSION" != "$VERSION" ]]; then
+            echo "VERSION and VERSION_SEMVER must match for test releases."
+            echo "VERSION=$DISPLAY_VERSION"
+            echo "VERSION_SEMVER=$VERSION"
+            exit 1
+          fi
+
+          INFO_VERSION="$(node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync('info.json','utf8')); process.stdout.write(String(x.version||''))")"
+          PACKAGE_VERSION="$(node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync('package.json','utf8')); process.stdout.write(String(x.version||''))")"
+
+          if [[ "$INFO_VERSION" != "$VERSION" || "$PACKAGE_VERSION" != "$VERSION" ]]; then
+            echo "Version mismatch:"
+            echo "version.js=$VERSION"
+            echo "info.json=$INFO_VERSION"
+            echo "package.json=$PACKAGE_VERSION"
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            EXPECTED_TAG="v$VERSION"
+            if [[ "$GITHUB_REF_NAME" != "$EXPECTED_TAG" ]]; then
+              echo "Tag/version mismatch: tag=$GITHUB_REF_NAME expected=$EXPECTED_TAG"
+              exit 1
+            fi
+          fi
+
+          ASSET="无名AI_${VERSION}.zip"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+          echo "Packaging test version: $VERSION"
+
+      - name: Run release gate
+        run: npm test
+
+      - name: Build clean extension package
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          set -euo pipefail
+
+          rm -rf dist
+          mkdir -p "dist/无名AI"
+
+          for item in extension.js info.json js score css assets data README.md CHANGELOG.md LICENSE; do
+            if [[ ! -e "$item" ]]; then
+              echo "Required release item is missing: $item"
+              exit 1
+            fi
+            cp -R "$item" "dist/无名AI/"
+          done
+
+          (
+            cd dist
+            zip -q -r "../$ASSET" "无名AI"
+          )
+
+          test -s "$ASSET"
+
+          # ZIP 必须直接解压出“无名AI/”，且不得混入开发目录。
+          unzip -Z1 "$ASSET" > package-files.txt
+          grep -q '^无名AI/extension.js$' package-files.txt
+          grep -q '^无名AI/info.json$' package-files.txt
+          grep -q '^无名AI/js/' package-files.txt
+          grep -q '^无名AI/score/' package-files.txt
+
+          if grep -Eq '^无名AI/(\.github|tests|build|DEV_GUIDE|logs)/' package-files.txt; then
+            echo "Development-only files leaked into release package."
+            exit 1
+          fi
+
+          echo "Package ready: $ASSET"
+          du -h "$ASSET"
+          echo "Files: $(wc -l < package-files.txt)"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnknownAI-${{ steps.version.outputs.version }}
+          path: ${{ steps.version.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish GitHub pre-release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: UnknownAI-${{ needs.package.outputs.version }}
+
+      - name: Create pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          ASSET: ${{ needs.package.outputs.asset }}
+        run: |
+          set -euo pipefail
+
+          cat > release-notes.md <<EOF
+          ## 无名AI $VERSION 测试版
+
+          这是底层决策架构调整后的实战测试版本，当前阶段以发现和修复 P0 / P1 问题为主。
+
+          ### 安装
+
+          1. 下载 **$ASSET**
+          2. 解压后得到 **无名AI** 文件夹
+          3. 将该文件夹放入无名杀的 `extension/` 目录，覆盖旧版本前建议先备份
+          4. 完全重启无名杀
+          5. 控制台执行 `DJSC.VERSION`，应显示 `$VERSION`
+
+          ### 测试重点
+
+          - 身份判断与敌我关系
+          - 桃 / 无懈 / 铁索
+          - 乐、兵、顺、拆的连续动作一致性
+          - AOE 与残局策略
+          - 多目标 / 多阶段技能决策
+          - 卡死、报错、无限循环等 P0 问题
+
+          自动化 release gate 已在发布前执行通过。
+          EOF
+
+          gh release create "$GITHUB_REF_NAME" "$ASSET" \
+            --verify-tag \
+            --title "无名AI $VERSION 测试版" \
+            --notes-file release-notes.md \
+            --prerelease

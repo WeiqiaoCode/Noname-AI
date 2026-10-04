@@ -4,7 +4,7 @@
  * 重新生成：node build/semantic_audit.mjs（发布前必须重跑，P2-34）
  */
 export const AUDIT = {
-	"generated": "2026-10-03",
+	"generated": "2026-10-04",
 	"files": 218,
 	"cleanFiles": 92,
 	"legacyFiles": 126,
