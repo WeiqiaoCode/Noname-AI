@@ -5271,6 +5271,11 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:2, skill:'' };
     const kEvent = cache55.stateKey();
     ok(kEvent !== k1, '10.55 当前事件 step/window 变化立即改变 stateKey');
+
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:1, skill:'', target:enemy55 };
+    const kEventTarget = cache55.stateKey();
+    ok(kEventTarget !== k1, '10.55 同一事件步骤的 target 变化也立即失效');
+
     hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:1, skill:'' };
 
     ownHand = [{ name:'tao', suit:'heart', number:7 }];
