@@ -21,7 +21,7 @@
   - 熔断状态；
   - 5 秒降级窗口；
   - 事件哨兵；
-  - Host 调用与异常 fallback；
+  - Host 单次调用与异常后的后续事件降级 fallback；
   - Decision Transaction Stage / Commit / Cancel；
   - 统一执行统计。
 - 各接管模块继续保留自己的策略算法，不把桃、无懈、弃牌估值或拼点逻辑塞进 Gateway。
@@ -37,7 +37,7 @@
 
 - `decisionHook` 明确降级为“监督员”：只观察一次真实宿主调用，不再因为合法性/红线检查失败而重复执行同一个 choose 事件。
 - engine 的 useCard / respond / effect / logSkill / die 观测 Hook 改为单次宿主调用。
-- 修复旧逻辑中“第一次宿主调用已产生部分副作用，异常后又调用第二次”的重复执行风险。
+- 修复旧逻辑中“第一次宿主调用已产生部分副作用，异常后又调用第二次”的重复执行风险；当前事件一旦 Host 抛错不再重入，清理临时改写并让后续事件通过 degrade/circuit 回退原生。
 
 ### 兼容原则
 
