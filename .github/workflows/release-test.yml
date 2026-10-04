@@ -174,7 +174,7 @@ jobs:
           fi
 
           # 同版本已经发布时保持幂等，避免 main 上后续发布配置调整重复创建。
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists; nothing to publish."
             exit 0
           fi
@@ -188,9 +188,9 @@ jobs:
 
           1. 下载 **$ASSET**
           2. 解压后得到 **无名AI** 文件夹
-          3. 将该文件夹放入无名杀的 `extension/` 目录，覆盖旧版本前建议先备份
+          3. 将该文件夹放入无名杀的 extension/ 目录，覆盖旧版本前建议先备份
           4. 完全重启无名杀
-          5. 控制台执行 `DJSC.VERSION`，应显示 `$VERSION`
+          5. 控制台执行 DJSC.VERSION，应显示 $VERSION
 
           ### 测试重点
 
@@ -206,6 +206,7 @@ jobs:
 
           # gh release create 在 Tag 不存在时，会在 --target 指定提交上创建该 Tag。
           gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "无名AI $VERSION 测试版" \
             --notes-file release-notes.md \
