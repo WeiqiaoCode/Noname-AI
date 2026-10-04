@@ -11,7 +11,7 @@
  * ★ 全局缓存层（减少重复计算，解决卡顿发烫）
  * ============================================ */
 /* ★ 指令 04：显式导入宿主，消除「隐式全局在非浏览器环境静默失效」。 */
-import { game, get, _status } from '../adapt/host.js';
+import { game, get, ui, _status } from '../adapt/host.js';
 
 const _cache = new Map();
 const _cacheTime = new Map();
@@ -85,62 +85,97 @@ function _cacheCardName(card, player) {
  */
 function makeStateKey() {
     try {
-        const me = (typeof game !== 'undefined' && game.me) ? game.me : null;
-        if (!me) return 'no_player';
+        const current = (_status && _status.currentPhase) || ((typeof game !== 'undefined' && game.me) ? game.me : null);
+        if (!current) return 'no_player';
 
-        const parts = [
-            me.hp || 0,                    // 我的血量
-            me.countCards('h') || 0,      // 我的手牌数
-            (game.alivePlayers || []).length,  // 存活玩家数
-            me.maxHp || 0,                // 我的最大血量
-        ];
-        /* ★ 指令 04（State Freshness）：纳入各存活角色的判定区 / 装备区指纹。
-         * 判定区落乐/兵/闪电、装备被拆/被顺后，「Action 1 resolved → next bestAction」
-         * 必须看到最新状态，否则会自我抵消（先挂乐 → 又用顺/拆把乐拆掉）。 */
+        const parts = [];
+        const currentKey = String(current.playerid || current.name1 || current.name || '?');
+        parts.push('C:' + currentKey);
+
+        /* 决策者自己的手牌可以精确读取；不读取其他玩家隐藏手牌内容，只记录公开手牌数。 */
+        try {
+            const ownHand = typeof current.getCards === 'function' ? (current.getCards('h') || []) : [];
+            const ownSig = ownHand.map(function (card) {
+                const name = _cacheCardName(card, current);
+                let suit = '', number = '', nature = '';
+                try { suit = get && typeof get.suit === 'function' ? (get.suit(card, current) || '') : (card.suit || ''); } catch (e) {}
+                try { number = get && typeof get.number === 'function' ? (get.number(card, current) || '') : (card.number || ''); } catch (e) {}
+                try { nature = get && typeof get.nature === 'function' ? (get.nature(card, current) || '') : (card.nature || ''); } catch (e) {}
+                return name + ':' + suit + ':' + number + ':' + nature;
+            }).sort().join(',');
+            parts.push('H:' + ownSig);
+        } catch (eOwn) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eOwn); }
+
+        /* 所有存活角色仅使用公开/可观察状态：血量、手牌数量、横置、判定区、装备区。
+         * 不读取其他玩家隐藏手牌牌名，避免缓存层引入信息泄漏。 */
         try {
             const players = (game && Array.isArray(game.players)) ? game.players : [];
             for (const p of players) {
                 if (!p || p.alive === false) continue;
-                let jn = '';
-                let en = '';
+                const pk = String(p.playerid || p.name1 || p.name || p.name2 || '?');
+                let handCount = 0, linked = 0, jn = '', en = '';
+                try { handCount = typeof p.countCards === 'function' ? (p.countCards('h') || 0) : 0; } catch (e) {}
+                try {
+                    linked = (typeof p.isLinked === 'function' ? p.isLinked() : (p.isLinked || p.isChained)) ? 1 : 0;
+                } catch (e) {}
                 try {
                     if (typeof p.getCards === 'function') {
                         const jc = p.getCards('j') || [];
                         const ec = p.getCards('e') || [];
-                        jn = jc.map(function (c) { return _cacheCardName(c, p); }).join(',');
-                        en = ec.map(function (c) { return _cacheCardName(c, p); }).join(',');
+                        jn = jc.map(function (card) { return _cacheCardName(card, p); }).sort().join(',');
+                        en = ec.map(function (card) { return _cacheCardName(card, p); }).sort().join(',');
                     }
                 } catch (eInner) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eInner); }
-                parts.push('J' + jn);
-                parts.push('E' + en);
+                parts.push('P:' + pk + ':' + (p.hp || 0) + ':' + (p.maxHp || 0) + ':' + handCount + ':' + linked + ':J=' + jn + ':E=' + en);
             }
-        } catch (eJudgeEquip) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eJudgeEquip); }
-        /* ★ 优化点 1：加入"牌堆剩余数（分桶）"。出牌/摸牌会消耗牌堆，
-         * 用数量级分桶而非精确数——避免每一次摸牌都清缓存导致卡顿再生，
-         * 同时让"牌堆明显变化"（摸牌预测/剩余量判断）的决策正确失效。 */
+        } catch (ePlayers) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(ePlayers); }
+
+        /* 牌堆只按数量级分桶，避免普通摸牌造成过度失效。 */
         try {
-            if (typeof game !== 'undefined') {
-                const p = game.cardPile;
-                if (p && Array.isArray(p)) {
-                    const len = p.length;
-                    /* 分桶：0 / 1/数 / 16 / 32 / 64 / 128 / 更大，取对数量级 */
-                    const bucket = len <= 0 ? 0 : Math.max(1, Math.round(Math.log2(len || 2)));
-                    parts.push('P' + bucket);
-                }
+            const pile = game && (game.cardPile || (typeof ui !== 'undefined' && ui.cardPile));
+            let len = 0;
+            if (pile) {
+                if (Array.isArray(pile)) len = pile.length;
+                else if (pile.childNodes) len = pile.childNodes.length;
             }
-        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-        /* ★ 优化点 2：加入"当前阶段/行动者"。轮到谁行动、处于什么阶段
-         * 决定能否出牌，上场决策依赖的窗口可能已失效。 */
+            if (len > 0) {
+                const bucket = Math.max(1, Math.round(Math.log2(len || 2)));
+                parts.push('D:' + bucket);
+            }
+        } catch (ePile) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(ePile); }
+
+        /* 当前事件窗口属于 decision identity：同一玩家在不同 choose/use/respond 窗口不能复用旧 bestAction。 */
         try {
-            if (typeof _status !== 'undefined' && _status && typeof _status !== 'undefined') {
-                const cs = _status.currentPhase;
-                if (cs && cs.name) parts.push('C' + cs.name);
+            const ev = _status && _status.event;
+            if (ev) {
+                const evName = String(ev.name || ev.type || '');
+                const evType = String(ev.type || '');
+                const evSkill = String(ev.skill || '');
+                const evStep = (typeof ev.step === 'number' || typeof ev.step === 'string') ? String(ev.step) : '';
+                let parentName = '';
+                try {
+                    const parent = typeof ev.getParent === 'function' ? ev.getParent() : ev.parent;
+                    parentName = parent ? String(parent.name || parent.type || '') : '';
+                } catch (e) {}
+                parts.push('EV:' + evName + ':' + evType + ':' + evSkill + ':' + evStep + ':' + parentName);
             }
-        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-        return parts.join('_');
+        } catch (eEvent) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eEvent); }
+
+        try {
+            const round = (_status && typeof _status.roundNumber === 'number')
+                ? _status.roundNumber
+                : (game && typeof game.roundNumber === 'number' ? game.roundNumber : 0);
+            parts.push('R:' + round);
+        } catch (eRound) {}
+
+        return parts.join('|');
     } catch (e) {
         return 'error_' + Date.now();
     }
+}
+
+export function stateKey() {
+    return makeStateKey();
 }
 
 /**
