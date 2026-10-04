@@ -37,10 +37,27 @@ function _load() {
         _loaded = true;
     } catch (e) { _loaded = true; }
 }
-function _save() {
+let _autoFeatureSaveTimer = null;
+const AUTO_FEATURE_SAVE_DEBOUNCE_MS = 500;
+
+function _flushAutoFeatureStore() {
+    _autoFeatureSaveTimer = null;
     try {
         _lsSet(STORE_KEY, JSON.stringify(STORE));
     } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+}
+
+function _save() {
+    try {
+        /* ★ 性能：AutoFeature 只影响后续学习，不参与当前 bestAction。
+         * 内存 STORE 仍同步更新；昂贵的 stringify + localStorage 写盘合并到后续任务，
+         * 避免每个决策点把持久化 I/O 算进本次出牌延迟。 */
+        if (_autoFeatureSaveTimer !== null) return;
+        _autoFeatureSaveTimer = setTimeout(_flushAutoFeatureStore, AUTO_FEATURE_SAVE_DEBOUNCE_MS);
+    } catch (e) {
+        /* 极旧宿主若定时器不可用则保留同步兜底，绝不丢学习数据。 */
+        _flushAutoFeatureStore();
+    }
 }
 
 /* ================= 记录一次决策 ================= */
