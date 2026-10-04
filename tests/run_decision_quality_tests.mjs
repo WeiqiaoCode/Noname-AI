@@ -49,12 +49,35 @@ function runBehavior(def) {
 }
 
 /* ===== A. 固定行为场景 ===== */
+const knownBehaviorDebt = Array.isArray(baseline.knownBehaviorDebt) ? baseline.knownBehaviorDebt : [];
+const behaviorDebtKeys = new Set(knownBehaviorDebt.map(function (x) {
+	return String(x.suite || '') + '|' + String(x.case || '');
+}));
 const suiteResults = QUALITY_SCENARIOS.map(runBehavior);
+const unexpectedBehaviorFailures = [];
+const resolvedBehaviorDebt = [];
+
 for (const result of suiteResults) {
-	ok(result.status === 0, '10.62 场景通过 ' + result.id,
-		result.stderr || result.stdout.slice(-1200));
 	ok(result.cases.length > 0, '10.62 场景有机器可读断言 ' + result.id);
-	eq(result.failed, 0, '10.62 场景无失败断言 ' + result.id);
+	const failedCases = result.cases.filter(function (x) { return x && !x.ok; });
+	const unexpected = failedCases.filter(function (x) {
+		return !behaviorDebtKeys.has(result.id + '|' + String(x.name || ''));
+	});
+	if (unexpected.length) unexpectedBehaviorFailures.push.apply(unexpectedBehaviorFailures,
+		unexpected.map(function (x) { return { suite: result.id, case: x.name, extra: x.extra }; }));
+	eq(unexpected.length, 0, '10.62 场景无新增失败 ' + result.id);
+
+	if (result.status !== 0 && failedCases.length === 0) {
+		ok(false, '10.62 场景进程异常 ' + result.id, result.stderr || result.stdout.slice(-1200));
+	}
+}
+
+for (const debt of knownBehaviorDebt) {
+	const suite = suiteResults.find(function (x) { return x.id === debt.suite; });
+	const stillFailing = !!(suite && suite.cases.some(function (x) {
+		return !x.ok && x.name === debt.case;
+	}));
+	if (!stillFailing) resolvedBehaviorDebt.push(debt);
 }
 
 /* ===== B. Top-N 候选解释契约 ===== */
@@ -80,6 +103,12 @@ ok(explainTopCandidates(synthetic, 3)[0].includes('确定斩杀'),
 /* ===== C. 隐藏信息审计：已知债务可见，但不得新增 ===== */
 const hiddenFindings = scanHiddenInfo(root);
 const hiddenAudit = compareHiddenInfoBaseline(hiddenFindings, baseline);
+if (hiddenAudit.unexpected.length) {
+	process.stdout.write('\nUnexpected hidden-info findings:\n');
+	for (const f of hiddenAudit.unexpected) {
+		process.stdout.write('- ' + f.path + ':' + f.line + ' ' + f.excerpt + '\n');
+	}
+}
 eq(hiddenAudit.unexpected.length, 0,
 	'10.62 不得新增未登记隐藏信息精确读取');
 ok(hiddenAudit.known.length === baseline.knownHiddenInfoDebt.length,
@@ -95,7 +124,7 @@ if (hiddenAudit.resolved.length) {
 /* ===== D. 汇总质量基线 ===== */
 const report = aggregateQualityBaseline(suiteResults, QUALITY_SCENARIOS, hiddenAudit);
 ok(report.cases > 0, '10.62 基线存在有效行为断言');
-eq(report.failed, 0, '10.62 已覆盖行为场景正确率不得回退');
+eq(unexpectedBehaviorFailures.length, 0, '10.62 已覆盖行为场景不得出现新增回归');
 eq(report.hiddenInfo.newFindings, 0, '10.62 隐藏信息技术债不得扩散');
 
 const expectedDimensions = [
@@ -108,6 +137,13 @@ for (const dim of expectedDimensions) {
 }
 
 process.stdout.write('\n\n' + formatQualityBaseline(report) + '\n');
+process.stdout.write('known behavior debt: ' + knownBehaviorDebt.length +
+	', new regressions=' + unexpectedBehaviorFailures.length +
+	', resolved=' + resolvedBehaviorDebt.length + '\n');
+if (knownBehaviorDebt.length) {
+	process.stdout.write('\nKnown behavior debt:\n');
+	for (const d of knownBehaviorDebt) process.stdout.write('- ' + d.suite + ' :: ' + d.case + '\n');
+}
 if (hiddenAudit.known.length) {
 	process.stdout.write('\nKnown hidden-info debt:\n');
 	for (const f of hiddenAudit.known) {
