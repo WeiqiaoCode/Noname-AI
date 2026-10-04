@@ -87,8 +87,11 @@ export function loadScore(rel) {
 /* ---------- 最小断言框架 ---------- */
 let _pass = 0;
 const _fails = [];
+const _cases = [];
 export function ok(cond, name, extra) {
-    if (cond) { _pass++; process.stdout.write('.'); }
+    const passed = !!cond;
+    _cases.push({ name: String(name || ''), ok: passed, extra: extra ? String(extra) : '' });
+    if (passed) { _pass++; process.stdout.write('.'); }
     else { _fails.push(name + (extra ? '  >> ' + extra : '')); process.stdout.write('F'); }
 }
 export function eq(a, b, name) { ok(a === b, name, 'got ' + JSON.stringify(a) + ' want ' + JSON.stringify(b)); }
@@ -97,6 +100,14 @@ export function approx(a, b, tol, name) { ok(Math.abs(a - b) <= tol, name, 'got 
 /* ---------- 汇总退出 ---------- */
 export function finish(suiteName) {
     process.stdout.write('\n');
+    if (process.env.DJSC_QUALITY_JSON === '1') {
+        process.stdout.write('@@DJSC_QUALITY@@' + JSON.stringify({
+            suite: String(suiteName || ''),
+            passed: _pass,
+            failed: _fails.length,
+            cases: _cases,
+        }) + '\n');
+    }
     if (_fails.length) {
         process.stdout.write('[' + suiteName + '] ❌ ' + _pass + ' passed, ' + _fails.length + ' failed\n');
         _fails.forEach(function (f) { process.stdout.write('  - ' + f + '\n'); });
