@@ -106,6 +106,27 @@ function makeStateKey() {
             parts.push('H:' + ownSig);
         } catch (eOwn) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eOwn); }
 
+        /* 本回合使用计数同样属于决策状态。
+         * 典型例子：一次性/限次技能使用后可能不改手牌或 HP，但下一次 phaseUse 已不能再次使用。
+         * 这里只读取当前决策者自己的公开运行状态，不涉及其他玩家隐藏信息。 */
+        try {
+            if (typeof current.getStat === 'function') {
+                function statSig(obj) {
+                    if (!obj || typeof obj !== 'object') return '';
+                    return Object.keys(obj).sort().map(function (key) {
+                        const v = obj[key];
+                        if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') {
+                            return key + '=' + String(v);
+                        }
+                        return '';
+                    }).filter(Boolean).join(',');
+                }
+                const cardStat = current.getStat('card');
+                const skillStat = current.getStat('skill');
+                parts.push('USE:C=' + statSig(cardStat) + ':S=' + statSig(skillStat));
+            }
+        } catch (eStat) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eStat); }
+
         /* 所有存活角色仅使用公开/可观察状态：血量、手牌数量、横置、判定区、装备区。
          * 不读取其他玩家隐藏手牌牌名，避免缓存层引入信息泄漏。 */
         try {
