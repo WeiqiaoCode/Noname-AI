@@ -186,13 +186,16 @@ jobs:
 
           ### 本版修复
 
-          - 新增 Decision Quality Baseline，不改 AI 策略，只建立可测量质量基线
-          - 首批统一纳入桃、铁索、兵乐拆顺、无懈、判定控制、全局锦囊、借刀等固定行为场景
-          - 行为测试支持机器可读断言，CI 可按 identity / allySafety / resource / cardStrategy / tactics / consistency / response / team / control 聚合
-          - 新增 Top-N 候选质量快照，保留 winner、score、reason 与 policy priority，不改写排序
-          - 新增隐藏信息回归审计；已知历史债务显式登记，新增同类隐藏手牌读取直接阻断 CI
-          - verifiedRate 只表示已覆盖回归场景正确率，不作为 AI 总实力分
-          - 不修改候选评分、身份推断、Planner、Guard 与现有卡牌专项策略
+          - 新增 Victory Objective / Role Objective / Strategic Intent 统一战略层
+          - 忠臣主公濒危时进入 PROTECT CRITICAL，不再只是普通 +bonus
+          - 反贼主公斩杀窗口进入 FINISH_LORD CRITICAL，普通阶段仍保持 utility-first FOCUS
+          - 内奸身份固定、stance动态：中期 BALANCE/CONCEAL，最终主内残局 FINAL_DUEL
+          - 身份槽位已排除敌方可能的 unknown 进入 PROTECTED_UNKNOWN，不作为普通集火目标
+          - Strategic Intent 不修改 raw score；只在明确关键职责下提升 policy tier
+          - 同回合 Intent 稳定复用，关键血线/人数/身份后验/目标状态变化时刷新
+          - Decision Trace 与 Top-N quality snapshot 增加战略目标、Intent 与 alignment
+          - #36 质量基线增加 strategy 维度和 strategic_intent 固定场景
+          - 不引入武将画像、不改 Planner 搜索算法、不改 Guard
 
           ### 测试重点
 
