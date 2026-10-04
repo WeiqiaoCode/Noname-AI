@@ -5,6 +5,7 @@
  */
 import { _status } from '../../foundation/adapt/host.js';
 import { resolveStrategicIntent, objectiveFingerprint } from './objective.js';
+import { shouldRefreshStrategicState, makeStrategicStateRecord } from './strategicStateCore.js';
 
 let _state = new WeakMap();
 
@@ -26,18 +27,9 @@ export function getStrategicState(player, options) {
 	const tKey = turnKey(player);
 	const old = _state.get(player);
 
-	if (!options.force && old && old.turnKey === tKey && old.fingerprint === fingerprint) return old;
+	if (!shouldRefreshStrategicState(old, tKey, fingerprint, options.force === true)) return old;
 
-	const state = {
-		turnKey: tKey,
-		fingerprint,
-		createdAt: Date.now(),
-		refreshedFrom: old ? old.intent && old.intent.type : null,
-		victory: fresh.victory || [],
-		roleObjective: fresh.roleObjective || 'GENERAL_ADVANTAGE',
-		intent: fresh.intent || null,
-		context: fresh.context || null,
-	};
+	const state = makeStrategicStateRecord(old, tKey, fingerprint, fresh);
 	_state.set(player, state);
 	return state;
 }
