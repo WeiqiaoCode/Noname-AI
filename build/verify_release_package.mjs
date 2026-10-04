@@ -70,6 +70,93 @@ for (const rel of required) {
   }
 }
 
+
+const expectedExtensionName = path.basename(root);
+let info = null;
+try {
+  info = JSON.parse(fs.readFileSync(path.join(root, 'info.json'), 'utf8'));
+} catch (e) {
+  fail('info.json is not valid JSON: ' + e.message);
+}
+
+if (!info || info.name !== expectedExtensionName) {
+  fail(
+    'Extension identity mismatch: package directory=' + expectedExtensionName +
+    ', info.json.name=' + String(info && info.name)
+  );
+}
+
+const extensionSource = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
+const packageNameMatch = extensionSource.match(/let\s+extensionPackage\s*=\s*\{[\s\S]{0,400}?\bname\s*:\s*['"]([^'"]+)['"]/);
+if (!packageNameMatch || packageNameMatch[1] !== expectedExtensionName) {
+  fail(
+    'Extension identity mismatch: package directory=' + expectedExtensionName +
+    ', extension.js name=' + String(packageNameMatch && packageNameMatch[1])
+  );
+}
+
+const observabilityContracts = [
+  {
+    label: 'openScorePanel',
+    file: 'score/view/panel/panel.js',
+    patterns: [/\bopenScorePanel\b/, /export\s*\{[\s\S]*?\bopenScorePanel\b[\s\S]*?\}/],
+    mount: /window\.__DJSC\.openScorePanel\s*=\s*panel\.openScorePanel/
+  },
+  {
+    label: 'openFeedbackPanel',
+    file: 'score/view/panel/panel.js',
+    patterns: [/\bopenFeedbackPanel\b/, /export\s*\{[\s\S]*?\bopenFeedbackPanel\b[\s\S]*?\}/],
+    mount: /window\.__DJSC\.openFeedbackPanel\s*=\s*panel\.openFeedbackPanel/
+  },
+  {
+    label: 'openPlanPanel',
+    file: 'score/view/panel/panel.js',
+    patterns: [/\bopenPlanPanel\b/, /export\s*\{[\s\S]*?\bopenPlanPanel\b[\s\S]*?\}/],
+    mount: /window\.__DJSC\.openPlanPanel\s*=\s*panel\.openPlanPanel/
+  },
+  {
+    label: 'openHealthPanel',
+    file: 'score/view/panel/panel.js',
+    patterns: [/\bopenHealthPanel\b/, /export\s*\{[\s\S]*?\bopenHealthPanel\b[\s\S]*?\}/],
+    mount: /window\.__DJSC\.openHealthPanel\s*=\s*panel\.openHealthPanel/
+  },
+  {
+    label: 'openDecisionDashboard',
+    file: 'score/view/dashboard/decisionDashboard.js',
+    patterns: [/export\s+function\s+openDecisionDashboard\s*\(/],
+    mount: /['"]openDecisionDashboard['"]\s*,\s*['"]\.\/score\/view\/dashboard\/decisionDashboard\.js['"]/
+  },
+  {
+    label: 'openSelfCheck',
+    file: 'score/verification/selfCheck.js',
+    patterns: [/export\s+function\s+openSelfCheck\s*\(/],
+    mount: /['"]openSelfCheck['"]\s*,\s*['"]\.\/score\/verification\/selfCheck\.js['"]/
+  },
+];
+
+for (const contract of observabilityContracts) {
+  const full = path.join(root, contract.file);
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
+    fail('Observability module missing for ' + contract.label + ': ' + contract.file);
+    continue;
+  }
+  const source = fs.readFileSync(full, 'utf8');
+  for (const pattern of contract.patterns) {
+    if (!pattern.test(source)) {
+      fail('Observability export contract missing: ' + contract.label + ' in ' + contract.file);
+      break;
+    }
+  }
+  if (!contract.mount.test(extensionSource)) {
+    fail('Observability mount contract missing in extension.js: ' + contract.label);
+  }
+}
+
+if (!/import\s*\{\s*config\s*\}\s*from\s*['"]\.\/js\/config\/config\.js['"]/.test(extensionSource) ||
+    !/let\s+extensionPackage\s*=\s*\{[\s\S]{0,600}?\bconfig\s*,/.test(extensionSource)) {
+  fail('Extension settings contract missing: config.js is not wired into extensionPackage.config');
+}
+
 const files = walk(root);
 const jsFiles = files.filter((f) => /\.(?:js|mjs)$/i.test(f));
 let checkedImports = 0;
@@ -114,5 +201,5 @@ console.log(
   files.length + ' files, ' +
   jsFiles.length + ' JS modules, ' +
   checkedImports + ' relative imports verified, ' +
-  externalHostImports + ' allowed host imports.'
+  externalHostImports + ' allowed host imports, identity/menu/observability contracts verified.'
 );
