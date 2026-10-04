@@ -2765,8 +2765,11 @@ function bestAction() {
 		_lastBestActionTime = 0;
 	}
 
-	/* ★ 缓存命中：100ms内直接返回上次结果 */
+	/* ★ 缓存命中：100ms内直接返回上次结果。
+	 * Profiler 已在函数入口启动，缓存短路也必须闭合计时栈。 */
 	if (_lastBestAction && (Date.now() - _lastBestActionTime) < 100) {
+		try { perfMark('bestAction.cache', performance.now() - _perfT0); } catch (eP) {}
+		try { profEnd('bestAction'); } catch (eP) {}
 		return _lastBestAction;
 	}
 
@@ -2774,7 +2777,11 @@ function bestAction() {
 	let best = { type: "end", id: "end", score: 0, reason: "初始化兜底" };
 	try {
 		const me = _status.currentPhase || game.me;
-		if (!me) return null;
+		if (!me) {
+			try { perfMark('bestAction', performance.now() - _perfT0); } catch (eP) {}
+			try { profEnd('bestAction'); } catch (eP) {}
+			return null;
+		}
 
 		/* ===== 调用拆分的子模块 ===== */
 		const P = analyzePersonality(me);
@@ -4471,9 +4478,6 @@ function bestAction() {
 				}
 			}
 		} catch (eB) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eB); }
-		try { perfMark('bestAction', performance.now() - _perfT0); } catch (eP) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eP); }
-		try { profEnd('bestAction'); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-
 		/* ===== ★ 模型护栏：执行前的最后一道法律检查 ===== */
 		try {
 			const _killCand = (function () {
@@ -4694,7 +4698,13 @@ function bestAction() {
 			const _decisionMs = Math.max(0, performance.now() - _perfT0);
 			_finalResult.decisionMs = Math.round(_decisionMs);
 			_finalizeDecisionRecord(me, acts, best, _decisionMs);
-		} catch (eTrace) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTrace); }
+			try { perfMark('bestAction', _decisionMs); } catch (eP) {}
+			try { profEnd('bestAction'); } catch (eP) {}
+		} catch (eTrace) {
+			if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTrace);
+			try { perfMark('bestAction', performance.now() - _perfT0); } catch (eP) {}
+			try { profEnd('bestAction'); } catch (eP) {}
+		}
 
 		/* ★ 存入缓存 */
 		_lastBestAction = _finalResult;
