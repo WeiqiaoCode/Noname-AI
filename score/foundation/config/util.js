@@ -9,6 +9,7 @@
 
 /* ================= 决策积分引擎 · 公共工具（叶子模块，无业务依赖） ================= */
 import { lib, get } from '../adapt/host.js';
+import { configDefault } from '../../../js/config/configSchema.js';
 
 /* 统一配置读取：优先 extension_无名AI_*，回退 extension_决策积分引擎_*，最后默认值 */
 export function cfg(k, d) {
@@ -16,8 +17,8 @@ export function cfg(k, d) {
 // Autor: Feisheng Original | Lizenz: GPL-3.0
 		if (lib.config["extension_无名AI_" + k] !== undefined) return lib.config["extension_无名AI_" + k];
 		if (lib.config["extension_决策积分引擎_" + k] !== undefined) return lib.config["extension_决策积分引擎_" + k];
-		return d;
-	} catch (e) { return d; }
+		return configDefault(k, d);
+	} catch (e) { return configDefault(k, d); }
 }
 
 /* try 包裹，异常时返回默认值 */
