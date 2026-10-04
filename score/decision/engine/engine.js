@@ -2816,6 +2816,25 @@ function bestAction() {
 			return null;
 		}
 
+		/* 单次决策关系 memo：只在本次 bestAction 内存活，不跨状态/回合复用。
+		 * 复用既有 isEnemyOf / isAllyOf 结果，不改变三态关系语义。 */
+		const _enemyRelationMemo = new Map();
+		const _allyRelationMemo = new Map();
+		function _isEnemyMemo(target) {
+			if (!target) return false;
+			if (_enemyRelationMemo.has(target)) return _enemyRelationMemo.get(target);
+			const value = !!isEnemyOf(me, target);
+			_enemyRelationMemo.set(target, value);
+			return value;
+		}
+		function _isAllyMemo(target) {
+			if (!target) return false;
+			if (_allyRelationMemo.has(target)) return _allyRelationMemo.get(target);
+			const value = !!isAllyOf(me, target);
+			_allyRelationMemo.set(target, value);
+			return value;
+		}
+
 		/* ===== 调用拆分的子模块 ===== */
 		const P = analyzePersonality(me);
 		const team = analyzeTeamPlan(me);
@@ -2889,7 +2908,7 @@ function bestAction() {
 				if (pp === me) continue;
 				try { if (pp.isDead ? pp.isDead() : (pp.hp !== undefined && pp.hp <= 0)) continue; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				/* ★ 友方减免：友方目标分数大幅降低，防止 AI 乱打队友 */
-				const isAlly = !isEnemyOf(me, pp);
+				const isAlly = !_isEnemyMemo(pp);
 				let ts = targetScore(me, pp);
 				if (isAlly) ts *= 0.1; // 友方分数打1折
 				/* C 阶段 clamp：目标分规范值域 [0, 15]。
@@ -3512,7 +3531,7 @@ function bestAction() {
 							/* ★ 敌我系统判"是否该救"：isAllyOf(含行为推断软翻转)识别真队友。
 							 *   替换旧 isSameCamp——身份未明时保守视敌会漏救真队友 */
 							let isFriend = false;
-							try { isFriend = isAllyOf(me, p); } catch (eCamp) { isFriend = false; }
+							try { isFriend = _isAllyMemo(p); } catch (eCamp) { isFriend = false; }
 							if (isFriend && !dyingAlly) dyingAlly = p;
 							else if (!isFriend && !dyingEnemy) dyingEnemy = p;
 						}
@@ -3618,7 +3637,7 @@ function bestAction() {
 						for (const p of (game.players || [])) {
 							if (!p || p === me) continue;
 							if (p.alive === false || (p.hp || 0) > 0) continue;
-							if (isAllyOf(me, p)) { dyingAlly = p; break; }   /* 敌我系统：真队友濒死才救（身份未明也能识别） */
+							if (_isAllyMemo(p)) { dyingAlly = p; break; }   /* 敌我系统：真队友濒死才救（身份未明也能识别） */
 						}
 						if (dyingAlly) {
 							const hpDeficit = Math.max(1, -(dyingAlly.hp || 0) + 1);
@@ -3695,10 +3714,10 @@ function bestAction() {
 					let isAlly = false;
 					let isEnemy = false;
 					try {
-						isAlly = isAllyOf(me, cardTarget);
-						isEnemy = isEnemyOf(me, cardTarget);
+						isAlly = _isAllyMemo(cardTarget);
+						isEnemy = _isEnemyMemo(cardTarget);
 					} catch (eR) {
-						try { isEnemy = isEnemyOf(me, cardTarget); } catch (e2) { isEnemy = false; }
+						try { isEnemy = _isEnemyMemo(cardTarget); } catch (e2) { isEnemy = false; }
 						isAlly = !isEnemy;
 					}
 
@@ -3930,7 +3949,7 @@ function bestAction() {
 								let linkedEnemy = null;
 								for (const [pp] of tsMap) {
 									if (!pp || pp === me) continue;
-									try { if (isEnemyOf(me, pp) && isPlayerLinked(pp)) { linkedEnemy = pp; break; } } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+									try { if (_isEnemyMemo(pp) && isPlayerLinked(pp)) { linkedEnemy = pp; break; } } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 								}
 								if (linkedEnemy) {
 									let cv = 0;
@@ -3941,7 +3960,7 @@ function bestAction() {
 							try {
 								enemyAttrThreat = (game.players || []).some(function (p) {
 									if (!p || p === me || p.alive === false) return false;
-									try { if (!isEnemyOf(me, p)) return false; } catch (e) { return false; }
+									try { if (!_isEnemyMemo(p)) return false; } catch (e) { return false; }
 									return _hasNature(p);
 								});
 							} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -4093,7 +4112,7 @@ function bestAction() {
 					}
 				} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 				if (!tgt) return;
-				if (isAllyOf(me, tgt)) {
+				if (_isAllyMemo(tgt)) {
 					/* ★ 不刻意加规则，让模型自己学：
 					 *   打队友的惩罚不写死，而是把"是否打队友"作为特征写进 130 维特征
 					 *   模型从对局反馈中自己学习这个特征的权重
@@ -4228,7 +4247,7 @@ function bestAction() {
 			const ctx = {
 				bestT: bestT,
 				bestTs: bestTs,
-				isEnemy: bestT ? isEnemyOf(me, bestT) : false,
+				isEnemy: bestT ? _isEnemyMemo(bestT) : false,
 				focusTarget: focus ? focus.target : null,
 			};
 			/* 手机优化：只给前15个动作算特征，时间限制20ms */
@@ -4651,7 +4670,7 @@ function bestAction() {
 					const _fx = extractFeatures(me, best, {
 						bestT: bestT,
 						bestTs: bestTs,
-						isEnemy: bestT ? isEnemyOf(me, bestT) : false,
+						isEnemy: bestT ? _isEnemyMemo(bestT) : false,
 						focusTarget: focus ? focus.target : null,
 					}, _fb);
 					featToUse = Array.from(_fx);
@@ -4711,7 +4730,7 @@ function bestAction() {
 						if (a === best) continue;
 						if (a.type === 'skill' && a.score >= best.score - 1) {
 							try {
-								settleEntries.push({ me: me, action: a, target: bestT, isEnemy: !!bestT && isEnemyOf(me, bestT) });
+								settleEntries.push({ me: me, action: a, target: bestT, isEnemy: !!bestT && _isEnemyMemo(bestT) });
 							} catch (eSE) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSE); }
 							if (settleEntries.length >= 4) break;   /* 上限保护 */
 						}
