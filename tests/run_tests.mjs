@@ -5214,6 +5214,85 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 }
 
 
+/* ================= 10.55 State-key bestAction 缓存 ================= */
+{
+    const fs55 = await import('node:fs');
+    const cache55 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'storage', 'cache.js')).href + '?pr31-state-cache');
+    const eng55 = fs55.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+
+    let ownHand = [{ name:'sha', suit:'spade', number:7 }];
+    let enemyHandCount = 3;
+    let hiddenEnemyHandReads = 0;
+
+    const me55 = {
+        playerid:'me55', name:'me55', alive:true, hp:4, maxHp:4,
+        countCards:function(zone) { return zone === 'h' ? ownHand.length : 0; },
+        getCards:function(zone) {
+            if (zone === 'h') return ownHand;
+            return [];
+        },
+        isLinked:function() { return false; },
+    };
+    const enemy55 = {
+        playerid:'enemy55', name:'enemy55', alive:true, hp:3, maxHp:4,
+        countCards:function(zone) { return zone === 'h' ? enemyHandCount : 0; },
+        getCards:function(zone) {
+            if (zone === 'h') {
+                hiddenEnemyHandReads++;
+                return [{ name:'shan', suit:'heart', number:2 }];
+            }
+            return [];
+        },
+        isLinked:function() { return false; },
+    };
+
+    hostStub.game.me = me55;
+    hostStub.game.players = [me55, enemy55];
+    hostStub.game.alivePlayers = [me55, enemy55];
+    hostStub._status.currentPhase = me55;
+    hostStub._status.roundNumber = 2;
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:1, skill:'' };
+
+    const k1 = cache55.stateKey();
+    const k1b = cache55.stateKey();
+    eq(k1b, k1, '10.55 完全相同 world-state 生成稳定 fingerprint');
+    eq(hiddenEnemyHandReads, 0, '10.55 stateKey 不读取其他玩家隐藏手牌内容');
+
+    enemy55.hp = 2;
+    const kHp = cache55.stateKey();
+    ok(kHp !== k1, '10.55 对手 HP 变化立即改变 stateKey');
+    enemy55.hp = 3;
+
+    enemyHandCount = 2;
+    const kHandCount = cache55.stateKey();
+    ok(kHandCount !== k1, '10.55 对手公开手牌数量变化立即改变 stateKey');
+    enemyHandCount = 3;
+
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:2, skill:'' };
+    const kEvent = cache55.stateKey();
+    ok(kEvent !== k1, '10.55 当前事件 step/window 变化立即改变 stateKey');
+    hostStub._status.event = { name:'chooseToUse', type:'phaseUse', step:1, skill:'' };
+
+    ownHand = [{ name:'tao', suit:'heart', number:7 }];
+    const kOwnCard = cache55.stateKey();
+    ok(kOwnCard !== k1, '10.55 决策者自己手牌内容变化即使数量相同也失效');
+    ownHand = [{ name:'sha', suit:'spade', number:7 }];
+
+    ok(eng55.indexOf('const BEST_ACTION_CACHE_TTL = 1200') >= 0,
+        '10.55 bestAction 使用保守 1.2s 安全 TTL');
+    ok(eng55.indexOf("_decisionStateKey = stateKey() + '::REL=' + _currentRelationKey") >= 0,
+        '10.55 bestAction cache key 同时包含 world-state 与 relation fingerprint');
+    ok(eng55.indexOf('_lastBestActionStateKey === _decisionStateKey') >= 0,
+        '10.55 只有完全相同 state-key 才允许复用 bestAction');
+    eq(/Date\.now\(\)\s*-\s*_lastBestActionTime\)\s*<\s*100\b/.test(eng55), false,
+        '10.55 删除旧 100ms 纯时间缓存判断');
+    ok(eng55.indexOf("_lastBestActionStateKey = '';\n\t\t\tclearThreatCache()") >= 0,
+        '10.55 relation 变化同步失效 bestAction state-key');
+    ok((eng55.match(/_lastBestActionStateKey = '';/g) || []).length >= 3,
+        '10.55 strategic/world/relation 三类状态变化均可清空 state-key');
+}
+
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
