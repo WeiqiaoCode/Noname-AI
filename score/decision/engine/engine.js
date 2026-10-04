@@ -4192,6 +4192,7 @@ function bestAction() {
 		let decisionPlan = null;
 		try {
 			decisionPlan = planForDecision(me);
+			try { _status.djsc_lastDecisionPlan = decisionPlan || null; } catch (ePlanState) {}
 			const refined = refineBestWithPlan(me, best, bestT, decisionPlan);
 			if (refined && refined !== best) {
 				/* Planner 后续仍要经过 Champion / DeepThink / Guard，因此 winner 必须回到
@@ -5793,8 +5794,12 @@ export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninst
       reg.mount('exportAllAndDownload', window.__DJSC_PANEL.exportAllAndDownload);
       reg.mount('importAllFromFile', window.__DJSC_PANEL.importAllFromFile);
     }
-    /* ★ 挂载战术规划函数 */
-    reg.mount('plan', planSequence);
+    /* ★ 战术规划面板只读取最近一次 bestAction 已计算的 plan。
+     * 观测/UI 不得为了显示面板再次触发昂贵 Planner。 */
+    reg.mount('plan', function () {
+      try { return (_status && _status.djsc_lastDecisionPlan) || null; }
+      catch (e) { return null; }
+    });
   } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
   /* ★ 统一给所有 window.__DJSC 下的函数加 _real: true 标记 */
