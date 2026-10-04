@@ -131,7 +131,7 @@ export function arrangeConfig(source, lib, game) {
         archiveGames: '保存历史战报供后续回看。',
         narrator: '把决策信号转换为可读解释。',
         showLog: '显示积分明细调试日志。',
-        testDecisionLog: '摘要/详细模式显示最终动作、次选、分差、耗时及关键决策信号。',
+        testDecisionLog: '测试版决策可观测性：摘要/详细模式显示最终动作、次选、分差、耗时及关键决策信号。',
         persist: '保存结算历史到本地存储。',
         openPanel: '打开决策积分主面板。',
         openArchivePanel: '查看已归档战报。',
