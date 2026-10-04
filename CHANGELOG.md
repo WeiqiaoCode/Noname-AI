@@ -1,12 +1,54 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.8-test（semver 4.0.8-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.9-test（semver 4.0.9-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
 
 ---
+
+## v4.0.9-test 统一执行网关（2026-10-04）
+
+> 本版本不改变 AI 评分与卡牌策略，重点统一“决策结果如何进入无名杀宿主执行”的公共边界。
+
+### Execution Gateway
+
+- 新增 `score/decision/execution/executionGateway.js`。
+- use / respond / discard / compare 的公共执行职责统一收敛：
+  - 人类本机 / 联机玩家排除；
+  - hardOverride 与分层开关；
+  - 熔断状态；
+  - 5 秒降级窗口；
+  - 事件哨兵；
+  - Host 调用与异常 fallback；
+  - Decision Transaction Stage / Commit / Cancel；
+  - 统一执行统计。
+- 各接管模块继续保留自己的策略算法，不把桃、无懈、弃牌估值或拼点逻辑塞进 Gateway。
+
+### 事务边界继续收敛
+
+- soft override 的 Stage 改为 `stageExecutionDecision()`。
+- card / skill 真实执行 Commit 改为 `commitExecution()`。
+- hard override 的 end-turn Commit 与 cancel 同样通过 Gateway。
+- 接管层启停状态由 `isExecutionLayerEnabled()` 统一解释，不再由四个模块各自读取配置和熔断器。
+
+### 宿主单次调用原则
+
+- `decisionHook` 明确降级为“监督员”：只观察一次真实宿主调用，不再因为合法性/红线检查失败而重复执行同一个 choose 事件。
+- engine 的 useCard / respond / effect / logSkill / die 观测 Hook 改为单次宿主调用。
+- 修复旧逻辑中“第一次宿主调用已产生部分副作用，异常后又调用第二次”的重复执行风险。
+
+### 兼容原则
+
+本版本不修改：
+- bestAction 候选评分；
+- 身份推断；
+- Planner 深度/预算；
+- Guard；
+- 桃 / 无懈 / 铁索 / 兵乐拆顺等专项策略。
+
+新增 `tests/run_execution_gateway_tests.mjs`，用于阻止接管模块重新私有维护 degrade / circuit / transaction，及阻止宿主调用重复执行。
 
 ## v4.0.8-test 配置单一真相源（2026-10-04）
 
