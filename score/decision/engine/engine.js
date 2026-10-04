@@ -150,6 +150,7 @@ import { clearCompensation } from './scoreUnify.js';
 import { makeActionCandidate, runtimeScore, applyRelativeUtilityDelta, targetKey, candidateTargetValue, sameCandidateAction, ensureCandidatePolicy, vetoCandidate, setCandidatePriority, isCandidateEligible, compareActionCandidates, PRIORITY_TIER, candidatePriorityRank, candidatePolicySnapshot } from '../state/actionCandidate.js';
 import { buildDecisionTraceLines } from './decisionTrace.js';
 import { normalizedMargin, DECISION_MARGIN } from '../state/decisionMargin.js';
+import { createDecisionTransaction, commitDecisionTransaction, peekDecisionTransaction, decisionTransactionStats, resetDecisionTransactionStats } from '../state/decisionTransaction.js';
 import { extractFeatures, FEATURE_DIM } from '../../model/features/features.js';
 import { pushSample, bufferSize, bufferClear } from '../../model/train/trainExport.js';
 import { getState as modelGetState, onGameEnd as modelOnGameEnd, forceTrain as modelForceTrain } from '../../model/net/modelState.js';  /* ★ 真正的 modelState */
@@ -1422,6 +1423,22 @@ function installHooks() {
 					}
 				} catch (eRec) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRec); }
 				const next = oUse.apply(this, args);
+				/* ★ Decision Transaction Commit：useCard 被宿主真正调用，才确认 card/equip 决策执行。 */
+				try {
+					const _actualId = (get && typeof get.name === 'function') ? get.name(args[0], me) : (args[0] && args[0].name);
+					const _actualT = Array.isArray(args[1]) ? args[1] : (args[1] ? [args[1]] : []);
+					const _actualTarget = _actualT.map(function (p) {
+						try { return p && (p.name1 || p.name || p.playerid || ''); } catch (e) { return ''; }
+					}).filter(Boolean);
+					const _pendingTx = peekDecisionTransaction(me);
+					if (_pendingTx && (_pendingTx.expected.type === 'card' || _pendingTx.expected.type === 'equip')) {
+						commitDecisionTransaction(me, {
+							type: 'card',
+							id: _actualId || '',
+							target: _actualTarget.length > 1 ? _actualTarget : (_actualTarget[0] || null),
+						});
+					}
+				} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
 				if (next && typeof next.then === "function") {
 					Promise.resolve(next).then(function () { try { scoreCardUse(me, args[0], args[1]); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); } }).catch(function () {});
 				} else {
@@ -1455,6 +1472,28 @@ function installHooks() {
 			}
 		};
 	});
+
+	/* ★ Decision Transaction Commit：技能只有真正进入宿主 logSkill 才提交。
+	 * 目标在部分技能中由后续 choice stage 决定，因此 skill 事务只校验技能 id。 */
+	const oLogSkill = proto.logSkill;
+	if (typeof oLogSkill === "function") {
+		orig.logSkill = oLogSkill;
+		proto.logSkill = function () {
+			const me = this, args = arguments;
+			let r;
+			try { r = oLogSkill.apply(this, args); }
+			catch (e) { return oLogSkill.apply(this, args); }
+			try {
+				const sid = (typeof args[0] === 'string') ? args[0] :
+					(args[0] && (args[0].name || args[0].skill || args[0].id)) || '';
+				const _pendingTx = peekDecisionTransaction(me);
+				if (_pendingTx && _pendingTx.expected.type === 'skill' && sid) {
+					commitDecisionTransaction(me, { type: 'skill', id: sid, target: null });
+				}
+			} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
+			return r;
+		};
+	}
 
 	/* ★ 单独监听 respond（打出牌响应）+ 记录玩家日志 */
 	const oRespond = proto.respond;
@@ -2736,6 +2775,12 @@ function pickKillTarget(me, tsMap, cur) {
 function bestAction() {
 	const _perfT0 = performance.now();
 	const _perfPhases = {};
+	/* ★ Decision Transaction：Evaluate 阶段只计算，不落学习/广播/回放副作用。
+	 * 这些副作用先登记为 deferred effect，只有宿主实际执行匹配动作后才 Commit。 */
+	const _deferredEffects = [];
+	function _deferEffect(label, fn) {
+		if (typeof fn === 'function') _deferredEffects.push({ label: label || 'effect', fn: fn });
+	}
 	let _phaseT0 = _perfT0;
 	function _markPhase(name) {
 		try {
@@ -4344,16 +4389,18 @@ function bestAction() {
 							}
 						}
 					} catch (eChamp) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eChamp); }
-					try {
-						if (window.__DJSC.conflict && window.__DJSC.conflict.detect) {
-							window.__DJSC.conflict.detect(best, modelConf, metaMod, { type: best.type, id: best.id, target: best.target });
-						}
-					} catch (eC) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eC); }
-					try {
-						if (window.__DJSC.calibrator && window.__DJSC.calibrator.record && modelConf) {
-							window.__DJSC.calibrator.record(best, modelConf, { me: me, bestT: bestT, bestTs: bestTs });
-						}
-					} catch (eCal) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eCal); }
+					_deferEffect('model-observation', function () {
+						try {
+							if (window.__DJSC.conflict && window.__DJSC.conflict.detect) {
+								window.__DJSC.conflict.detect(best, modelConf, metaMod, { type: best.type, id: best.id, target: best.target });
+							}
+						} catch (eC) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eC); }
+						try {
+							if (window.__DJSC.calibrator && window.__DJSC.calibrator.record && modelConf) {
+								window.__DJSC.calibrator.record(best, modelConf, { me: me, bestT: bestT, bestTs: bestTs });
+							}
+						} catch (eCal) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eCal); }
+					});
 					try {
 						if (false && window.__DJSC.strategyBus && modelConf && modelConf.confidence >= 0.55) {   /* ★ 模型仲裁接管已停用（false），接管权交予冠军策略 */
 							const busRes = window.__DJSC.strategyBus.arbitrate(best, modelConf, me, acts);
@@ -4390,7 +4437,8 @@ function bestAction() {
 			}
 		} catch (eDeep) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eDeep); }
 
-		/* ★ 认知日志 */
+		_deferEffect('cognition-log', function () {
+/* ★ 认知日志 */
 		try {
 			if (window.__DJSC.cognitionLog && window.__DJSC.cognitionLog.log) {
 				window.__DJSC.cognitionLog.log({
@@ -4406,7 +4454,9 @@ function bestAction() {
 			}
 		} catch (eCL) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eCL); }
 
-		_markPhase('model');
+
+		});
+				_markPhase('model');
 
 		/* ★ M07：把「动作类型 → 代号」抽成一个小函数，供 Guard 后重算时复用 */
 		function actionForBest(b) {
@@ -4427,7 +4477,8 @@ function bestAction() {
 		let styleTip = "";
 		try { if (bestT) styleTip = "｜目标风格：" + styleOf(bestT).tag; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		const comboLen = teamCombos.length;
-		/* ===== 技能反馈：记录本次技能使用的预测收益 ===== */
+		_deferEffect('skill-feedback', function () {
+/* ===== 技能反馈：记录本次技能使用的预测收益 ===== */
 		try {
 			if (best && best.type === "skill" && cfg("skillFeedback", true) !== false) {
 				const sid = best.id;
@@ -4447,7 +4498,10 @@ function bestAction() {
 				}
 			}
 		} catch (eFb) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eFb); }
-		/* ===== 风格反馈：记录本局每个敌人的风格与胜负信号 ===== */
+		
+		});
+		_deferEffect('style-feedback', function () {
+/* ===== 风格反馈：记录本局每个敌人的风格与胜负信号 ===== */
 		try {
 			if (cfg("styleFeedback", true) !== false) {
 				for (const p of (game.players || [])) {
@@ -4459,7 +4513,10 @@ function bestAction() {
 				}
 			}
 		} catch (eSf) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSf); }
-		/* ===== 记录本次决策（六层信号 + 候选 + 胜出） ===== */
+		
+		});
+		_deferEffect('decision-record', function () {
+/* ===== 记录本次决策（六层信号 + 候选 + 胜出） ===== */
 		try {
 			const layers = {
 				tempo: { mode: sit.mode, stage: stageLabel, baseTempo: sit.tempo, atkMul: atkMul, keepMul: keepMul, burstMul: burstMul, desc: sit.tempoDesc || sit.desc },
@@ -4505,7 +4562,10 @@ function bestAction() {
 				}
 			} catch (eComp) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eComp); }
 		} catch (eRec) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRec); }
-		/* ★ 决策回放时间轴 + 自动特征发现：独立 try 包裹，绝不因上面 layers/plan 构建异常而被连坐跳过。
+		
+		});
+		_deferEffect('decision-replay', function () {
+/* ★ 决策回放时间轴 + 自动特征发现：独立 try 包裹，绝不因上面 layers/plan 构建异常而被连坐跳过。
 		 * 此前放在大 try 内，任一步抛错即整体丢失，面板恒 0。 */
 		try {
 			if (window.__DJSC && window.__DJSC.replay && window.__DJSC.replay.record) {
@@ -4524,14 +4584,20 @@ function bestAction() {
 				});
 			}
 		} catch (eRep) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eRep); }
-		/* ★ 自动特征发现：把本步决策的场景组合喂给 autoFeature（此前只有挂载无调用，总样本恒 0）。 */
+		
+		});
+		_deferEffect('auto-feature', function () {
+/* ★ 自动特征发现：把本步决策的场景组合喂给 autoFeature（此前只有挂载无调用，总样本恒 0）。 */
 		try {
 			recordDecisionContext(_autofeatCtx(me, best, bestT));
 		} catch (eAF) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eAF); }
+		
+		});
 		const forecastTip = "｜预测：" + forecast.advice + "（压力 " + incoming.total + " 风险 " + Math.round(incoming.selfRisk * 100) + "%）";
 		const mtTip = mt ? ("｜趋势：" + mt.overall) : "";
 		const trendTip = "｜趋势权重：" + (trend === "worsening" ? "进攻↑守↓" : trend === "improving" ? "守↑攻↓" : "均衡");
-		/* ★ 广播：告诉队友我打谁 */
+		_deferEffect('team-broadcast', function () {
+/* ★ 广播：告诉队友我打谁 */
 		try {
 			if (bestT && (best.type === 'card' || best.type === 'skill')) {
 				const id = best.id || '';
@@ -4541,7 +4607,9 @@ function bestAction() {
 				}
 			}
 		} catch (eB) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eB); }
-		_markPhase('observability');
+
+		});
+				_markPhase('observability');
 
 		/* ===== ★ 模型护栏：执行前的最后一道法律检查 ===== */
 		try {
@@ -4590,6 +4658,7 @@ function bestAction() {
 		let _finalTarget = candidateTargetValue(best);
 		if (best && best.type === 'equip') _finalTarget = null;
 		const _finalResult = {
+			type: best && best.type ? best.type : 'unknown',
 			action: action,
 			reason: best.reason + "（真实收益" + runtimeScore(best.score) + "，策略优先级=" + ensureCandidatePolicy(best).priorityTier +
 				"，" + sit.mode + "×" + sit.tempo + "，阶段=" + stageLabel + "，性格=" + riskLabel + teamTip + seatTip + econTip + styleTip + forecastTip + mtTip + trendTip + (comboLen ? "，联动" + comboLen + "条" : "") + "）",
@@ -4650,7 +4719,8 @@ function bestAction() {
 			try { _status.djsc_lastRisk = _riskFeatures; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		} catch (eR) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eR); }
 
-		/* ★ 训练数据：记录本次决策样本（带采样权重） */
+		_deferEffect('learning-and-postcheck', function () {
+/* ★ 训练数据：记录本次决策样本（带采样权重） */
 		try {
 			/* ★ 修复：确保 best._feat 有值 */
 			let featToUse = best._feat;
@@ -4753,6 +4823,8 @@ function bestAction() {
 				});
 			} catch (eSettle) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSettle); }
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		
+		});
 		/* ★ 调用总线仲裁 */
 		try {
 			const stratResult = strategize(me, _status.event, _finalResult);
@@ -4761,20 +4833,53 @@ function bestAction() {
 
 		_markPhase('telemetry');
 
-		/* ★ 测试观测：记录“最终执行候选”与本次完整 bestAction 墙钟耗时。
-		 * 仅写日志/回放，不参与评分、排序或执行。 */
+		/* ★ 测试观测：Evaluate 阶段只计算耗时；左侧日志/回放只在 Commit 后落地。 */
+		let _decisionMs = Math.max(0, performance.now() - _perfT0);
+		let _phaseMs = _phaseSnapshot();
 		try {
-			const _decisionMs = Math.max(0, performance.now() - _perfT0);
-			const _phaseMs = _phaseSnapshot();
 			_finalResult.decisionMs = Math.round(_decisionMs);
 			_finalResult.phaseMs = _phaseMs;
-			_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs);
 			try { perfMark('bestAction', _decisionMs); } catch (eP) {}
 			try { profEnd('bestAction'); } catch (eP) {}
 		} catch (eTrace) {
 			if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTrace);
 			try { perfMark('bestAction', performance.now() - _perfT0); } catch (eP) {}
 			try { profEnd('bestAction'); } catch (eP) {}
+		}
+
+		_deferEffect('decision-trace', function () {
+			_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs);
+		});
+
+		/* ★ 事务只随返回值携带，不在 Evaluate 内写 pending 状态。
+		 * soft/hard 接管层拿到 bestAction 后负责 stage；真实 useCard/logSkill/endTurn 再 commit。 */
+		try {
+			const _txExpectedType = (best && best.type === 'equip') ? 'card' : ((best && best.type) || 'unknown');
+			const _txExpectedTarget = _txExpectedType === 'skill' ? null : _finalTarget;
+			const _tx = createDecisionTransaction({
+				type: _txExpectedType,
+				id: (best && best.id) || _finalResult.rule,
+				target: _txExpectedTarget,
+			}, function (_actual, _txInfo) {
+				for (let i = 0; i < _deferredEffects.length; i++) {
+					const effect = _deferredEffects[i];
+					try { effect.fn(_actual, _txInfo); }
+					catch (eFx) {
+						if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eFx);
+					}
+				}
+			}, {
+				meta: {
+					player: (me && (me.name1 || me.name)) || '?',
+					round: _getRoundNumber(),
+					decisionMs: Math.round(_decisionMs),
+				},
+			});
+			Object.defineProperty(_finalResult, '__djscTransaction', {
+				value: _tx, enumerable: false, configurable: false, writable: false,
+			});
+		} catch (eTx) {
+			if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx);
 		}
 
 		/* ★ 存入缓存：仅缓存本次计算开始时对应的 state-key。
@@ -5482,6 +5587,7 @@ export function clearScoreState() {
 	_lastBestAction = null; _lastBestActionTime = 0; _lastRelationStateKey = '';
 	try { resetReportShown(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionFeedback(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try { resetDecisionTransactionStats(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ 清理策略总线信号 */
 	try {
 		if (_status) {
@@ -5502,7 +5608,7 @@ export function appendDecision(entry) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 export { loadStore, saveStore, storeStats } from '../../perception/memory/memory.js';
-export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _skillTargetRange, _isSingleTargetSkillProfile };
+export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninstallHooks, bestAction, rulesDecide, modelDecision, startSettleWatch, stopSettleWatch, settle, isGameOver, _isLegalSkillTarget, _skillNeedsExternalTarget, _canConfirmSelfSkillTarget, _skillPurposeFromIntent, _skillTargetRange, _isSingleTargetSkillProfile, decisionTransactionStats };
 
 /* ================= ★ 选将评分系统（多模式 + 批量平均 + 多维） ================= */
 (function() {
