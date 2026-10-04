@@ -1,12 +1,63 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.10-test（semver 4.0.10-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.11-test（semver 4.0.11-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
 
 ---
+
+## v4.0.11-test 统一目标与战略意图（2026-10-05）
+
+> 本版本开始真正提高 AI 的“角色意识”：先确定胜利目标、身份职责与当前回合意图，再让候选 utility 在正确战略方向内比较。
+
+### Unified Objective
+
+新增纯核心与宿主适配层：
+
+- `objectiveCore.js`：Victory Objective / Role Objective / Identity Risk / Strategic Intent 纯逻辑；
+- `objective.js`：只用公开事实、observer-specific identity posterior 与行动者自身私有信息构造上下文；
+- `strategicStateCore.js` / `strategicState.js`：回合级 Intent 生命周期；
+- `intentAlignment.js`：候选与 Intent 对齐，不直接改 raw score。
+
+身份局第一版规则：
+
+- 主公：生存临界优先 SURVIVE；明确反贼斩杀窗口 FINISH；
+- 忠臣：主公1血时进入 LORD_SURVIVAL / PROTECT；无可信反贼时 PRESERVE_INFORMATION；
+- 反贼：主公明确斩杀窗口进入 FINISH_LORD，否则保持 FOCUS；
+- 内奸：身份固定、stance动态；中期 BALANCE / CONCEAL，最终主内残局进入 FINAL_DUEL；
+- 敌方身份槽位已归零的 unknown 进入 PROTECTED_UNKNOWN，不作为普通集火目标。
+
+### Strategic Intent
+
+第一版 Intent：
+
+`SURVIVE / PROTECT / FINISH / FOCUS / CONTROL / DISRUPT / DEVELOP / SETUP / BURST / PRESERVE / BALANCE / CONCEAL / PASS`
+
+核心约束：
+
+- Intent 不直接修改 candidate.score；
+- 普通 FOCUS / BALANCE / DEVELOP 只写战略对齐解释，仍然 utility-first；
+- 只有明确 CRITICAL/FORCED 身份职责且候选高度对齐时，才提升 candidate policy tier；
+- Planner 继续使用既有 sameCandidatePolicyBand，不能用普通规划结果跨越关键身份职责；
+- Guard 保持最终否决权。
+
+### Intent Lifecycle
+
+- 同一回合、关键状态不变时复用 Intent；
+- 主公/自身血线、存活人数、身份后验、目标状态、进攻资源等关键 fingerprint 变化时允许刷新；
+- 新回合自动刷新；
+- 目标不是“锁死一回合”，而是稳定但可失效重算。
+
+### 决策解释与质量门禁
+
+- 决策记录保存 roleObjective / intent / target / reasons；
+- 摘要/详细 Decision Trace 显示当前战略；
+- Top-N quality snapshot 增加 strategicAlignment；
+- #36 质量基线新增 `strategy` 维度和固定 strategic_intent 行为场景。
+
+本版本不引入武将画像、技能燃料、完整 Utility Vector 或 Planner V2；这些仍分别留给 #38～#40。
 
 ## v4.0.10-test AI决策质量基线（2026-10-04）
 
