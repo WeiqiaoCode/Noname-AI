@@ -768,6 +768,54 @@ input:checked+.config_slider:before {
 
 /* ================= 无名AI设置中心 4.0.6 ================= */
 
+/* 设置中心标题 */
+.config:has(.djsc-settings-header) {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 8px 6px 4px !important;
+    padding: 0 !important;
+}
+.config:has(.djsc-settings-header) > span {
+    display: block !important;
+    width: 100% !important;
+}
+.djsc-settings-header {
+    display: flex;
+    width: 100%;
+    min-height: 76px;
+    padding: 11px 14px 10px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border: 1px solid rgba(189,165,115,.40);
+    border-radius: 18px;
+    background: rgba(35,39,44,.16);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+    font-family: "xinwei","STXinwei","KaiTi",serif !important;
+    text-align: center;
+}
+.djsc-settings-header b {
+    color: #f3e8ae;
+    font-size: 24px;
+    font-weight: normal;
+    letter-spacing: 2px;
+    line-height: 1.2;
+}
+.djsc-settings-header span {
+    margin-top: 3px;
+    color: #9ad8ff;
+    font-size: 13px;
+    line-height: 1.2;
+}
+.djsc-settings-header small {
+    margin-top: 5px;
+    color: #8f9ba7;
+    font-size: 11px;
+    letter-spacing: 1px;
+}
+
 /* 顶部双入口：玩家用淡金，开发者用浅蓝；不改变原扩展的半透明古风基调。 */
 .config:has(.djsc-mode-choice) {
     display: inline-block !important;
