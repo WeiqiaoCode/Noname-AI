@@ -5333,6 +5333,31 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 }
 
 
+/* ================= 10.57 非关键学习持久化异步化 ================= */
+{
+    const fs57 = await import('node:fs');
+    const auto57 = fs57.readFileSync(join(_pkg, 'score', 'model', 'features', 'autoFeature.js'), 'utf8');
+
+    ok(auto57.indexOf('const AUTO_FEATURE_SAVE_DEBOUNCE_MS = 500') >= 0 &&
+       auto57.indexOf('let _autoFeatureSaveTimer = null') >= 0,
+        '10.57 AutoFeature 建立独立 500ms 写盘合并窗口');
+
+    ok(auto57.indexOf('_autoFeatureSaveTimer = setTimeout(_flushAutoFeatureStore, AUTO_FEATURE_SAVE_DEBOUNCE_MS)') >= 0,
+        '10.57 AutoFeature 持久化离开当前决策同步路径');
+
+    const recordStart57 = auto57.indexOf('export function recordDecisionContext(context)');
+    const settleStart57 = auto57.indexOf('export function settleDecisionContext(context, reward, win)');
+    const recordBody57 = recordStart57 >= 0 && settleStart57 > recordStart57
+        ? auto57.slice(recordStart57, settleStart57)
+        : '';
+    eq(recordBody57.indexOf('_lsSet(') >= 0, false,
+        '10.57 recordDecisionContext 不再直接同步写 localStorage');
+
+    ok(auto57.indexOf('_flushAutoFeatureStore();') >= 0,
+        '10.57 定时器不可用时保留同步持久化兜底，不丢学习数据');
+}
+
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
