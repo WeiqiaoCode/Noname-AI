@@ -5358,6 +5358,35 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 }
 
 
+/* ================= 10.58 单次 bestAction 关系 memo ================= */
+{
+    const fs58 = await import('node:fs');
+    const eng58 = fs58.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const bestStart58 = eng58.indexOf('function bestAction()');
+    const bestEnd58 = eng58.indexOf('function rulesDecide()', bestStart58);
+    const bestBody58 = bestStart58 >= 0 && bestEnd58 > bestStart58
+        ? eng58.slice(bestStart58, bestEnd58)
+        : '';
+
+    ok(bestBody58.indexOf('const _enemyRelationMemo = new Map()') >= 0 &&
+       bestBody58.indexOf('const _allyRelationMemo = new Map()') >= 0,
+        '10.58 敌友 memo 仅创建在单次 bestAction 生命周期内');
+
+    ok(bestBody58.indexOf('const value = !!isEnemyOf(me, target)') >= 0 &&
+       bestBody58.indexOf('const value = !!isAllyOf(me, target)') >= 0,
+        '10.58 memo miss 仍委托既有敌友权威入口，不重写关系算法');
+
+    eq((bestBody58.match(/isEnemyOf\(me,\s*/g) || []).length, 1,
+        '10.58 bestAction 直接敌方推断收敛到 memo miss 一处');
+    eq((bestBody58.match(/isAllyOf\(me,\s*/g) || []).length, 1,
+        '10.58 bestAction 直接友方推断收敛到 memo miss 一处');
+
+    ok(bestBody58.indexOf('_isEnemyMemo(') >= 0 &&
+       bestBody58.indexOf('_isAllyMemo(') >= 0,
+        '10.58 候选评分/特征/后检测复用单次决策关系结果');
+}
+
+
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');
 if (_fails.length) {
