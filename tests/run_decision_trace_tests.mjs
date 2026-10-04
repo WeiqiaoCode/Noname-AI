@@ -72,6 +72,11 @@ ok(engine.includes('_finalizeDecisionRecord(me, acts, best, _decisionMs)'),
 	'10.53 日志在最终 bestAction 候选确定后写入');
 ok(engine.includes('_finalResult.decisionMs = Math.round(_decisionMs)'),
 	'10.53 最终结果暴露只读 decisionMs 性能诊断');
+ok(engine.includes("perfMark('bestAction.cache'") && engine.includes("profEnd('bestAction')"),
+	'10.53 bestAction 缓存短路也闭合 profiler 计时栈');
+ok(engine.indexOf("/* ===== ★ 模型护栏：执行前的最后一道法律检查 ===== */") <
+   engine.indexOf("perfMark('bestAction', _decisionMs)"),
+	'10.53 正常 bestAction 计时延伸到护栏和后处理之后');
 ok(engine.includes('target: candidateTargetValue(c)'),
 	'10.53 决策快照保存规范化目标而非对象引用');
 ok(panel.includes('决策耗时：') && panel.includes("item.winner.target"),
