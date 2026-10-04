@@ -53,7 +53,7 @@ import { loadFeedback, recordSkillUse, flushFeedback, feedbackCount } from '../.
 import { multiTurnForecast } from '../strategy/multiturn.js';
 import { loadStyleFeedback, recordStyleOutcome, flushStyleFeedback, recordPlayerTag, saveStyleFeedback } from '../../perception/feedback/styleFeedback.js';
 import { focusBonus, broadcastIntent, installBroadcastHooks, uninstallBroadcastHooks, readIntents, snapshotBroadcast } from '../../perception/team/teamBroadcast.js';
-import { refineBestWithPlan, planSequence } from '../strategy/planner.js';
+import { refineBestWithPlan, planForDecision } from '../strategy/planner.js';
 import { strategize } from '../strategy/strategist.js';
 import { getModeStrategy, isSameCamp, isEnemy, applyModeBoost } from '../strategy/modeStrategy.js';
 import { actionValue as relActionValue, exposureOf as relExposureOf, relationStateKey } from '../relations/relations.js';   /* ★ 统一收益/暴露系统入口 */
@@ -4150,9 +4150,12 @@ function bestAction() {
 			_status.djsc_lastEcon = econ;
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
-		/* ★ 规划器：用多步视角微调 best */
+		/* ★ 规划器：每次 bestAction 最多计算一次。
+		 * decisionPlan 同时供 winner 改判与后续回放/日志使用，禁止为了 layers.plan 再次规划。 */
+		let decisionPlan = null;
 		try {
-			const refined = refineBestWithPlan(me, best, bestT);
+			decisionPlan = planForDecision(me);
+			const refined = refineBestWithPlan(me, best, bestT, decisionPlan);
 			if (refined && refined !== best) {
 				/* Planner 后续仍要经过 Champion / DeepThink / Guard，因此 winner 必须回到
 				 * acts 中的 canonical candidate，禁止同一动作以两个不同对象继续参与排序。 */
@@ -4419,16 +4422,15 @@ function bestAction() {
 					advice: mt ? mt.advice : "",
 				},
 			};
-			/* ★ 把规划序列一起记入 layers */
+			/* ★ 复用本次 bestAction 已计算的 decisionPlan；观测层不得再次触发 Planner。 */
 			try {
-				const plan = planSequence(me);
-				if (plan && plan.best) {
+				if (decisionPlan && decisionPlan.best) {
 					layers.plan = {
-						isKill: plan.isKill || false,
-						total: plan.best.total,
-						futureScore: plan.best.futureScore || 0,
-						steps: (plan.best.steps || []).map(function (s) { return s.id || s; }).slice(0, 3),
-						alternatives: (plan.alternatives || []).map(function (alt) {
+						isKill: decisionPlan.isKill || false,
+						total: decisionPlan.best.total,
+						futureScore: decisionPlan.best.futureScore || 0,
+						steps: (decisionPlan.best.steps || []).map(function (s) { return s.id || s; }).slice(0, 3),
+						alternatives: (decisionPlan.alternatives || []).map(function (alt) {
 							return { id: alt.action && alt.action.id, total: alt.total };
 						}).slice(0, 2),
 					};
