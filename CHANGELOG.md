@@ -1,10 +1,35 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.2-test（semver 4.0.2-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.3-test（semver 4.0.3-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
+
+---
+
+## v4.0.3-test 扩展身份与测试入口修复（2026-10-04）
+
+> 修复测试包可以加载，但扩展菜单被本体识别成 `UnknownAI` 空占位页，导致完整配置按钮和决策观察入口无法从扩展设置页恢复的问题。本次不修改 AI 决策策略。
+
+### 扩展身份契约
+
+- **统一扩展名称**：目录 `无名AI/`、`info.json.name` 与 `extension.js` 的扩展名统一为 `无名AI`。
+- **兼容旧失败状态**：如果此前坏包曾让本体自动关闭 `extension_无名AI_enable`，更新后扩展页会正确显示“无名AI”，用户可重新开启并重启。
+- **新增发布阻断**：Release audit 会比较包目录名、`info.json.name` 与 `extension.js` 名称，不一致直接禁止发布。
+
+### 测试可观测性门禁
+
+发布前强制确认以下关键入口仍存在并正确挂载：
+
+- `openScorePanel`
+- `openFeedbackPanel`
+- `openPlanPanel`
+- `openHealthPanel`
+- `openDecisionDashboard`
+- `openSelfCheck`
+
+同时检查 `js/config/config.js` 已接入 `extensionPackage.config`，避免再次出现“扩展能加载但设置按钮缺失”的测试盲区。
 
 ---
 
