@@ -1832,6 +1832,7 @@ function recordDecision(me, layers, candidates, winner, conf) {
 			}).filter(Boolean),
 			winner: _decisionSnapshotCandidate(winner, conf),
 			elapsedMs: null,
+			phaseMs: null,
 		};
 		DECISION_LOG.push(entry);
 		while (DECISION_LOG.length > DECISION_LOG_MAX) DECISION_LOG.shift();
@@ -1871,7 +1872,7 @@ function _emitDecisionTrace(entry) {
 	}
 }
 
-function _finalizeDecisionRecord(me, candidates, winner, elapsedMs) {
+function _finalizeDecisionRecord(me, candidates, winner, elapsedMs, phaseMs) {
 	try {
 		const player = (me && (me.name || me.name1)) || "?";
 		const round = _getRoundNumber();
@@ -1882,6 +1883,7 @@ function _finalizeDecisionRecord(me, candidates, winner, elapsedMs) {
 		if (!entry) return null;
 
 		entry.elapsedMs = Math.max(0, Math.round(Number(elapsedMs) || 0));
+		entry.phaseMs = phaseMs && typeof phaseMs === 'object' ? Object.assign({}, phaseMs) : null;
 		entry.candidates = (candidates || []).slice(0, 8).map(function (c) {
 			return _decisionSnapshotCandidate(c, null);
 		}).filter(Boolean);
@@ -2733,6 +2735,21 @@ function pickKillTarget(me, tsMap, cur) {
 
 function bestAction() {
 	const _perfT0 = performance.now();
+	const _perfPhases = {};
+	let _phaseT0 = _perfT0;
+	function _markPhase(name) {
+		try {
+			const now = performance.now();
+			const dt = Math.max(0, now - _phaseT0);
+			_perfPhases[name] = (_perfPhases[name] || 0) + dt;
+			_phaseT0 = now;
+		} catch (e) {}
+	}
+	function _phaseSnapshot() {
+		const out = {};
+		for (const k of Object.keys(_perfPhases)) out[k] = Math.round(_perfPhases[k]);
+		return out;
+	}
 	profStart('bestAction');
 
 	/* 上一次战略动作已经结算后，用真实公开状态差分确认 CREATE/REMOVE。
@@ -2787,6 +2804,7 @@ function bestAction() {
 		try { profEnd('bestAction'); } catch (eP) {}
 		return _lastBestAction;
 	}
+	_markPhase('preflight');
 
 	/* ★ 兜底声明：防止作用域问题导致 best is not defined */
 	let best = { type: "end", id: "end", score: 0, reason: "初始化兜底" };
@@ -2858,6 +2876,7 @@ function bestAction() {
 		/* ===== 敌方爆发威胁（连弩 + 多杀）===== */
 		const burst = maxBurstThreat(me);
 		const mt = multiTurnCached(me);
+		_markPhase('context');
 		/* ===== 目标分缓存：每玩家只算一次，供所有卡牌共用 =====
 		 * - tsMap：pp 对象 → targetScore 数值
 		 * - bestT / bestTs：当前局势下全局最优目标及其分数（与具体卡牌无关）
@@ -2953,6 +2972,7 @@ function bestAction() {
 		try { _probShanCache.clear(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		/* ★ 缓存存活玩家，供 extractFeatures 复用，避免循环内重复遍历 */
 		const alivePlayers = (game.players || []).filter(function(p) { return p && p.alive !== false; });
+		_markPhase('targets');
 		const acts = [];
 		/* ===== 趋势驱动策略（把 mt.overall 从提示升级为决策权重） ===== */
 		const trend = mt ? mt.overall : "stable";
@@ -4165,6 +4185,8 @@ function bestAction() {
 			_status.djsc_lastEcon = econ;
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
+		_markPhase('candidates');
+
 		/* ★ 规划器：每次 bestAction 最多计算一次。
 		 * decisionPlan 同时供 winner 改判与后续回放/日志使用，禁止为了 layers.plan 再次规划。 */
 		let decisionPlan = null;
@@ -4196,6 +4218,8 @@ function bestAction() {
 				} catch (eSync) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSync); }
 			}
 		} catch (eP) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eP); }
+
+		_markPhase('planner');
 
 		/* ★ P0-1 精度模式：给所有动作算特征，学得最全 */
 		try {
@@ -4362,6 +4386,8 @@ function bestAction() {
 			}
 		} catch (eCL) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eCL); }
 
+		_markPhase('model');
+
 		/* ★ M07：把「动作类型 → 代号」抽成一个小函数，供 Guard 后重算时复用 */
 		function actionForBest(b) {
 			if (!b) return "B";
@@ -4495,6 +4521,8 @@ function bestAction() {
 				}
 			}
 		} catch (eB) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eB); }
+		_markPhase('observability');
+
 		/* ===== ★ 模型护栏：执行前的最后一道法律检查 ===== */
 		try {
 			const _killCand = (function () {
@@ -4531,6 +4559,8 @@ function bestAction() {
 		} catch (eGuard) {
 			try { console.error('[模型护栏] 集成异常：', eGuard); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		}
+
+		_markPhase('guard');
 
 		/* ★ M07：Guard 可能已把 best 换成"结束回合"，动作代号要以最终 best 重新算，避免 action≠rule */
 		action = actionForBest(best);
@@ -4709,12 +4739,16 @@ function bestAction() {
 			if (stratResult) _finalResult.strategist = stratResult;
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
+		_markPhase('telemetry');
+
 		/* ★ 测试观测：记录“最终执行候选”与本次完整 bestAction 墙钟耗时。
 		 * 仅写日志/回放，不参与评分、排序或执行。 */
 		try {
 			const _decisionMs = Math.max(0, performance.now() - _perfT0);
+			const _phaseMs = _phaseSnapshot();
 			_finalResult.decisionMs = Math.round(_decisionMs);
-			_finalizeDecisionRecord(me, acts, best, _decisionMs);
+			_finalResult.phaseMs = _phaseMs;
+			_finalizeDecisionRecord(me, acts, best, _decisionMs, _phaseMs);
 			try { perfMark('bestAction', _decisionMs); } catch (eP) {}
 			try { profEnd('bestAction'); } catch (eP) {}
 		} catch (eTrace) {
