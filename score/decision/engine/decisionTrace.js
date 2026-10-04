@@ -127,6 +127,21 @@ export function buildDecisionTraceLines(entry, mode, translate) {
 	if (layers.team && layers.team.focus) signals.push('集火=' + layers.team.focus);
 	if (layers.multiturn && layers.multiturn.overall) signals.push('趋势=' + layers.multiturn.overall);
 	if (signals.length) lines.push('信号：' + signals.join('｜'));
+
+	const phaseMs = entry.phaseMs && typeof entry.phaseMs === 'object' ? entry.phaseMs : null;
+	if (phaseMs) {
+		const rankedPhases = Object.keys(phaseMs)
+			.map(function (name) { return { name: name, ms: finiteNumber(phaseMs[name], 0) }; })
+			.filter(function (x) { return x.ms > 0; })
+			.sort(function (a, b) { return b.ms - a.ms; })
+			.slice(0, 5);
+		if (rankedPhases.length) {
+			lines.push('性能：' + rankedPhases.map(function (x) {
+				return x.name + '=' + Math.round(x.ms) + 'ms';
+			}).join('｜'));
+		}
+	}
+
 	if (reason) lines.push('原因：' + reason);
 
 	return lines;
