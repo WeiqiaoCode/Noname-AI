@@ -18,6 +18,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
+import { stageDecisionTransaction } from '../state/decisionTransaction.js';
 import { skillProfileOf } from '../skills/skills.js';
 import { beginSkillChoiceStage } from '../skills/skillChoiceTransaction.js';
 import { classifySkillCardSelection, skillCardSelectionAdjustment } from '../skills/skillCardChoiceBrain.js';
@@ -110,16 +111,11 @@ function _getBA(player) {
 		const ba = bestAction();
 		CACHE.set(player, { key: k, value: ba });
 
-		/* ★ 决策日志去重：同一玩家同一回合只记录一次 */
+		/* ★ Evaluate → Stage：这里只登记待提交事务，不写学习/广播/回放。
+		 * 若宿主最终没有执行该动作，事务会被后续真实动作判 mismatch 或自动过期。 */
 		try {
-			const logKey = '__logged_' + k;
-			if (!CACHE.has(logKey)) {
-				CACHE.set(logKey, true);
-				if (typeof window !== 'undefined' && window.__DJSC && typeof window.__DJSC.logBestAction === 'function') {
-					window.__DJSC.logBestAction(player, ba);
-				}
-			}
-		} catch (eLog) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eLog); }
+			if (ba && ba.__djscTransaction) stageDecisionTransaction(player, ba.__djscTransaction);
+		} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
 
 		return ba;
 	} catch (e) { return null; }
