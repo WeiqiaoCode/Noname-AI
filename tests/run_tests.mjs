@@ -4502,9 +4502,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         && src45.indexOf("beginSkillChoiceStage(this, skillCtx, 'button', next)") >= 0
         && src45.indexOf("beginSkillChoiceStage(this, skillCtx, 'control', next)") >= 0,
         '10.45 card/target/button/control 均进入统一 transaction');
-    ok(src45.indexOf('CACHE.delete(player)') >= 0
-        && src45.indexOf('_getFreshSkillBA(this, skillCtx.id)') >= 0,
-        '10.45 每个连续选择 stage 重新评估当前真实状态，不复用回合缓存');
+    ok(src45.indexOf('const ba = _getBA(player)') >= 0
+        && src45.indexOf('_getFreshSkillBA(this, skillCtx.id)') >= 0
+        && src45.indexOf('const ba = bestAction()') >= 0,
+        '10.45 每个连续选择 stage 重新进入 _getBA→bestAction，由 state-key 决定复用而非回合缓存');
     ok(src45.indexOf('_protoBackup.chooseCard') >= 0
         && src45.indexOf('_protoOwned.chooseCard') >= 0
         && src45.indexOf('proto.chooseCard === _protoOwned.chooseCard') >= 0,

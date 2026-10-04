@@ -15,6 +15,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
+import { stageDecisionTransaction, commitDecisionTransaction, cancelDecisionTransaction } from '../state/decisionTransaction.js';
 import { cfg } from '../../foundation/config/util.js';
 import { log } from '../../foundation/diag/logger.js';
 import { evaluateTaoRescue } from '../safety/rescuePolicy.js';
@@ -406,10 +407,16 @@ export function installUseOverride() {
 				return orig.apply(this, args);
 			}
 
+			/* ★ Evaluate → Stage：hard override 也只登记事务，真正 useCard/endTurn 再 Commit。 */
+			try {
+				if (ba.__djscTransaction) stageDecisionTransaction(player, ba.__djscTransaction);
+			} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
+
 			/* ============ ★ 硬接管 A：引擎说"结束回合" → 短路 ============ */
 			if (ba.action === 'C' && ba.rule === 'end') {
 				if (_hasAvailableLimitedSkill(player) || _hasForcedSkill(player)) {
 					_stat('pass-limited');
+					try { cancelDecisionTransaction(player, 'end-deferred-by-forced-skill'); } catch (eTx) {}
 					return orig.apply(this, args);
 				}
 				_stat('endTurn');
@@ -417,10 +424,14 @@ export function installUseOverride() {
 				const origFilterEnd = ev.filterCard;
 				ev.filterCard = function () { return false; };
 				try {
-					return orig.apply(this, args);
+					const rEnd = orig.apply(this, args);
+					/* filterCard 全 false 已把“结束回合”真实提交给宿主。 */
+					try { commitDecisionTransaction(player, { type: 'end', id: 'end', target: null }); } catch (eTx) {}
+					return rEnd;
 				} catch (e) {
 					try { ev.filterCard = origFilterEnd; } catch (e2) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e2); }
 					try { delete ev[SENTINEL]; } catch (e3) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e3); }
+					try { cancelDecisionTransaction(player, 'end-short-circuit-error'); } catch (eTx) {}
 					_markDegraded(player);
 					trip('use', 'filterCard 短路异常：' + e.message, 'fatal');
 					return orig.apply(this, args);

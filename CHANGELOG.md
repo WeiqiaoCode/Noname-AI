@@ -1,10 +1,38 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.6-test（semver 4.0.6-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.7-test（semver 4.0.7-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
+
+---
+
+## v4.0.7-test 决策事务化（2026-10-04）
+
+> 本版本不调整候选评分、身份判断、Planner、卡牌优先级或 Guard 规则；重点修复“AI 被询问一次，就提前写入学习/日志/广播”的架构污染。
+
+### Evaluate → Stage → Commit
+
+- `bestAction()` 的训练样本、Decision Trace、Replay、AutoFeature、团队广播、技能反馈、风格反馈、模型校准等副作用改为 deferred effect。
+- Evaluate 阶段只返回决策结果和不可枚举的 `__djscTransaction`，不直接提交学习数据。
+- 软接管 `aiOverride` 与硬接管 `chooseToUse` 只负责 Stage 待执行事务。
+- 宿主真正调用 `Player.useCard` 后才 Commit 对应 card/equip 事务。
+- 宿主真正进入 `logSkill` 后才 Commit 对应 skill 事务。
+- 硬接管明确执行“结束回合”短路时提交 end 事务。
+
+### 防污染规则
+
+- 实际动作与推荐动作 id 不一致：事务标记 mismatch 并丢弃，不训练推荐动作。
+- 同牌但实际目标不同：同样 mismatch，不把不同目标冒充为同一决策。
+- 不同事件类型不会互相误取消，例如 card 内部触发 skill 日志不会冲掉 card 事务。
+- 同一事务只允许 Commit 一次；重复宿主事件不会重复训练。
+- 待提交事务默认 5 秒过期，避免跨决策残留。
+
+### 回归门禁
+
+- 新增 `tests/run_decision_transaction_tests.mjs`，覆盖 Evaluate 零副作用、Stage 幂等、mismatch、target mismatch、Commit once、cancel 与统计。
+- Decision Trace 契约同步改为“Commit 后写入”，不再把单纯候选评估当成已执行决策。
 
 ---
 

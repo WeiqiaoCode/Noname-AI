@@ -18,6 +18,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { bestAction } from '../engine/engine.js';
+import { stageDecisionTransaction } from '../state/decisionTransaction.js';
 import { skillProfileOf } from '../skills/skills.js';
 import { beginSkillChoiceStage } from '../skills/skillChoiceTransaction.js';
 import { classifySkillCardSelection, skillCardSelectionAdjustment } from '../skills/skillCardChoiceBrain.js';
@@ -35,7 +36,6 @@ export function isRecastRecommended(ba) {
 	return !!(ba && ba.recast === true);
 }
 
-const CACHE = new Map();          // player → { key, value }
 let _installed = false;
 let _protoHooked = false;
 let _skillTargetHooked = false;
@@ -86,40 +86,23 @@ function _softStat(player) {
 	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
-/* ---------- 缓存：同一玩家同一回合只算一次 bestAction ---------- */
-function _playerKey(player) {
-	try {
-		const name = player.name1 || player.name || player.name2 || '?';
-		const round = (_status && _status.roundNumber) || 0;
-		const isPhase = (_status && _status.currentPhase) === player ? 'P' : 'O';
-		return name + '|' + round + '|' + isPhase;
-	} catch (e) { return null; }
-}
-
+/* ---------- bestAction 复用 ----------
+ * 不再使用“同一玩家同一回合”粗粒度缓存：它会跨局面复用旧决策。
+ * #31 已由 engine 负责 state fingerprint + TTL 缓存；这里只调用 engine 并登记事务。 */
 function _getBA(player) {
 	try {
 		if (!player || player === game.me) return null;
 		try { if (player.isOnline2 && player.isOnline2()) return null; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		if (cfg('decisionScore', true) === false) return null;
 
-		const k = _playerKey(player);
-		if (!k) return null;
-		const hit = CACHE.get(player);
-		if (hit && hit.key === k) return hit.value;
-
 		const ba = bestAction();
-		CACHE.set(player, { key: k, value: ba });
 
-		/* ★ 决策日志去重：同一玩家同一回合只记录一次 */
+		/* ★ Evaluate → Stage：这里只登记待提交事务，不写学习/广播/回放。
+		 * 同状态重复询问时 engine 会返回同一事务；stageDecisionTransaction 本身幂等。
+		 * 局面变化时 engine state-key 立即重算，不再被“按回合缓存”遮蔽。 */
 		try {
-			const logKey = '__logged_' + k;
-			if (!CACHE.has(logKey)) {
-				CACHE.set(logKey, true);
-				if (typeof window !== 'undefined' && window.__DJSC && typeof window.__DJSC.logBestAction === 'function') {
-					window.__DJSC.logBestAction(player, ba);
-				}
-			}
-		} catch (eLog) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eLog); }
+			if (ba && ba.__djscTransaction) stageDecisionTransaction(player, ba.__djscTransaction);
+		} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
 
 		return ba;
 	} catch (e) { return null; }
@@ -128,8 +111,7 @@ function _getBA(player) {
 function _getFreshSkillBA(player, sid) {
 	try {
 		/* 连续技能每进入一个新的 choice stage 都重新评估当前真实状态。
-		 * 这里只失效该 AI 玩家的 soft-override 缓存，不清全局决策日志。 */
-		CACHE.delete(player);
+		 * engine 自身按事件窗口/state-key 决定是否复用。 */
 		const ba = _getBA(player);
 		if (!ba || ba.type !== 'skill' || ba.id !== sid) return null;
 		return ba;
@@ -137,18 +119,10 @@ function _getFreshSkillBA(player, sid) {
 }
 
 function _clearCache() {
-	try {
-		CACHE.clear();
-		_softCounted.clear();
-		/* 清空 __logged_ 标记 */
-		if (typeof CACHE.forEach === 'function') {
-			const toDelete = [];
-			CACHE.forEach(function (v, k) {
-				if (typeof k === 'string' && k.indexOf('__logged_') === 0) toDelete.push(k);
-			});
-			toDelete.forEach(function (k) { CACHE.delete(k); });
-		}
-	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	/* bestAction 缓存已统一收敛到 engine 的 state-key cache。
+	 * 这里只清理 soft override 自己的统计去重状态。 */
+	try { _softCounted.clear(); }
+	catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
 /* ---------- 牌名匹配：兼容 viewAs（武圣/龙胆/奇才） ---------- */

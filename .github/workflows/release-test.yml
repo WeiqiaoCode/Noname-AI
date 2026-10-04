@@ -186,15 +186,15 @@ jobs:
 
           ### 本版修复
 
-          - 每次 bestAction 最多执行一次 Planner，日志/面板复用同一 decisionPlan
-          - Planner 350ms 从事后超时改为循环内 cooperative deadline，预算耗尽直接回退基础 best
-          - bestAction 从 100ms 纯时间缓存升级为 state fingerprint + 1.2s 安全 TTL
-          - 状态指纹覆盖 HP、公开手牌数、装备/判定、自己手牌、事件窗口、出牌/技能使用次数和敌我关系，不读取对手隐藏手牌
-          - 新增 bestAction 分阶段耗时：context/targets/candidates/planner/model/guard/telemetry 等
-          - AutoFeature 内存更新保持同步，持久化写盘改为 500ms 合并延后
-          - 同一次 bestAction 内复用敌友判断结果，不建立跨决策关系缓存
-          - 详细决策日志与决策回放直接显示最慢性能阶段
-          - 不降低搜索深度、不关闭 Planner、不削减 Guard 或身份判断
+          - 引入 Evaluate → Stage → Commit → Outcome 决策事务边界
+          - bestAction 评估阶段不再直接把推荐动作写入训练、回放、AutoFeature 或团队广播
+          - Player.useCard 作为卡牌真实执行 Commit 点，动作/目标不匹配时推荐事务直接作废
+          - 主动技能只在匹配的 logSkill 出现后 Commit，旁路/被动技能不会误提交
+          - hard override 明确结束回合后 Commit end 事务；无法可靠确认的 soft end 不猜测
+          - committed / mismatched / cancelled / expired / superseded 事务不可复活
+          - 新局重置同时清除 pending，避免跨局污染
+          - soft override 移除“按回合”粗缓存，统一复用 state fingerprint 缓存
+          - 不修改评分公式、Planner 深度、身份推断、Guard 与卡牌专项策略
 
           ### 测试重点
 
