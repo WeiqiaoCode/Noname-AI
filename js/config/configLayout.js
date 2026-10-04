@@ -244,6 +244,15 @@ export function arrangeConfig(source, lib, game) {
 
     const result = {};
 
+    const headerText = text(source.djscBd && source.djscBd.name ? source.djscBd.name : '无名AI');
+    const versionText = (headerText.match(/v\s*([^\s]+)/i) || [null, ''])[1];
+    result.settingsHeader = {
+        clear: true,
+        nopointer: true,
+        name: '<div class="djsc-settings-header"><b>无名AI</b><span>' + (versionText ? 'v' + escape(versionText) : '设置中心') + '</span><small>决策 · 策略 · 学习 · 诊断</small></div>',
+        onclick: function () { return false; },
+    };
+
     result.settingsModePlayer = {
         clear: true,
         name: '<span class="djsc-mode-choice" data-mode="player" data-active="' + (currentMode === 'player') + '"><b>玩家选项</b><small>游戏体验与常用功能</small></span>',
