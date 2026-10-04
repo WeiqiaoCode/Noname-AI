@@ -4,14 +4,18 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release-test.yml"
+      - "build/verify_release_package.mjs"
+      - "js/config/version.js"
+      - "info.json"
+      - "package.json"
+      - "logs/**"
   workflow_dispatch:
   push:
     branches:
       - main
-    tags:
-      - "v*-test"
     paths:
       - ".github/workflows/release-test.yml"
+      - "build/verify_release_package.mjs"
       - "js/config/version.js"
       - "info.json"
       - "package.json"
@@ -44,6 +48,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           VERSION="$(node --input-type=module -e "import { VERSION_SEMVER } from './js/config/version.js'; process.stdout.write(VERSION_SEMVER)")"
           DISPLAY_VERSION="$(node --input-type=module -e "import { VERSION } from './js/config/version.js'; process.stdout.write(VERSION)")"
 
@@ -75,15 +80,7 @@ jobs:
             exit 1
           fi
 
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
-            EXPECTED_TAG="v$VERSION"
-            if [[ "$GITHUB_REF_NAME" != "$EXPECTED_TAG" ]]; then
-              echo "Tag/version mismatch: tag=$GITHUB_REF_NAME expected=$EXPECTED_TAG"
-              exit 1
-            fi
-          fi
-
-          ASSET="无名AI_${VERSION}.zip"
+          ASSET="UnknownAI_${VERSION}.zip"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
           echo "Packaging test version: $VERSION"
@@ -91,10 +88,9 @@ jobs:
       - name: Run release gate
         run: npm test
 
-      - name: Build clean extension package
+      - name: Build and audit extension package
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           ASSET: ${{ steps.version.outputs.asset }}
         run: |
           set -euo pipefail
@@ -102,13 +98,15 @@ jobs:
           rm -rf dist
           mkdir -p "dist/无名AI"
 
-          for item in extension.js info.json js score css assets data README.md CHANGELOG.md LICENSE; do
+          for item in extension.js info.json js score css assets data logs README.md CHANGELOG.md LICENSE; do
             if [[ ! -e "$item" ]]; then
               echo "Required release item is missing: $item"
               exit 1
             fi
             cp -R "$item" "dist/无名AI/"
           done
+
+          node build/verify_release_package.mjs "dist/无名AI"
 
           (
             cd dist
@@ -117,14 +115,15 @@ jobs:
 
           test -s "$ASSET"
 
-          # ZIP 必须直接解压出“无名AI/”，且不得混入开发目录。
           unzip -Z1 "$ASSET" > package-files.txt
           grep -q '^无名AI/extension.js$' package-files.txt
           grep -q '^无名AI/info.json$' package-files.txt
           grep -q '^无名AI/js/' package-files.txt
           grep -q '^无名AI/score/' package-files.txt
+          grep -q '^无名AI/logs/今日修改日志.js$' package-files.txt
+          grep -q '^无名AI/logs/WORK_TRAIL.js$' package-files.txt
 
-          if grep -Eq '^无名AI/(\.github|tests|build|DEV_GUIDE|logs)/' package-files.txt; then
+          if grep -Eq '^无名AI/(\.github|tests|build|DEV_GUIDE)/' package-files.txt; then
             echo "Development-only files leaked into release package."
             exit 1
           fi
@@ -144,7 +143,7 @@ jobs:
 
   release:
     name: Publish GitHub pre-release
-    if: github.event_name == 'push' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: package
     runs-on: ubuntu-latest
     permissions:
@@ -167,13 +166,6 @@ jobs:
 
           TAG="v$VERSION"
 
-          # Tag 触发时仍要求来源 Tag 与版本完全一致。
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "$GITHUB_REF_NAME" != "$TAG" ]]; then
-            echo "Tag/version mismatch: tag=$GITHUB_REF_NAME expected=$TAG"
-            exit 1
-          fi
-
-          # 同版本已经发布时保持幂等，避免 main 上后续发布配置调整重复创建。
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists; nothing to publish."
             exit 0
@@ -192,6 +184,12 @@ jobs:
           4. 完全重启无名杀
           5. 控制台执行 DJSC.VERSION，应显示 $VERSION
 
+          ### v4.0.2-test 修复
+
+          - 修复 v4.0.1-test 发布包遗漏 logs/ 运行时依赖导致扩展无法加载的问题
+          - 发布前新增包内相对模块依赖完整性审计
+          - Release 文件名统一为 ASCII，避免下载链路重写中文文件名
+
           ### 测试重点
 
           - 身份判断与敌我关系
@@ -201,10 +199,9 @@ jobs:
           - 多目标 / 多阶段技能决策
           - 卡死、报错、无限循环等 P0 问题
 
-          自动化 release gate 已在发布前执行通过。
+          自动化 release gate 与 release package dependency audit 已在发布前执行通过。
           EOF
 
-          # gh release create 在 Tag 不存在时，会在 --target 指定提交上创建该 Tag。
           gh release create "$TAG" "$ASSET" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

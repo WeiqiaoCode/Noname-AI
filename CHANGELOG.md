@@ -1,10 +1,29 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.1-test（semver 4.0.1-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.2-test（semver 4.0.2-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
+
+---
+
+## v4.0.2-test 发布包依赖修复（2026-10-04）
+
+> 修复 v4.0.1-test Release ZIP 遗漏运行时 `logs/` 依赖，导致 `js/config/changelog.js` 无法解析、扩展入口加载失败的问题。该问题属于发布包完整性错误，不涉及 AI 决策逻辑。
+
+### 发布包修复
+
+- **恢复运行时 `logs/` 目录**：`logs/今日修改日志.js` 与 `logs/WORK_TRAIL.js` 被 `js/config/changelog.js` 直接 import，现正式纳入测试包。
+- **新增 Release dependency audit**：打包阶段扫描包内 JS 模块的相对静态 `import/export` 与字面量 `import()`，目标文件缺失或越出扩展根目录时直接阻断发布。
+- **新增关键运行时文件契约**：`extension.js`、`info.json`、`js/config/changelog.js`、两份 `logs/*.js` 必须实际存在于待发布目录。
+- **ZIP 结构校验同步更新**：`logs/` 不再被误判为开发目录；仍排除 `.github/`、`tests/`、`build/`、`DEV_GUIDE/`。
+- **发布文件名改用 ASCII**：测试资产统一为 `UnknownAI_<version>.zip`，避免中文文件名在 GitHub/下载链路中被截断或重写。
+
+### 兼容说明
+
+- `v4.0.1-test` 已知为不可用发布包，不建议继续测试。
+- 本版本作为第一份可用于真实游戏加载验证的 4.0 测试候选版。
 
 ---
 
