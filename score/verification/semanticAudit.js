@@ -6,14 +6,14 @@
 export const AUDIT = {
 	"generated": "2026-10-04",
 	"files": 219,
-	"cleanFiles": 93,
-	"legacyFiles": 126,
-	"hits": 3421,
+	"cleanFiles": 92,
+	"legacyFiles": 127,
+	"hits": 3422,
 	"cleanRate": 42,
 	"byDomain": {
 		"cognition": 112,
 		"decision": 1846,
-		"foundation": 54,
+		"foundation": 55,
 		"knowledge": 218,
 		"model": 280,
 		"perception": 786,
