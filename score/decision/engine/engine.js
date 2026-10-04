@@ -1504,7 +1504,10 @@ function installHooks() {
 				const sid = (typeof args[0] === 'string') ? args[0] :
 					(args[0] && (args[0].name || args[0].skill || args[0].id)) || '';
 				const _pendingTx = peekDecisionTransaction(me);
-				if (_pendingTx && _pendingTx.expected.type === 'skill' && sid) {
+				/* logSkill 也会记录被动/旁路技能；只有 id 与待提交主动技能完全一致才 Commit。
+				 * 其它 skill 日志直接忽略，不能把当前事务误判为 mismatch。 */
+				if (_pendingTx && _pendingTx.expected.type === 'skill' && sid &&
+					sid === _pendingTx.expected.id) {
 					commitDecisionTransaction(me, { type: 'skill', id: sid, target: null });
 				}
 			} catch (eTx) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eTx); }
