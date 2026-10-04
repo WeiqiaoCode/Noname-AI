@@ -5,11 +5,11 @@
  */
 export const AUDIT = {
 	"generated": "2026-10-04",
-	"files": 220,
-	"cleanFiles": 93,
+	"files": 221,
+	"cleanFiles": 94,
 	"legacyFiles": 127,
 	"hits": 3422,
-	"cleanRate": 42,
+	"cleanRate": 43,
 	"byDomain": {
 		"cognition": 112,
 		"decision": 1846,
