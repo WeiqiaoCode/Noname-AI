@@ -1513,8 +1513,25 @@ function openFeedbackPanel() {
 					content += (i + 1) + '. 玩家：' + (item.player || '未知') + '\n';
 					content += '   轮次：' + (item.round || 0) + '\n';
 					if (item.winner) {
-						content += '   最优：' + (item.winner.id || item.winner.type || '未知') + '\n';
+						let targetText = '';
+						try {
+							if (Array.isArray(item.winner.target)) targetText = item.winner.target.join('+');
+							else if (item.winner.target) targetText = String(item.winner.target);
+						} catch (e) {}
+						content += '   最优：' + (item.winner.id || item.winner.type || '未知') + (targetText ? ' → ' + targetText : '') + '\n';
 						content += '   得分：' + (item.winner.score || 0) + '\n';
+						if (typeof item.elapsedMs === 'number') {
+							content += '   决策耗时：' + Math.round(item.elapsedMs) + ' ms' +
+								(item.elapsedMs >= 5000 ? '（严重慢）' : (item.elapsedMs >= 1000 ? '（慢）' : '')) + '\n';
+						}
+						if (item.candidates && item.candidates.length > 1) {
+							const c2 = item.candidates.find(function (c) {
+								if (!c) return false;
+								return !(c.type === item.winner.type && c.id === item.winner.id &&
+									String(c.target || '') === String(item.winner.target || ''));
+							});
+							if (c2) content += '   次选：' + (c2.id || c2.type || '未知') + (c2.target ? ' → ' + c2.target : '') + '（' + (c2.score || 0) + '）\n';
+						}
 						if (item.winner.reason) {
 							content += '   原因：' + item.winner.reason + '\n';
 						}
