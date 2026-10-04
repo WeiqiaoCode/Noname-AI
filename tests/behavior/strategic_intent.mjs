@@ -125,6 +125,8 @@ function target(spec) {
 	eq(sorted[0], save, '10.63 CRITICAL保主动作跨越普通高utility动作');
 	eq(save.policy.priorityTier, PRIORITY_TIER.CRITICAL, '10.63 对齐PROTECT候选被提升CRITICAL');
 	eq(greed.policy.priorityTier, PRIORITY_TIER.NORMAL, '10.63 无关动作保持NORMAL');
+	eq(save.score, 3, '10.63 战略层不改写CRITICAL候选raw score');
+	eq(greed.score, 30, '10.63 战略层不改写普通候选raw score');
 }
 
 /* 普通FOCUS只写alignment，不改priority tier；仍由utility先选。 */
