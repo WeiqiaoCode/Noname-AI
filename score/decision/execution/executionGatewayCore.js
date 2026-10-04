@@ -223,21 +223,18 @@ export function createExecutionGatewayCore(deps) {
 				('host call failed: ' + (error && error.message ? error.message : error)),
 				options.severity || 'fatal');
 
-			if (options.fallback === false) return { ok: false, result: null, error, reason: 'host-error' };
-
-			try {
-				inc(kind, 'fallbacks');
-				const fallbackResult = orig.apply(thisArg, args);
-				return { ok: false, fallback: true, result: fallbackResult, error, reason: 'fallback-ok' };
-			} catch (fallbackError) {
-				return {
-					ok: false,
-					fallback: true,
-					result: options.fallbackValue === undefined ? null : options.fallbackValue,
-					error: fallbackError,
-					reason: 'fallback-error',
-				};
-			}
+			/* 关键安全规则：同一个宿主事件最多调用一次。
+			 * 原函数抛错时无法证明它“完全没有产生副作用”，因此绝不在当前事件重入 orig。
+			 * degrade/circuit 会让后续事件退回原生路径，这才是安全 fallback。 */
+			inc(kind, 'fallbacks');
+			return {
+				ok: false,
+				fallback: true,
+				degraded: true,
+				result: options.fallbackValue === undefined ? null : options.fallbackValue,
+				error: error,
+				reason: 'degraded-next-call',
+			};
 		}
 	}
 
