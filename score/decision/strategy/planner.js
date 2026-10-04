@@ -555,6 +555,11 @@ export function planSequence(me, options) {
 				killSeq = ks;
 			}
 		}
+		/* 最后一个敌人的搜索也可能刚好跨过 deadline；任何超预算结果都不得进入改判。 */
+		if (_budgetExceeded(deadline)) {
+			log.warn('planner', '规划预算耗尽，放弃本轮 Planner 改判');
+			return null;
+		}
 		if (killSeq && killSeq.firstCandidate) {
 			log.debug('planner', '残局解：打 ' + killSeq.targetName + ' ' + killSeq.totalDmg + ' 点可秒');
 			const firstCandidate = killSeq.firstCandidate;
