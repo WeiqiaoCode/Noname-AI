@@ -152,12 +152,26 @@ function makeStateKey() {
                 const evType = String(ev.type || '');
                 const evSkill = String(ev.skill || '');
                 const evStep = (typeof ev.step === 'number' || typeof ev.step === 'string') ? String(ev.step) : '';
+                const playerKey = ev.player ? String(ev.player.playerid || ev.player.name1 || ev.player.name || '') : '';
+                const sourceKey = ev.source ? String(ev.source.playerid || ev.source.name1 || ev.source.name || '') : '';
+                const targetKey = ev.target ? String(ev.target.playerid || ev.target.name1 || ev.target.name || '') : '';
+                let targetsKey = '';
+                try {
+                    if (Array.isArray(ev.targets)) {
+                        targetsKey = ev.targets.map(function (p) {
+                            return p ? String(p.playerid || p.name1 || p.name || '') : '';
+                        }).filter(Boolean).sort().join(',');
+                    }
+                } catch (e) {}
+                let cardKey = '';
+                try { cardKey = ev.card ? _cacheCardName(ev.card, current) : ''; } catch (e) {}
                 let parentName = '';
                 try {
                     const parent = typeof ev.getParent === 'function' ? ev.getParent() : ev.parent;
                     parentName = parent ? String(parent.name || parent.type || '') : '';
                 } catch (e) {}
-                parts.push('EV:' + evName + ':' + evType + ':' + evSkill + ':' + evStep + ':' + parentName);
+                parts.push('EV:' + evName + ':' + evType + ':' + evSkill + ':' + evStep + ':' +
+                    playerKey + ':' + sourceKey + ':' + targetKey + ':' + targetsKey + ':' + cardKey + ':' + parentName);
             }
         } catch (eEvent) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eEvent); }
 
