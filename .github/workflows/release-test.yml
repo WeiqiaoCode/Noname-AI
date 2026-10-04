@@ -191,6 +191,7 @@ jobs:
           - 接管层启停不再由各模块重复读取 hardOverride / override_* / circuit
           - decisionHook 改为单次宿主调用监督员，不再因为检查失败重复执行 choose 事件
           - engine 的 useCard / respond / effect / logSkill / die 观测 Hook 禁止异常后第二次调用宿主
+          - Host 当前事件抛错后不重入；清理临时改写并让后续事件通过 degrade/circuit 回退原生
           - 无懈 chooseToUse 桥接的接管资格改按 respond 层统一解释
           - 新增执行网关契约测试，阻止公共执行职责再次散回各模块
           - 不修改评分、身份推断、Planner、Guard 与卡牌专项策略
