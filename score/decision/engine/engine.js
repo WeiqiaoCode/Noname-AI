@@ -4477,6 +4477,19 @@ function bestAction() {
 			}
 		} catch (eDeep) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eDeep); }
 
+		/* ★ #37 Strategic Policy Barrier
+		 * Champion/DeepThink 可以在同一 policy band 内优化，但不能把 CRITICAL/FORCED
+		 * 身份职责降回普通动作。Guard 仍位于后方，保留最终安全否决权。 */
+		try {
+			acts.sort(compareActionCandidates);
+			const strategicTop = acts.find(isCandidateEligible) || null;
+			if (strategicTop && best && !sameCandidatePolicyBand(strategicTop, best) &&
+				compareActionCandidates(strategicTop, best) < 0) {
+				best = strategicTop;
+				best.reason = (best.reason || '') + '｜战略职责边界';
+			}
+		} catch (ePolicy) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(ePolicy); }
+
 		_deferEffect('cognition-log', function () {
 /* ★ 认知日志 */
 		try {
