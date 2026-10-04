@@ -5872,6 +5872,7 @@ export { give, givePair, giveVs, scoreCardUse, scoreEffect, installHooks, uninst
     reg.bind('pickRecommend', { _real: true, recommend: getTopChars, getRecord: getCharRecord, computeDims: computeCharDims, stats: function() { return { ok: true }; } });
     reg.bind('smartPanel', { _real: true, recordStyle: recordStyleOutcome, flush: flushStyleFeedback, getStats: getStyleFeedbackStats, recordPlayerTag: recordPlayerTag, getPlayerTag: getPlayerTag, open: function() {}, stats: function() { return { ok: true }; } });
     reg.bind('decisionDashboard', { _real: true, strategize: strategize, getStats: strategistGetStats, getLastDecision: getLastDecision, setEnabled: setEnabled, isEnabled: isEnabled, open: function() {}, stats: function() { return { ok: true }; } });
+    reg.bind('decisionTransaction', { _real: true, stats: decisionTransactionStats });
     reg.bind('modules', { _real: true, teamPlan: teamPlan, focusTarget: focusTarget, protectScore: protectScore, comboWithAllies: comboWithAllies, list: function() { return []; }, stats: function() { return { ok: true }; } });
     reg.bind('selfCheck', { _real: true, open: openSelfCheck, getHistory: getSelfCheckHistory, clearHistory: clearSelfCheckHistory, run: runSelfChecks, stats: function() { return { ok: true }; } });
     reg.bind('autoplay', { _real: true, start: startAutoplay, stop: stopAutoplay, status: autoplayStatus, showReport: showAutoplayReport });
