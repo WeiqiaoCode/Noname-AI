@@ -4,9 +4,9 @@
  * 玩家设置与开发者设置使用同一底层配置，避免重复状态与“死开关”。
  */
 
-import { CONFIG_SECTIONS, configMeta, hiddenConfigKeys } from './configSchema.js';
+import { CONFIG_SECTIONS, configDefault, configMeta, hiddenConfigKeys } from './configSchema.js';
 
-const QQ_GROUP = '1080487560';
+const QQ_GROUP = String(configDefault('qqGroup', ''));
 const FEEDBACK_URL = 'https://wj.qq.com/s2/28087292/uhbn/';
 
 export function arrangeConfig(source, lib, game) {
