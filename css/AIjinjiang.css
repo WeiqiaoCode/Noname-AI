@@ -764,3 +764,227 @@ input:checked+.config_slider:before {
         max-height: 72vh !important;
     }
 }
+
+
+/* ================= 无名AI设置中心 4.0.6 ================= */
+
+/* 顶部双入口：玩家用淡金，开发者用浅蓝；不改变原扩展的半透明古风基调。 */
+.config:has(.djsc-mode-choice) {
+    display: inline-block !important;
+    width: calc(50% - 8px) !important;
+    min-height: 58px !important;
+    margin: 6px 4px !important;
+    padding: 0 !important;
+    vertical-align: top;
+    box-sizing: border-box !important;
+}
+.config:has(.djsc-mode-choice) > span {
+    display: block !important;
+    width: 100% !important;
+}
+.djsc-mode-choice {
+    display: flex !important;
+    min-height: 58px;
+    padding: 8px 12px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,.18);
+    background: rgba(205,202,202,.18);
+    font-family: "xinwei","STXinwei","KaiTi",serif !important;
+    cursor: pointer;
+    transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.djsc-mode-choice b {
+    font-size: 19px;
+    font-weight: normal;
+    line-height: 1.25;
+}
+.djsc-mode-choice small {
+    display: block;
+    margin-top: 3px;
+    color: #cbd3db;
+    font-size: 11px;
+    line-height: 1.25;
+}
+.djsc-mode-choice[data-mode="player"] b { color: #f3e8ae; }
+.djsc-mode-choice[data-mode="developer"] b { color: #9ad8ff; }
+.djsc-mode-choice[data-mode="player"][data-active="true"] {
+    border-color: #bda573;
+    background: rgba(80,65,40,.58);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.09);
+}
+.djsc-mode-choice[data-mode="developer"][data-active="true"] {
+    border-color: rgba(154,216,255,.55);
+    background: rgba(45,65,82,.58);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.09);
+}
+
+/* 两套设置共用底层配置，仅切换展示。 */
+body[data-djsc-settings-mode="player"] .config:has([data-scope="developer"]),
+body[data-djsc-settings-mode="developer"] .config:has([data-scope="player"]) {
+    display: none !important;
+}
+
+/* 团队名片：固定显示，不属于玩家/开发者任一侧。 */
+.config:has(.djsc-team-card) {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 8px 6px !important;
+    padding: 0 !important;
+}
+.config:has(.djsc-team-card) > span {
+    display: block !important;
+    width: 100% !important;
+}
+.djsc-team-card {
+    display: block;
+    width: 100%;
+    padding: 12px 14px;
+    box-sizing: border-box;
+    border: 1px solid rgba(255,255,255,.15);
+    border-radius: 14px;
+    background: rgba(255,255,255,.035);
+    color: #dbe7f5;
+    font-family: "xinwei","STXinwei","KaiTi",serif !important;
+}
+.djsc-team-title {
+    margin-bottom: 9px;
+    color: #f3e8ae;
+    font-size: 19px;
+    text-align: center;
+}
+.djsc-team-grid {
+    display: grid;
+    grid-template-columns: minmax(120px, .9fr) minmax(150px, 1.3fr);
+    gap: 5px 12px;
+    align-items: center;
+    font-size: 13px;
+}
+.djsc-team-grid span { color: #cbd3db; }
+.djsc-team-grid strong { color: #f3e8ae; font-weight: normal; }
+.djsc-team-qq {
+    display: flex;
+    margin-top: 9px;
+    padding-top: 8px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid rgba(255,255,255,.10);
+    font-size: 13px;
+}
+.djsc-team-qq span { color: #cbd3db; }
+.djsc-team-qq strong { color: #9ad8ff; font-weight: normal; user-select: text; -webkit-user-select: text; }
+.config:has(.djsc-about-copy) { margin-top: 0 !important; }
+
+/* 一级板块：维持灰银底，只用标题强调色区分语义。 */
+.djsc-settings-group[data-accent="gold"] > span:first-child { color: #f3e8ae; }
+.djsc-settings-group[data-accent="blue"] > span:first-child { color: #9ad8ff; }
+.djsc-settings-group[data-accent="green"] > span:first-child { color: #7fe3a0; }
+.djsc-settings-group[data-accent="amber"] > span:first-child { color: #ffd479; }
+
+/* 二级分类不套大卡片，避免层层套框。 */
+.config:has(.djsc-setting-subsection),
+.config:has(.djsc-protected-status) {
+    display: block;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 4px 9px !important;
+    padding: 0 !important;
+}
+.config:has(.djsc-setting-subsection) > span,
+.config:has(.djsc-protected-status) > span {
+    display: block !important;
+    width: 100% !important;
+}
+.djsc-setting-subsection {
+    display: block;
+    padding: 7px 10px 6px 13px;
+    border-left: 3px solid rgba(255,212,121,.65);
+    background: rgba(255,255,255,.035);
+    text-align: left;
+    box-sizing: border-box;
+}
+.djsc-setting-subsection b {
+    display: block;
+    color: #ffd479;
+    font: normal 16px/1.25 "xinwei","STXinwei","KaiTi",serif;
+}
+.djsc-setting-subsection small {
+    display: block;
+    margin-top: 3px;
+    color: #9aa8b6;
+    font: 11px/1.35 "xinwei","STXinwei","KaiTi",serif;
+}
+.djsc-setting-desc {
+    margin-top: 2px;
+    color: #929da8;
+    font-size: 11px;
+    font-weight: normal;
+    line-height: 1.35;
+}
+
+/* 不允许关闭的正确性边界用锁定状态，而不是伪装成开关。 */
+.djsc-protected-status {
+    display: grid;
+    grid-template-columns: minmax(130px,1fr) auto;
+    gap: 3px 12px;
+    padding: 7px 10px;
+    box-sizing: border-box;
+    border-left: 3px solid rgba(126,227,160,.55);
+    background: rgba(126,227,160,.035);
+    text-align: left;
+}
+.djsc-protected-status > span { color: #dbe7f5; font-size: 14px; }
+.djsc-protected-status > strong { color: #7fe3a0; font-size: 13px; font-weight: normal; }
+.djsc-protected-status > small {
+    grid-column: 1 / -1;
+    color: #929da8;
+    font-size: 11px;
+    line-height: 1.3;
+}
+
+/* 所有新版板块均支持折叠。 */
+.config:has(.djsc-settings-group[data-group="player_basic"][data-open="false"]) ~ .config:has([data-group="player_basic"]),
+.config:has(.djsc-settings-group[data-group="player_identity"][data-open="false"]) ~ .config:has([data-group="player_identity"]),
+.config:has(.djsc-settings-group[data-group="player_cards"][data-open="false"]) ~ .config:has([data-group="player_cards"]),
+.config:has(.djsc-settings-group[data-group="player_tactics"][data-open="false"]) ~ .config:has([data-group="player_tactics"]),
+.config:has(.djsc-settings-group[data-group="player_override"][data-open="false"]) ~ .config:has([data-group="player_override"]),
+.config:has(.djsc-settings-group[data-group="player_memory"][data-open="false"]) ~ .config:has([data-group="player_memory"]),
+.config:has(.djsc-settings-group[data-group="player_report"][data-open="false"]) ~ .config:has([data-group="player_report"]),
+.config:has(.djsc-settings-group[data-group="player_data"][data-open="false"]) ~ .config:has([data-group="player_data"]),
+.config:has(.djsc-settings-group[data-group="dev_runtime"][data-open="false"]) ~ .config:has([data-group="dev_runtime"]),
+.config:has(.djsc-settings-group[data-group="dev_decision"][data-open="false"]) ~ .config:has([data-group="dev_decision"]),
+.config:has(.djsc-settings-group[data-group="dev_identity"][data-open="false"]) ~ .config:has([data-group="dev_identity"]),
+.config:has(.djsc-settings-group[data-group="dev_perf"][data-open="false"]) ~ .config:has([data-group="dev_perf"]),
+.config:has(.djsc-settings-group[data-group="dev_model"][data-open="false"]) ~ .config:has([data-group="dev_model"]),
+.config:has(.djsc-settings-group[data-group="dev_guard"][data-open="false"]) ~ .config:has([data-group="dev_guard"]),
+.config:has(.djsc-settings-group[data-group="dev_storage"][data-open="false"]) ~ .config:has([data-group="dev_storage"]),
+.config:has(.djsc-settings-group[data-group="dev_experimental"][data-open="false"]) ~ .config:has([data-group="dev_experimental"]),
+.config:has(.djsc-settings-group[data-group="dev_other"][data-open="false"]) ~ .config:has([data-group="dev_other"]) {
+    display: none !important;
+}
+
+/* 危险维护动作在开发者页保留红色语义。 */
+body[data-djsc-settings-mode="developer"] .djsc-setting-action-row:has(.djsc-setting-name) .djsc-setting-action {
+    border-color: rgba(154,216,255,.34);
+}
+body[data-djsc-settings-mode="developer"] .config:has(.djsc-setting-name[data-group="dev_storage"]) .djsc-setting-action {
+    border-color: rgba(255,156,156,.45);
+}
+
+@media (max-width: 600px) {
+    .config:has(.djsc-mode-choice) {
+        width: calc(50% - 6px) !important;
+        margin: 5px 3px !important;
+    }
+    .djsc-mode-choice { min-height: 54px; padding: 7px 6px; }
+    .djsc-mode-choice b { font-size: 17px; }
+    .djsc-mode-choice small { font-size: 10px; }
+    .djsc-team-grid { grid-template-columns: 1fr; gap: 2px; }
+    .djsc-team-grid strong { margin-bottom: 5px; }
+    .djsc-team-qq { align-items: flex-start; flex-direction: column; gap: 3px; }
+}
