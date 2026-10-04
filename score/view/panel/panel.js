@@ -1524,6 +1524,17 @@ function openFeedbackPanel() {
 							content += '   决策耗时：' + Math.round(item.elapsedMs) + ' ms' +
 								(item.elapsedMs >= 5000 ? '（严重慢）' : (item.elapsedMs >= 1000 ? '（慢）' : '')) + '\n';
 						}
+						if (item.phaseMs && typeof item.phaseMs === 'object') {
+							const hot = Object.keys(item.phaseMs).map(function (name) {
+								return { name: name, ms: Number(item.phaseMs[name]) || 0 };
+							}).filter(function (x) { return x.ms > 0; })
+								.sort(function (a, b) { return b.ms - a.ms; }).slice(0, 4);
+							if (hot.length) {
+								content += '   性能热点：' + hot.map(function (x) {
+									return x.name + '=' + Math.round(x.ms) + 'ms';
+								}).join(' / ') + '\n';
+							}
+						}
 						if (item.candidates && item.candidates.length > 1) {
 							const c2 = item.candidates.find(function (c) {
 								if (!c) return false;
