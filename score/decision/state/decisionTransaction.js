@@ -10,7 +10,7 @@
  */
 
 let _seq = 0;
-const _pending = new WeakMap();
+let _pending = new WeakMap();
 const _stats = {
 	evaluated: 0,
 	staged: 0,
@@ -70,16 +70,17 @@ export function createDecisionTransaction(expected, commit, options) {
 
 export function stageDecisionTransaction(player, tx) {
 	if (!player || !tx || !tx.id) return null;
-	const now = Date.now();
-	if (_expired(tx, now)) {
-		if (tx.state !== 'expired') _stats.expired++;
-		tx.state = 'expired';
-		return null;
-	}
 	/* 缓存命中可能返回同一个 transaction 对象。
-	 * terminal transaction 绝不能重新 stage，否则同一决策可被重复学习/广播。 */
+	 * terminal transaction 绝不能重新 stage，否则同一决策可被重复学习/广播。
+	 * 终态检查必须先于 TTL，避免 committed 事务过期后被改写成 expired。 */
 	if (tx.state === 'committed' || tx.state === 'mismatched' ||
 		tx.state === 'cancelled' || tx.state === 'expired' || tx.state === 'superseded') {
+		return null;
+	}
+	const now = Date.now();
+	if (_expired(tx, now)) {
+		tx.state = 'expired';
+		_stats.expired++;
 		return null;
 	}
 	const old = _pending.get(player);
@@ -167,4 +168,6 @@ export function decisionTransactionStats() {
 
 export function resetDecisionTransactionStats() {
 	for (const k in _stats) _stats[k] = 0;
+	/* 新局/重置时同时丢弃所有未提交事务；WeakMap 无 clear，直接换实例。 */
+	_pending = new WeakMap();
 }
