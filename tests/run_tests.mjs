@@ -5211,6 +5211,10 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     eq(eng54.indexOf('const plan = planSequence(me)') >= 0, false,
         '10.54 决策日志不再绕过节流重复规划');
+
+    ok(eng54.indexOf("reg.mount('plan', function ()") >= 0 &&
+       eng54.indexOf('_status.djsc_lastDecisionPlan') >= 0,
+        '10.54 战术规划面板只读取最近一次 decisionPlan，不主动触发 Planner');
 }
 
 
