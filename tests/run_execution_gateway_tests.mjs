@@ -103,17 +103,16 @@ const success = invokeHost({
 ok(success.ok && prepared && cleaned, '10.61 Gateway统一prepare/cleanup成功路径');
 eq(hostCalls, 1, '10.61 正常Host调用只执行一次');
 
-/* 主执行异常：先清理，再允许一次原生fallback。 */
+/* 主执行异常：先清理，但绝不在同一事件第二次调用宿主。
+ * fallback 的含义是该层进入 degrade/circuit，后续事件退回原生。 */
 hostCalls = 0;
 cleaned = false;
-let first = true;
 const recovered = invokeHost({
 	kind: EXECUTION_KINDS.COMPARE,
 	player,
 	orig: function () {
 		hostCalls++;
-		if (first) { first = false; throw new Error('boom'); }
-		return 'fallback';
+		throw new Error('boom');
 	},
 	thisArg: player,
 	args: [],
@@ -122,10 +121,16 @@ const recovered = invokeHost({
 	},
 	failureReason: 'test failure',
 });
-eq(recovered.fallback, true, '10.61 Host异常走统一fallback');
-eq(recovered.result, 'fallback', '10.61 fallback返回原生结果');
-eq(hostCalls, 2, '10.61 异常路径最多一次primary+一次fallback');
-ok(cleaned, '10.61 fallback前先恢复临时宿主改写');
+eq(recovered.fallback, true, '10.61 Host异常进入统一降级');
+eq(recovered.reason, 'degraded-next-call', '10.61 当前事件不重入宿主');
+eq(hostCalls, 1, '10.61 异常路径宿主仍最多调用一次');
+ok(cleaned, '10.61 降级前先恢复临时宿主改写');
+
+const degradedGate = executionEligibility('compare', player, event, {
+	requireHardOverride: false,
+	checkCircuit: false,
+});
+eq(degradedGate.reason, 'degraded', '10.61 Host异常后后续事件进入短时降级');
 
 /* Transaction Stage/Commit/Cancel 统一经 Gateway。 */
 let committed = 0;
