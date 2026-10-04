@@ -36,7 +36,6 @@ export function isRecastRecommended(ba) {
 	return !!(ba && ba.recast === true);
 }
 
-const CACHE = new Map();          // player → { key, value }
 let _installed = false;
 let _protoHooked = false;
 let _skillTargetHooked = false;
@@ -120,18 +119,10 @@ function _getFreshSkillBA(player, sid) {
 }
 
 function _clearCache() {
-	try {
-		CACHE.clear();
-		_softCounted.clear();
-		/* 清空 __logged_ 标记 */
-		if (typeof CACHE.forEach === 'function') {
-			const toDelete = [];
-			CACHE.forEach(function (v, k) {
-				if (typeof k === 'string' && k.indexOf('__logged_') === 0) toDelete.push(k);
-			});
-			toDelete.forEach(function (k) { CACHE.delete(k); });
-		}
-	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	/* bestAction 缓存已统一收敛到 engine 的 state-key cache。
+	 * 这里只清理 soft override 自己的统计去重状态。 */
+	try { _softCounted.clear(); }
+	catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
 /* ---------- 牌名匹配：兼容 viewAs（武圣/龙胆/奇才） ---------- */
