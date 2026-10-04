@@ -5227,6 +5227,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     let ownHand = [{ name:'sha', suit:'spade', number:7 }];
     let enemyHandCount = 3;
     let hiddenEnemyHandReads = 0;
+    let ownCardStat = { sha:0 };
+    let ownSkillStat = { testSkill:0 };
 
     const me55 = {
         playerid:'me55', name:'me55', alive:true, hp:4, maxHp:4,
@@ -5234,6 +5236,11 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         getCards:function(zone) {
             if (zone === 'h') return ownHand;
             return [];
+        },
+        getStat:function(kind) {
+            if (kind === 'card') return ownCardStat;
+            if (kind === 'skill') return ownSkillStat;
+            return { card:ownCardStat, skill:ownSkillStat };
         },
         isLinked:function() { return false; },
     };
@@ -5286,6 +5293,16 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const kOwnCard = cache55.stateKey();
     ok(kOwnCard !== k1, '10.55 决策者自己手牌内容变化即使数量相同也失效');
     ownHand = [{ name:'sha', suit:'spade', number:7 }];
+
+    ownSkillStat = { testSkill:1 };
+    const kSkillUse = cache55.stateKey();
+    ok(kSkillUse !== k1, '10.55 本回合技能使用次数变化立即改变 stateKey');
+    ownSkillStat = { testSkill:0 };
+
+    ownCardStat = { sha:1 };
+    const kCardUse = cache55.stateKey();
+    ok(kCardUse !== k1, '10.55 本回合出牌次数变化立即改变 stateKey');
+    ownCardStat = { sha:0 };
 
     ok(eng55.indexOf('const BEST_ACTION_CACHE_TTL = 1200') >= 0,
         '10.55 bestAction 使用保守 1.2s 安全 TTL');
