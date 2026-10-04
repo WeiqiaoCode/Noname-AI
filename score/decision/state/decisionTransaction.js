@@ -72,12 +72,18 @@ export function stageDecisionTransaction(player, tx) {
 	if (!player || !tx || !tx.id) return null;
 	const now = Date.now();
 	if (_expired(tx, now)) {
+		if (tx.state !== 'expired') _stats.expired++;
 		tx.state = 'expired';
-		_stats.expired++;
+		return null;
+	}
+	/* 缓存命中可能返回同一个 transaction 对象。
+	 * terminal transaction 绝不能重新 stage，否则同一决策可被重复学习/广播。 */
+	if (tx.state === 'committed' || tx.state === 'mismatched' ||
+		tx.state === 'cancelled' || tx.state === 'expired' || tx.state === 'superseded') {
 		return null;
 	}
 	const old = _pending.get(player);
-	if (old && old.id === tx.id) return tx;
+	if (old && old.id === tx.id) return old.state === 'staged' ? tx : null;
 	if (old && old.state === 'staged') {
 		old.state = 'superseded';
 		_stats.superseded++;
