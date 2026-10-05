@@ -4233,16 +4233,18 @@ function bestAction() {
 		/* ★ 统一候选 policy 默认值 */
 		acts.forEach(function (a) { try { ensureCandidatePolicy(a); } catch (e) {} });
 
-		/* ★ 基本规则仍属 legacy 语义；若它们改分，显式进入 legacyResidual。 */
-		try {
-			trackUtilityStage(acts, 'basicRules', 'legacyResidual', function () {
-				applyBasicCardPlayRules(me, acts);
-				applyBasicSkillRules(me, acts);
-				applyBasicEquipRules(me, acts);
-				applyBasicJudgeRules(me, acts);
-				applyBasicTargetRules(me, acts);
-			});
-		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		/* ★ 基本规则仍属 legacy 语义；保持原有逐模块故障隔离。
+		 * 若某模块改分，显式进入 legacyResidual，不伪装成已迁移语义维度。 */
+		try { trackUtilityStage(acts, 'basicCardRules', 'legacyResidual', function () { applyBasicCardPlayRules(me, acts); }); }
+		catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		try { trackUtilityStage(acts, 'basicSkillRules', 'legacyResidual', function () { applyBasicSkillRules(me, acts); }); }
+		catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		try { trackUtilityStage(acts, 'basicEquipRules', 'legacyResidual', function () { applyBasicEquipRules(me, acts); }); }
+		catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		try { trackUtilityStage(acts, 'basicJudgeRules', 'legacyResidual', function () { applyBasicJudgeRules(me, acts); }); }
+		catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+		try { trackUtilityStage(acts, 'basicTargetRules', 'legacyResidual', function () { applyBasicTargetRules(me, acts); }); }
+		catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
 		/* ★ 统一收益系统方向守卫（actionValue）：对每个已带目标(含技能按类别补写后)的 act 强制方向判定
 		 *   - 攻击/控制/拆除 → 只对 disposition<0 真敌加分，中性(身份未明)强负，真友强罚；
