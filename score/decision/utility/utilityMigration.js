@@ -41,6 +41,7 @@ export const UTILITY_MIGRATION = Object.freeze({
 		'guard',
 	],
 	postUtilityDecision: [
+		'modelIntervention',
 		'champion',
 		'deepThink',
 	],
