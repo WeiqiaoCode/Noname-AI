@@ -184,7 +184,8 @@ ok(engineSource.indexOf('initializeUtilityPipeline(acts)') <
 	engineSource.indexOf("trackUtilityStage(acts, 'characterPolicy', 'synergy'") <
 	engineSource.indexOf('applyStrategicIntentToCandidates(acts, strategicState)'),
 	'10.62 Utility迁移阶段位于Strategic Intent之前');
-ok(actionCandidateSource.includes('return b.score - a.score') &&
+ok(actionCandidateSource.includes('Number(b && b.score)') &&
+	actionCandidateSource.includes('Number(a && a.score)') &&
 	!actionCandidateSource.includes('shadowUtility'),
 	'10.62 canonical排序仍使用legacy score而非shadowUtility');
 ok(utilityPipelineSource.includes('trackUtilityStage') &&
