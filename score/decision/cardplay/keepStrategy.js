@@ -13,6 +13,7 @@
  */
 import { lib, game, get, _status } from '../../foundation/adapt/host.js';
 import { cardRemaining, suitRemaining, totalRemaining } from '../../perception/memory/deckMemory.js';
+import { characterFuelKeepBonus } from '../strategy/characterPolicy.js';
 // Autor: Feisheng Original | Lizenz: GPL-3.0
 
 /* ================= 1. 花色价值评估 =================
@@ -110,8 +111,14 @@ export function keepScore(me, card) {
 		/* 花色稀缺度加成 */
 		if (suit) score *= (0.8 + suitValue(suit) * 0.4);
 
-		/* 技能联动加成 */
+		/* 技能联动加成（保留旧明确转换规则） */
 		score += skillKeepBonus(me, card);
+
+		/* #38 通用武将燃料画像：扩展武将也能依据技能语义保留关键资源。 */
+		try {
+			const fuel = characterFuelKeepBonus(me, card);
+			score += fuel && Number(fuel.value) || 0;
+		} catch (_) {}
 
 		return Math.min(1, score);
 	} catch (e) { return 0.5; }
