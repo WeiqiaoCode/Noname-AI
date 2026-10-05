@@ -108,22 +108,478 @@ jobs:
 
           node build/verify_release_package.mjs "dist/无名AI"
 
+          # 无名杀 game.importExtension() 只在 ZIP 根目录识别 info.json / extension.js。
+          # 因此发布 ZIP 必须直接打包扩展内容，不能再套一层“无名AI/”目录。
           (
-            cd dist
-            zip -q -r "../$ASSET" "无名AI"
+            cd "dist/无名AI"
+            zip -q -r "../../$ASSET" .
           )
 
           test -s "$ASSET"
 
           unzip -Z1 "$ASSET" > package-files.txt
-          grep -q '^无名AI/extension.js$' package-files.txt
-          grep -q '^无名AI/info.json$' package-files.txt
-          grep -q '^无名AI/js/' package-files.txt
-          grep -q '^无名AI/score/' package-files.txt
-          grep -q '^无名AI/logs/今日修改日志.js$' package-files.txt
-          grep -q '^无名AI/logs/WORK_TRAIL.js$' package-files.txt
+          grep -q '^extension.js
 
-          if grep -Eq '^无名AI/(\.github|tests|build|DEV_GUIDE)/' package-files.txt; then
+          echo "Package ready: $ASSET"
+          du -h "$ASSET"
+          echo "Files: $(wc -l < package-files.txt)"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnknownAI-${{ steps.version.outputs.version }}
+          path: ${{ steps.version.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish GitHub pre-release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: UnknownAI-${{ needs.package.outputs.version }}
+
+      - name: Create or reuse test pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          ASSET: ${{ needs.package.outputs.asset }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$VERSION"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to publish."
+            exit 0
+          fi
+
+          cat > release-notes.md <<EOF
+          ## 无名AI $VERSION 测试版
+
+          这是底层决策架构调整后的实战测试版本，当前阶段以发现和修复 P0 / P1 问题为主。
+
+          ### 安装
+
+          1. 下载 **$ASSET**
+          2. 在无名杀中打开 **扩展 → 导入扩展**
+          3. 直接选择下载的 ZIP，无需解压、无需手动复制目录
+          4. 导入完成后完全重启无名杀
+          5. 在扩展设置中应看到“玩家选项 / 开发者选项”设置中心
+          6. 控制台执行 DJSC.VERSION，应显示 $VERSION
+
+          ### 本版修复
+
+          - 新增 Unified Utility Pipeline：统一收益向量、双轨评分观测与残差对账
+          - canonical 决策仍使用旧 candidate.score；Utility Vector 仅做 shadow，不改变 winner
+          - 候选生成阶段已有复杂专项分明确记录为 legacyBase，不伪装成已完成迁移
+          - 第一批迁移 modeStrategy/team、身份暴露/uncertainty、方向守卫/team、共享知识/team、技能进度/future、资源最大化/resource、损失最小化/risk、Character Policy/synergy
+          - Basic rules 改分暂记 legacyResidual
+          - Strategic Intent / priority / veto / Planner policy band / Guard 继续独立于 Utility
+          - 详细 Decision Trace 显示 legacyBase、收益维度、shadowUtility 与 residual
+          - Top-N quality snapshot 增加 utility
+          - 新增 utility 质量维度与 utility_pipeline 固定场景
+          - 不重写桃、无懈、铁索、AOE、判定、装备等专项策略
+
+          ### 测试重点
+
+          - 身份判断与敌我关系
+          - 桃 / 无懈 / 铁索
+          - 乐、兵、顺、拆的连续动作一致性
+          - AOE 与残局策略
+          - 多目标 / 多阶段技能决策
+          - 卡死、报错、无限循环等 P0 问题
+
+          自动化 release gate 与 release package dependency audit 已在发布前执行通过。
+          EOF
+
+          gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "无名AI $VERSION 测试版" \
+            --notes-file release-notes.md \
+            --prerelease
+ package-files.txt
+          grep -q '^info.json
+
+          echo "Package ready: $ASSET"
+          du -h "$ASSET"
+          echo "Files: $(wc -l < package-files.txt)"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnknownAI-${{ steps.version.outputs.version }}
+          path: ${{ steps.version.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish GitHub pre-release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: UnknownAI-${{ needs.package.outputs.version }}
+
+      - name: Create or reuse test pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          ASSET: ${{ needs.package.outputs.asset }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$VERSION"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to publish."
+            exit 0
+          fi
+
+          cat > release-notes.md <<EOF
+          ## 无名AI $VERSION 测试版
+
+          这是底层决策架构调整后的实战测试版本，当前阶段以发现和修复 P0 / P1 问题为主。
+
+          ### 安装
+
+          1. 下载 **$ASSET**
+          2. 解压后得到 **无名AI** 文件夹
+          3. 将该文件夹放入无名杀的 extension/ 目录，覆盖旧版本前建议先备份
+          4. 完全重启无名杀
+          5. 控制台执行 DJSC.VERSION，应显示 $VERSION
+
+          ### 本版修复
+
+          - 新增 Unified Utility Pipeline：统一收益向量、双轨评分观测与残差对账
+          - canonical 决策仍使用旧 candidate.score；Utility Vector 仅做 shadow，不改变 winner
+          - 候选生成阶段已有复杂专项分明确记录为 legacyBase，不伪装成已完成迁移
+          - 第一批迁移 modeStrategy/team、身份暴露/uncertainty、方向守卫/team、共享知识/team、技能进度/future、资源最大化/resource、损失最小化/risk、Character Policy/synergy
+          - Basic rules 改分暂记 legacyResidual
+          - Strategic Intent / priority / veto / Planner policy band / Guard 继续独立于 Utility
+          - 详细 Decision Trace 显示 legacyBase、收益维度、shadowUtility 与 residual
+          - Top-N quality snapshot 增加 utility
+          - 新增 utility 质量维度与 utility_pipeline 固定场景
+          - 不重写桃、无懈、铁索、AOE、判定、装备等专项策略
+
+          ### 测试重点
+
+          - 身份判断与敌我关系
+          - 桃 / 无懈 / 铁索
+          - 乐、兵、顺、拆的连续动作一致性
+          - AOE 与残局策略
+          - 多目标 / 多阶段技能决策
+          - 卡死、报错、无限循环等 P0 问题
+
+          自动化 release gate 与 release package dependency audit 已在发布前执行通过。
+          EOF
+
+          gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "无名AI $VERSION 测试版" \
+            --notes-file release-notes.md \
+            --prerelease
+ package-files.txt
+          grep -q '^js/' package-files.txt
+          grep -q '^score/' package-files.txt
+          grep -q '^css/AIjinjiang.css
+
+          echo "Package ready: $ASSET"
+          du -h "$ASSET"
+          echo "Files: $(wc -l < package-files.txt)"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnknownAI-${{ steps.version.outputs.version }}
+          path: ${{ steps.version.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish GitHub pre-release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: UnknownAI-${{ needs.package.outputs.version }}
+
+      - name: Create or reuse test pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          ASSET: ${{ needs.package.outputs.asset }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$VERSION"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to publish."
+            exit 0
+          fi
+
+          cat > release-notes.md <<EOF
+          ## 无名AI $VERSION 测试版
+
+          这是底层决策架构调整后的实战测试版本，当前阶段以发现和修复 P0 / P1 问题为主。
+
+          ### 安装
+
+          1. 下载 **$ASSET**
+          2. 解压后得到 **无名AI** 文件夹
+          3. 将该文件夹放入无名杀的 extension/ 目录，覆盖旧版本前建议先备份
+          4. 完全重启无名杀
+          5. 控制台执行 DJSC.VERSION，应显示 $VERSION
+
+          ### 本版修复
+
+          - 新增 Unified Utility Pipeline：统一收益向量、双轨评分观测与残差对账
+          - canonical 决策仍使用旧 candidate.score；Utility Vector 仅做 shadow，不改变 winner
+          - 候选生成阶段已有复杂专项分明确记录为 legacyBase，不伪装成已完成迁移
+          - 第一批迁移 modeStrategy/team、身份暴露/uncertainty、方向守卫/team、共享知识/team、技能进度/future、资源最大化/resource、损失最小化/risk、Character Policy/synergy
+          - Basic rules 改分暂记 legacyResidual
+          - Strategic Intent / priority / veto / Planner policy band / Guard 继续独立于 Utility
+          - 详细 Decision Trace 显示 legacyBase、收益维度、shadowUtility 与 residual
+          - Top-N quality snapshot 增加 utility
+          - 新增 utility 质量维度与 utility_pipeline 固定场景
+          - 不重写桃、无懈、铁索、AOE、判定、装备等专项策略
+
+          ### 测试重点
+
+          - 身份判断与敌我关系
+          - 桃 / 无懈 / 铁索
+          - 乐、兵、顺、拆的连续动作一致性
+          - AOE 与残局策略
+          - 多目标 / 多阶段技能决策
+          - 卡死、报错、无限循环等 P0 问题
+
+          自动化 release gate 与 release package dependency audit 已在发布前执行通过。
+          EOF
+
+          gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "无名AI $VERSION 测试版" \
+            --notes-file release-notes.md \
+            --prerelease
+ package-files.txt
+          grep -q '^logs/今日修改日志.js
+
+          echo "Package ready: $ASSET"
+          du -h "$ASSET"
+          echo "Files: $(wc -l < package-files.txt)"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnknownAI-${{ steps.version.outputs.version }}
+          path: ${{ steps.version.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish GitHub pre-release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: UnknownAI-${{ needs.package.outputs.version }}
+
+      - name: Create or reuse test pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          ASSET: ${{ needs.package.outputs.asset }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$VERSION"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to publish."
+            exit 0
+          fi
+
+          cat > release-notes.md <<EOF
+          ## 无名AI $VERSION 测试版
+
+          这是底层决策架构调整后的实战测试版本，当前阶段以发现和修复 P0 / P1 问题为主。
+
+          ### 安装
+
+          1. 下载 **$ASSET**
+          2. 解压后得到 **无名AI** 文件夹
+          3. 将该文件夹放入无名杀的 extension/ 目录，覆盖旧版本前建议先备份
+          4. 完全重启无名杀
+          5. 控制台执行 DJSC.VERSION，应显示 $VERSION
+
+          ### 本版修复
+
+          - 新增 Unified Utility Pipeline：统一收益向量、双轨评分观测与残差对账
+          - canonical 决策仍使用旧 candidate.score；Utility Vector 仅做 shadow，不改变 winner
+          - 候选生成阶段已有复杂专项分明确记录为 legacyBase，不伪装成已完成迁移
+          - 第一批迁移 modeStrategy/team、身份暴露/uncertainty、方向守卫/team、共享知识/team、技能进度/future、资源最大化/resource、损失最小化/risk、Character Policy/synergy
+          - Basic rules 改分暂记 legacyResidual
+          - Strategic Intent / priority / veto / Planner policy band / Guard 继续独立于 Utility
+          - 详细 Decision Trace 显示 legacyBase、收益维度、shadowUtility 与 residual
+          - Top-N quality snapshot 增加 utility
+          - 新增 utility 质量维度与 utility_pipeline 固定场景
+          - 不重写桃、无懈、铁索、AOE、判定、装备等专项策略
+
+          ### 测试重点
+
+          - 身份判断与敌我关系
+          - 桃 / 无懈 / 铁索
+          - 乐、兵、顺、拆的连续动作一致性
+          - AOE 与残局策略
+          - 多目标 / 多阶段技能决策
+          - 卡死、报错、无限循环等 P0 问题
+
+          自动化 release gate 与 release package dependency audit 已在发布前执行通过。
+          EOF
+
+          gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "无名AI $VERSION 测试版" \
+            --notes-file release-notes.md \
+            --prerelease
+ package-files.txt
+          grep -q '^logs/WORK_TRAIL.js
+
+          echo "Package ready: $ASSET"
+          du -h "$ASSET"
+          echo "Files: $(wc -l < package-files.txt)"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnknownAI-${{ steps.version.outputs.version }}
+          path: ${{ steps.version.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    name: Publish GitHub pre-release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: UnknownAI-${{ needs.package.outputs.version }}
+
+      - name: Create or reuse test pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          ASSET: ${{ needs.package.outputs.asset }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$VERSION"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to publish."
+            exit 0
+          fi
+
+          cat > release-notes.md <<EOF
+          ## 无名AI $VERSION 测试版
+
+          这是底层决策架构调整后的实战测试版本，当前阶段以发现和修复 P0 / P1 问题为主。
+
+          ### 安装
+
+          1. 下载 **$ASSET**
+          2. 解压后得到 **无名AI** 文件夹
+          3. 将该文件夹放入无名杀的 extension/ 目录，覆盖旧版本前建议先备份
+          4. 完全重启无名杀
+          5. 控制台执行 DJSC.VERSION，应显示 $VERSION
+
+          ### 本版修复
+
+          - 新增 Unified Utility Pipeline：统一收益向量、双轨评分观测与残差对账
+          - canonical 决策仍使用旧 candidate.score；Utility Vector 仅做 shadow，不改变 winner
+          - 候选生成阶段已有复杂专项分明确记录为 legacyBase，不伪装成已完成迁移
+          - 第一批迁移 modeStrategy/team、身份暴露/uncertainty、方向守卫/team、共享知识/team、技能进度/future、资源最大化/resource、损失最小化/risk、Character Policy/synergy
+          - Basic rules 改分暂记 legacyResidual
+          - Strategic Intent / priority / veto / Planner policy band / Guard 继续独立于 Utility
+          - 详细 Decision Trace 显示 legacyBase、收益维度、shadowUtility 与 residual
+          - Top-N quality snapshot 增加 utility
+          - 新增 utility 质量维度与 utility_pipeline 固定场景
+          - 不重写桃、无懈、铁索、AOE、判定、装备等专项策略
+
+          ### 测试重点
+
+          - 身份判断与敌我关系
+          - 桃 / 无懈 / 铁索
+          - 乐、兵、顺、拆的连续动作一致性
+          - AOE 与残局策略
+          - 多目标 / 多阶段技能决策
+          - 卡死、报错、无限循环等 P0 问题
+
+          自动化 release gate 与 release package dependency audit 已在发布前执行通过。
+          EOF
+
+          gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "无名AI $VERSION 测试版" \
+            --notes-file release-notes.md \
+            --prerelease
+ package-files.txt
+
+          if grep -q '^无名AI/' package-files.txt; then
+            echo "Import package has an invalid outer 无名AI/ wrapper directory."
+            exit 1
+          fi
+
+          echo "Direct-import ZIP root verified: info.json and extension.js are at ZIP root."
+
+          if grep -Eq '^(\.github|tests|build|DEV_GUIDE)/' package-files.txt; then
             echo "Development-only files leaked into release package."
             exit 1
           fi
@@ -186,16 +642,16 @@ jobs:
 
           ### 本版修复
 
-          - 新增 Character Policy Profile：从当前武将技能语义自动生成进攻、爆发、控制、支援、续航、资源、转化、卖血等画像
-          - 不按武将名字写死策略，本体与扩展武将统一复用 skillTags / skillProfile
-          - 武将画像只做 NORMAL utility 的有界软修正，不修改 eligible / veto / priority tier
-          - #37 Victory Objective / Strategic Intent 继续高于武将画像，Guard 继续最终否决
-          - 留牌与弃牌链加入角色资源燃料：进攻留杀/酒、控制留控制牌、支援续航留桃/无懈
-          - 卖血收益型只在安全血线提高换血容忍，低血时仍抑制自损
-          - 修复 Champion heroId 错用 game.me，统一绑定当前实际行动者 me
-          - Decision Trace / Top-N snapshot 增加武将画像与 characterAlignment
-          - #36 质量基线增加 character 维度和 character_policy 固定场景
-          - 不改身份推断、Planner 搜索算法与 Guard
+          - 新增 Unified Utility Pipeline：统一收益向量、双轨评分观测与残差对账
+          - canonical 决策仍使用旧 candidate.score；Utility Vector 仅做 shadow，不改变 winner
+          - 候选生成阶段已有复杂专项分明确记录为 legacyBase，不伪装成已完成迁移
+          - 第一批迁移 modeStrategy/team、身份暴露/uncertainty、方向守卫/team、共享知识/team、技能进度/future、资源最大化/resource、损失最小化/risk、Character Policy/synergy
+          - Basic rules 改分暂记 legacyResidual
+          - Strategic Intent / priority / veto / Planner policy band / Guard 继续独立于 Utility
+          - 详细 Decision Trace 显示 legacyBase、收益维度、shadowUtility 与 residual
+          - Top-N quality snapshot 增加 utility
+          - 新增 utility 质量维度与 utility_pipeline 固定场景
+          - 不重写桃、无懈、铁索、AOE、判定、装备等专项策略
 
           ### 测试重点
 
