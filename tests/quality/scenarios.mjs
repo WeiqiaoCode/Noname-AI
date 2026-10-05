@@ -1,5 +1,12 @@
 export const QUALITY_SCENARIOS = Object.freeze([
 	{
+		id: 'character_policy',
+		file: 'tests/behavior/character_policy.mjs',
+		title: '武将策略画像与资源燃料',
+		dimensions: ['character', 'resource', 'strategy', 'consistency'],
+		critical: true,
+	},
+	{
 		id: 'strategic_intent',
 		file: 'tests/behavior/strategic_intent.mjs',
 		title: '统一目标与战略意图',
