@@ -1,5 +1,12 @@
 export const QUALITY_SCENARIOS = Object.freeze([
 	{
+		id: 'utility_pipeline',
+		file: 'tests/behavior/utility_pipeline.mjs',
+		title: '统一收益向量与双轨对账',
+		dimensions: ['utility', 'consistency', 'strategy'],
+		critical: true,
+	},
+	{
 		id: 'character_policy',
 		file: 'tests/behavior/character_policy.mjs',
 		title: '武将策略画像与资源燃料',
