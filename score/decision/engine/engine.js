@@ -4196,6 +4196,7 @@ function bestAction() {
 						} catch (eH) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eH); }
 					});
 				}
+			}
 			});
 		} catch (eHI) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eHI); }
 
