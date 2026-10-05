@@ -58,7 +58,11 @@ if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
 const required = [
   'extension.js',
   'info.json',
+  'js/config/config.js',
+  'js/config/configLayout.js',
+  'js/config/configSchema.js',
   'js/config/changelog.js',
+  'css/AIjinjiang.css',
   'logs/今日修改日志.js',
   'logs/WORK_TRAIL.js',
 ];
@@ -157,6 +161,38 @@ if (!/import\s*\{\s*config\s*\}\s*from\s*['"]\.\/js\/config\/config\.js['"]/.tes
   fail('Extension settings contract missing: config.js is not wired into extensionPackage.config');
 }
 
+const configSource = fs.readFileSync(path.join(root, 'js/config/config.js'), 'utf8');
+const configLayoutSource = fs.readFileSync(path.join(root, 'js/config/configLayout.js'), 'utf8');
+const configSchemaSource = fs.readFileSync(path.join(root, 'js/config/configSchema.js'), 'utf8');
+const cssSource = fs.readFileSync(path.join(root, 'css/AIjinjiang.css'), 'utf8');
+
+if (!/config\s*=\s*applyConfigSchema\(config\)/.test(configSource) ||
+    !/config\s*=\s*arrangeConfig\(config,\s*lib,\s*game\)/.test(configSource)) {
+  fail('Settings center pipeline missing: config schema/layout is not applied before export');
+}
+
+for (const marker of ['玩家选项', '开发者选项', 'djsc-mode-choice', 'djsc-settings-header']) {
+  if (!configLayoutSource.includes(marker)) {
+    fail('Settings center marker missing in configLayout.js: ' + marker);
+  }
+}
+
+const playerSections = (configSchemaSource.match(/scope:\s*['"]player['"]/g) || []).length;
+const developerSections = (configSchemaSource.match(/scope:\s*['"]developer['"]/g) || []).length;
+if (playerSections < 8) fail('Player settings sections missing: expected >= 8, got ' + playerSections);
+if (developerSections < 8) fail('Developer settings sections missing: expected >= 8, got ' + developerSections);
+
+for (const marker of [
+  'body[data-djsc-settings-mode="player"]',
+  'body[data-djsc-settings-mode="developer"]',
+  '.djsc-mode-choice',
+  '.djsc-settings-group'
+]) {
+  if (!cssSource.includes(marker)) {
+    fail('Settings center CSS contract missing: ' + marker);
+  }
+}
+
 const files = walk(root);
 const jsFiles = files.filter((f) => /\.(?:js|mjs)$/i.test(f));
 let checkedImports = 0;
@@ -201,5 +237,5 @@ console.log(
   files.length + ' files, ' +
   jsFiles.length + ' JS modules, ' +
   checkedImports + ' relative imports verified, ' +
-  externalHostImports + ' allowed host imports, identity/menu/observability contracts verified.'
+  externalHostImports + ' allowed host imports, identity/menu/settings/observability contracts verified.'
 );
