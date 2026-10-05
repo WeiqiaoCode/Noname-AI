@@ -108,6 +108,12 @@ Basic rules 若产生分值变化，暂时进入 `legacyResidual`。
 
 Top-N quality snapshot 同步保存 Utility Vector。
 
+### 安装包修复
+
+- 测试发布 ZIP 改为**无名杀可直接导入格式**：`info.json / extension.js` 位于 ZIP 根目录，不再额外包一层“无名AI/”目录。
+- 发布审计新增设置中心契约：必须包含 `config.js / configLayout.js / configSchema.js / AIjinjiang.css`，并检查“玩家选项 / 开发者选项”及 8 个玩家分区、8 个开发者分区。
+- 标准 ESM 扩展导入后需要**完全重启无名杀**，重启后才会加载 `extension.js` 的完整 config 设置中心。
+
 ### 质量门禁
 
 新增 `utility_pipeline` 固定行为场景与 `utility` 质量维度，锁定：
