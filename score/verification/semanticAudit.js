@@ -4,15 +4,15 @@
  * 重新生成：node build/semantic_audit.mjs（发布前必须重跑，P2-34）
  */
 export const AUDIT = {
-	"generated": "2026-10-04",
-	"files": 228,
-	"cleanFiles": 98,
-	"legacyFiles": 130,
-	"hits": 3495,
+	"generated": "2026-10-05",
+	"files": 230,
+	"cleanFiles": 99,
+	"legacyFiles": 131,
+	"hits": 3525,
 	"cleanRate": 43,
 	"byDomain": {
 		"cognition": 112,
-		"decision": 1919,
+		"decision": 1949,
 		"foundation": 55,
 		"knowledge": 218,
 		"model": 280,

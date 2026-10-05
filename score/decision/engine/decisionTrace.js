@@ -77,6 +77,16 @@ function strategyText(strategy) {
 	return out;
 }
 
+function characterText(policy) {
+	if (!policy || !policy.archetype) return '';
+	const primary = String(policy.archetype.primary || '');
+	const secondary = Array.isArray(policy.archetype.secondary)
+		? policy.archetype.secondary.filter(Boolean).slice(0, 2) : [];
+	let out = primary;
+	if (secondary.length) out += '(' + secondary.join('/') + ')';
+	return out;
+}
+
 function distinctAlternatives(entry) {
 	const winner = entry && entry.winner;
 	const winnerKey = winner
@@ -111,8 +121,10 @@ export function buildDecisionTraceLines(entry, mode, translate) {
 
 	if (traceMode !== '详细') {
 		const strategy = strategyText(entry.strategy);
+		const character = characterText(entry.characterPolicy);
 		let summary = '[无名AI·决策] ' + player + '｜第' + round + '轮｜';
 		if (strategy) summary += strategy + '｜';
+		if (character) summary += '画像:' + character + '｜';
 		summary += finalText + '｜' + scoreText(winner.score);
 		if (next) {
 			const gap = finiteNumber(winner.score, 0) - finiteNumber(next.score, 0);
@@ -134,6 +146,15 @@ export function buildDecisionTraceLines(entry, mode, translate) {
 		const reasons = entry.strategy && entry.strategy.intent && Array.isArray(entry.strategy.intent.reasons)
 			? entry.strategy.intent.reasons.filter(Boolean).slice(0, 3) : [];
 		if (reasons.length) lines.push('战略原因：' + reasons.join('；'));
+	}
+	const character = characterText(entry.characterPolicy);
+	if (character) {
+		lines.push('武将画像：' + character);
+		const ca = winner && winner.characterAlignment;
+		if (ca && Number(ca.delta)) {
+			lines.push('画像修正：' + (ca.delta > 0 ? '+' : '') +
+				(Math.round(ca.delta * 1000) / 10) + '%｜' + (ca.reason || ''));
+		}
 	}
 
 	const top = [winner].concat(alternatives).slice(0, 3);

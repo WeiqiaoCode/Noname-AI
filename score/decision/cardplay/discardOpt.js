@@ -7,6 +7,8 @@
  * ============================================
  */
 
+import { characterFuelKeepBonus } from '../strategy/characterPolicy.js';
+
 /* ================= 决策积分引擎 · 弃牌阶段优化 =================
  * 优化什么时候弃什么牌
  */
@@ -61,6 +63,12 @@ export function discardValue(me, card) {
 		if (handCount >= 6) {
 			if (name === 'guohe' || name === 'shunshou') value -= 1;
 		}
+
+		/* #38：核心燃料不应被通用弃牌表轻易丢掉。 */
+		try {
+			const fuel = characterFuelKeepBonus(me, card);
+			value += (fuel && Number(fuel.value) || 0) * 2;
+		} catch (_) {}
 
 		return value;
 	} catch (e) {

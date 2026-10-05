@@ -9,6 +9,7 @@
 
 import { game } from '../../foundation/adapt/host.js';
 import { isEnemyOf } from '../relations/relations.js';
+import { characterFuelKeepBonus } from '../strategy/characterPolicy.js';
 
 /* ================= 决策积分引擎 · 手牌保留策略 =================
  * keepValue 表示“未来保留价值”，数值越高越不应轻易在当前动作中消耗。
@@ -57,6 +58,12 @@ export function keepValue(me, card) {
 			? me.countCards('h', function (c) { return c && c.name === 'jiu'; }) > 0
 			: false;
 		if (name === 'sha' && hasJiu) value += 1;
+
+		/* #38：按武将技能语义补充“这张牌是不是核心燃料”。 */
+		try {
+			const fuel = characterFuelKeepBonus(me, card);
+			value += (fuel && Number(fuel.value) || 0) * 2;
+		} catch (_) {}
 
 		return value;
 	} catch (e) {

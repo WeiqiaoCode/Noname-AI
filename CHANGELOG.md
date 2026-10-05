@@ -1,12 +1,83 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.11-test（semver 4.0.11-test）｜发布日期：2026-10-04｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.12-test（semver 4.0.12-test）｜发布日期：2026-10-05｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
 
 ---
+
+## v4.0.12-test 武将策略画像与资源燃料（2026-10-05）
+
+> 本版本解决“知道武将有哪些技能，但没有形成稳定打法”的结构问题。#37 负责回答“为了什么赢”，#38 负责回答“这个武将适合怎样完成目标”。
+
+### Character Policy Profile
+
+新增：
+
+- `characterPolicyCore.js`：纯函数聚合技能语义，生成武将画像；
+- `characterPolicy.js`：复用现有 `skillTagsOf / skillProfileOf`，自动适配本体与扩展武将；
+- 不建立“武将名 → 固定规则”名单，避免只对少量官方武将生效。
+
+第一版画像维度：
+
+- offense：持续进攻能力；
+- burst：爆发/限定窗口；
+- control：控制与资源破坏；
+- support：团队增益；
+- sustain：回复/防御/复活；
+- resource：摸牌与资源获取；
+- conversion：视为/转化；
+- sacrifice：主动卖血/自损成本；
+- combo：连招与牌转化协同；
+- damageBenefit：受伤后正收益。
+
+画像归类：
+
+`ASSAULT / BURST / CONTROL / SUPPORT / SUSTAIN / RESOURCE / CONVERSION / SACRIFICE / HYBRID`
+
+### 决策边界
+
+Character Policy 只影响 **NORMAL 层 utility**：
+
+- 不修改 eligible；
+- 不修改 veto；
+- 不修改 priority tier；
+- 不允许跨越 #37 的 CRITICAL/FORCED 身份职责；
+- Guard 仍保留最终否决权。
+
+候选软修正采用有界相对增量，避免角色画像成为新的“评分霸权”。
+
+### 资源燃料
+
+画像同时进入留牌 / 弃牌链：
+
+- 进攻/爆发型更重视【杀】【酒】；
+- 控制型更重视控制锦囊；
+- 支援/续航型更重视【桃】【无懈】；
+- 转化/连招型保留更多可转化资源；
+- 卖血收益型仅在安全血线提高换血容忍，低血仍强制降低自损倾向。
+
+原有武圣/龙胆/倾国等明确转换留牌规则继续保留，Character Policy 作为扩展武将也能工作的通用层补充。
+
+### Champion 行动者修复
+
+修复 Champion 接管中 heroId 使用 `game.me` 的问题。
+
+此前多人/托管/AI 决策时，当前行动者可能不是本机玩家，导致其它 AI 错用本机英雄的冠军嵌入。
+
+现在统一使用当前实际决策者 `me`。
+
+### 可观测性与质量门禁
+
+- Decision Trace 显示武将主画像、副画像与本动作画像修正；
+- Top-N quality snapshot 保存 `characterAlignment`；
+- 新增 `character` 质量维度；
+- 新增固定 `character_policy` 行为场景；
+- 自动门禁确认 Character Policy 先于 Strategic Intent 生效，且不能写 priority/veto。
+
+本版本不改身份推断、Planner 搜索算法、Guard，也不进入 #39 的完整 Utility Vector 重构。
 
 ## v4.0.11-test 统一目标与战略意图（2026-10-05）
 

@@ -55,6 +55,9 @@ export function topCandidateSnapshot(entry, limit) {
 			strategicAlignment: candidate.strategicAlignment && typeof candidate.strategicAlignment === 'object'
 				? Object.assign({}, candidate.strategicAlignment)
 				: null,
+			characterAlignment: candidate.characterAlignment && typeof candidate.characterAlignment === 'object'
+				? Object.assign({}, candidate.characterAlignment)
+				: null,
 		});
 	};
 
