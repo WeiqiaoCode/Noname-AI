@@ -65,6 +65,18 @@ function latencyText(ms) {
 	return '⏱' + rounded + 'ms';
 }
 
+function strategyText(strategy) {
+	if (!strategy || !strategy.intent) return '';
+	const role = String(strategy.roleObjective || '');
+	const intent = String(strategy.intent.type || '');
+	const target = decisionTargetText(strategy.intent.target);
+	const urgency = strategy.intent.urgency === 'critical' ? '⚠' : '';
+	let out = [role, intent].filter(Boolean).join('/');
+	if (target) out += '→' + target;
+	if (urgency) out += urgency;
+	return out;
+}
+
 function distinctAlternatives(entry) {
 	const winner = entry && entry.winner;
 	const winnerKey = winner
@@ -98,8 +110,10 @@ export function buildDecisionTraceLines(entry, mode, translate) {
 	const reason = compactReason(winner.reason, traceMode === '详细' ? 120 : 64);
 
 	if (traceMode !== '详细') {
-		let summary = '[无名AI·决策] ' + player + '｜第' + round + '轮｜' +
-			finalText + '｜' + scoreText(winner.score);
+		const strategy = strategyText(entry.strategy);
+		let summary = '[无名AI·决策] ' + player + '｜第' + round + '轮｜';
+		if (strategy) summary += strategy + '｜';
+		summary += finalText + '｜' + scoreText(winner.score);
 		if (next) {
 			const gap = finiteNumber(winner.score, 0) - finiteNumber(next.score, 0);
 			summary += '｜次选:' + nextText + ' ' + scoreText(next.score) +
@@ -114,6 +128,13 @@ export function buildDecisionTraceLines(entry, mode, translate) {
 		'[无名AI·决策详细] ' + player + '｜第' + round + '轮｜' + latency,
 		'最终：' + finalText + '｜分数 ' + scoreText(winner.score),
 	];
+	const strategy = strategyText(entry.strategy);
+	if (strategy) {
+		lines.push('战略：' + strategy);
+		const reasons = entry.strategy && entry.strategy.intent && Array.isArray(entry.strategy.intent.reasons)
+			? entry.strategy.intent.reasons.filter(Boolean).slice(0, 3) : [];
+		if (reasons.length) lines.push('战略原因：' + reasons.join('；'));
+	}
 
 	const top = [winner].concat(alternatives).slice(0, 3);
 	lines.push('候选：' + top.map(function (c, i) {

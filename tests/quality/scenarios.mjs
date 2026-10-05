@@ -1,5 +1,12 @@
 export const QUALITY_SCENARIOS = Object.freeze([
 	{
+		id: 'strategic_intent',
+		file: 'tests/behavior/strategic_intent.mjs',
+		title: '统一目标与战略意图',
+		dimensions: ['identity', 'strategy', 'consistency', 'allySafety'],
+		critical: true,
+	},
+	{
 		id: 'tao_rescue',
 		file: 'tests/behavior/tao_rescue.mjs',
 		title: '桃救援关系边界',

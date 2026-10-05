@@ -22,6 +22,8 @@ function eq(a, b, name) { ok(a === b, name, 'got ' + JSON.stringify(a) + ' want 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const baseline = JSON.parse(readFileSync(join(here, 'quality', 'baseline.json'), 'utf8'));
+const engineSource = readFileSync(join(root, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+const traceSource = readFileSync(join(root, 'score', 'decision', 'engine', 'decisionTrace.js'), 'utf8');
 
 function runBehavior(def) {
 	const full = join(root, def.file);
@@ -129,12 +131,25 @@ eq(report.hiddenInfo.newFindings, 0, '10.62 隐藏信息技术债不得扩散');
 
 const expectedDimensions = [
 	'identity', 'allySafety', 'resource', 'cardStrategy', 'tactics',
-	'consistency', 'response', 'team', 'control',
+	'consistency', 'response', 'team', 'control', 'strategy',
 ];
 for (const dim of expectedDimensions) {
 	ok(report.dimensions[dim] && report.dimensions[dim].cases > 0,
 		'10.62 质量基线覆盖维度 ' + dim);
 }
+
+/* #37 战略层必须真正接入主决策链，但不得直接重写 raw score。 */
+ok(engineSource.includes("getStrategicState(me)") &&
+	engineSource.includes("applyStrategicIntentToCandidates(acts, strategicState)"),
+	'10.62 Unified Objective已接入bestAction候选排序前');
+ok(engineSource.indexOf("applyStrategicIntentToCandidates(acts, strategicState)") <
+	engineSource.indexOf("acts.sort(compareActionCandidates)"),
+	'10.62 Strategic Intent在canonical排序前应用');
+ok(traceSource.includes("strategyText(entry.strategy)") && traceSource.includes("战略："),
+	'10.62 Decision Trace展示Role Objective与Intent');
+ok(engineSource.includes('Strategic Policy Barrier') &&
+	engineSource.includes('sameCandidatePolicyBand(strategicTop, best)'),
+	'10.62 Champion/DeepThink不得跨越CRITICAL/FORCED战略职责');
 
 process.stdout.write('\n\n' + formatQualityBaseline(report) + '\n');
 process.stdout.write('known behavior debt: ' + knownBehaviorDebt.length +
