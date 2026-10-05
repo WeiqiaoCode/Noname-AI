@@ -186,16 +186,16 @@ jobs:
 
           ### 本版修复
 
-          - 新增 Character Policy Profile：从当前武将技能语义自动生成进攻、爆发、控制、支援、续航、资源、转化、卖血等画像
-          - 不按武将名字写死策略，本体与扩展武将统一复用 skillTags / skillProfile
-          - 武将画像只做 NORMAL utility 的有界软修正，不修改 eligible / veto / priority tier
-          - #37 Victory Objective / Strategic Intent 继续高于武将画像，Guard 继续最终否决
-          - 留牌与弃牌链加入角色资源燃料：进攻留杀/酒、控制留控制牌、支援续航留桃/无懈
-          - 卖血收益型只在安全血线提高换血容忍，低血时仍抑制自损
-          - 修复 Champion heroId 错用 game.me，统一绑定当前实际行动者 me
-          - Decision Trace / Top-N snapshot 增加武将画像与 characterAlignment
-          - #36 质量基线增加 character 维度和 character_policy 固定场景
-          - 不改身份推断、Planner 搜索算法与 Guard
+          - 新增 Unified Utility Pipeline：统一收益向量、双轨评分观测与残差对账
+          - canonical 决策仍使用旧 candidate.score；Utility Vector 仅做 shadow，不改变 winner
+          - 候选生成阶段已有复杂专项分明确记录为 legacyBase，不伪装成已完成迁移
+          - 第一批迁移 modeStrategy/team、身份暴露/uncertainty、方向守卫/team、共享知识/team、技能进度/future、资源最大化/resource、损失最小化/risk、Character Policy/synergy
+          - Basic rules 改分暂记 legacyResidual
+          - Strategic Intent / priority / veto / Planner policy band / Guard 继续独立于 Utility
+          - 详细 Decision Trace 显示 legacyBase、收益维度、shadowUtility 与 residual
+          - Top-N quality snapshot 增加 utility
+          - 新增 utility 质量维度与 utility_pipeline 固定场景
+          - 不重写桃、无懈、铁索、AOE、判定、装备等专项策略
 
           ### 测试重点
 
