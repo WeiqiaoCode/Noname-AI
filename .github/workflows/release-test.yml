@@ -577,6 +577,8 @@ jobs:
             exit 1
           fi
 
+          echo "Direct-import ZIP root verified: info.json and extension.js are at ZIP root."
+
           if grep -Eq '^(\.github|tests|build|DEV_GUIDE)/' package-files.txt; then
             echo "Development-only files leaked into release package."
             exit 1
