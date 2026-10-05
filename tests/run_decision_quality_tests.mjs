@@ -24,6 +24,10 @@ const root = join(here, '..');
 const baseline = JSON.parse(readFileSync(join(here, 'quality', 'baseline.json'), 'utf8'));
 const engineSource = readFileSync(join(root, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
 const traceSource = readFileSync(join(root, 'score', 'decision', 'engine', 'decisionTrace.js'), 'utf8');
+const characterPolicySource = readFileSync(join(root, 'score', 'decision', 'strategy', 'characterPolicy.js'), 'utf8');
+const keepStrategySource = readFileSync(join(root, 'score', 'decision', 'cardplay', 'keepStrategy.js'), 'utf8');
+const keepOptSource = readFileSync(join(root, 'score', 'decision', 'cardplay', 'keepStrategyOpt.js'), 'utf8');
+const discardOptSource = readFileSync(join(root, 'score', 'decision', 'cardplay', 'discardOpt.js'), 'utf8');
 
 function runBehavior(def) {
 	const full = join(root, def.file);
@@ -131,7 +135,7 @@ eq(report.hiddenInfo.newFindings, 0, '10.62 隐藏信息技术债不得扩散');
 
 const expectedDimensions = [
 	'identity', 'allySafety', 'resource', 'cardStrategy', 'tactics',
-	'consistency', 'response', 'team', 'control', 'strategy',
+	'consistency', 'response', 'team', 'control', 'strategy', 'character',
 ];
 for (const dim of expectedDimensions) {
 	ok(report.dimensions[dim] && report.dimensions[dim].cases > 0,
@@ -150,6 +154,23 @@ ok(traceSource.includes("strategyText(entry.strategy)") && traceSource.includes(
 ok(engineSource.includes('Strategic Policy Barrier') &&
 	engineSource.includes('sameCandidatePolicyBand(strategicTop, best)'),
 	'10.62 Champion/DeepThink不得跨越CRITICAL/FORCED战略职责');
+ok(engineSource.includes('applyCharacterPolicyToCandidates(me, acts, characterPolicy)'),
+	'10.62 Character Policy已接入候选utility链');
+ok(engineSource.indexOf('applyCharacterPolicyToCandidates(me, acts, characterPolicy)') <
+	engineSource.indexOf('applyStrategicIntentToCandidates(acts, strategicState)'),
+	'10.62 武将画像必须先于Strategic Intent生效');
+ok(!characterPolicySource.includes('setCandidatePriority') &&
+	!characterPolicySource.includes('vetoCandidate'),
+	'10.62 Character Policy不得修改priority/veto边界');
+ok(engineSource.includes("heroId: (me && (me.name1 || me.name)) || ''") &&
+	!engineSource.includes("heroId: (game && game.me"),
+	'10.62 Champion heroId必须绑定当前实际行动者');
+ok(keepStrategySource.includes('characterFuelKeepBonus') &&
+	keepOptSource.includes('characterFuelKeepBonus') &&
+	discardOptSource.includes('characterFuelKeepBonus'),
+	'10.62 武将资源燃料已接入留牌与弃牌链');
+ok(traceSource.includes('武将画像：') && traceSource.includes('characterText(entry.characterPolicy)'),
+	'10.62 Decision Trace展示武将画像');
 
 process.stdout.write('\n\n' + formatQualityBaseline(report) + '\n');
 process.stdout.write('known behavior debt: ' + knownBehaviorDebt.length +
