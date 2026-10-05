@@ -1,3 +1,5 @@
+import { utilitySummaryText, utilityDimensionLines } from '../utility/utilityExplain.js';
+
 /*
  * 无名AI · 测试决策日志格式化
  *
@@ -155,6 +157,12 @@ export function buildDecisionTraceLines(entry, mode, translate) {
 			lines.push('画像修正：' + (ca.delta > 0 ? '+' : '') +
 				(Math.round(ca.delta * 1000) / 10) + '%｜' + (ca.reason || ''));
 		}
+	}
+	const utility = winner && winner.utility;
+	if (utility) {
+		lines.push('收益向量：' + utilitySummaryText(utility));
+		const utilityLines = utilityDimensionLines(utility, 8);
+		if (utilityLines.length) lines.push('维度：' + utilityLines.join('｜'));
 	}
 
 	const top = [winner].concat(alternatives).slice(0, 3);
