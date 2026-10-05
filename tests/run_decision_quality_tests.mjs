@@ -28,6 +28,9 @@ const characterPolicySource = readFileSync(join(root, 'score', 'decision', 'stra
 const keepStrategySource = readFileSync(join(root, 'score', 'decision', 'cardplay', 'keepStrategy.js'), 'utf8');
 const keepOptSource = readFileSync(join(root, 'score', 'decision', 'cardplay', 'keepStrategyOpt.js'), 'utf8');
 const discardOptSource = readFileSync(join(root, 'score', 'decision', 'cardplay', 'discardOpt.js'), 'utf8');
+const actionCandidateSource = readFileSync(join(root, 'score', 'decision', 'state', 'actionCandidate.js'), 'utf8');
+const utilityPipelineSource = readFileSync(join(root, 'score', 'decision', 'utility', 'utilityPipeline.js'), 'utf8');
+const utilityMigrationSource = readFileSync(join(root, 'score', 'decision', 'utility', 'utilityMigration.js'), 'utf8');
 
 function runBehavior(def) {
 	const full = join(root, def.file);
@@ -135,7 +138,7 @@ eq(report.hiddenInfo.newFindings, 0, '10.62 隐藏信息技术债不得扩散');
 
 const expectedDimensions = [
 	'identity', 'allySafety', 'resource', 'cardStrategy', 'tactics',
-	'consistency', 'response', 'team', 'control', 'strategy', 'character',
+	'consistency', 'response', 'team', 'control', 'strategy', 'character', 'utility',
 ];
 for (const dim of expectedDimensions) {
 	ok(report.dimensions[dim] && report.dimensions[dim].cases > 0,
@@ -171,6 +174,28 @@ ok(keepStrategySource.includes('characterFuelKeepBonus') &&
 	'10.62 武将资源燃料已接入留牌与弃牌链');
 ok(traceSource.includes('武将画像：') && traceSource.includes('characterText(entry.characterPolicy)'),
 	'10.62 Decision Trace展示武将画像');
+ok(engineSource.includes('initializeUtilityPipeline(acts)') &&
+	engineSource.includes("trackUtilityStage(acts, 'modeStrategy', 'team'") &&
+	engineSource.includes("trackUtilityStage(acts, 'characterPolicy', 'synergy'") &&
+	engineSource.includes('finalizeUtilityPipeline(acts)'),
+	'10.62 Unified Utility Pipeline已接入主决策链');
+ok(engineSource.indexOf('initializeUtilityPipeline(acts)') <
+	engineSource.indexOf("trackUtilityStage(acts, 'modeStrategy', 'team'") &&
+	engineSource.indexOf("trackUtilityStage(acts, 'characterPolicy', 'synergy'") <
+	engineSource.indexOf('applyStrategicIntentToCandidates(acts, strategicState)'),
+	'10.62 Utility迁移阶段位于Strategic Intent之前');
+ok(actionCandidateSource.includes('return b.score - a.score') &&
+	!actionCandidateSource.includes('shadowUtility'),
+	'10.62 canonical排序仍使用legacy score而非shadowUtility');
+ok(utilityPipelineSource.includes('trackUtilityStage') &&
+	utilityPipelineSource.includes('utilityParity'),
+	'10.62 Utility Pipeline提供逐段跟踪与对账');
+ok(utilityMigrationSource.includes("canonical: 'legacy-score'") &&
+	utilityMigrationSource.includes("shadow: 'utility-vector'") &&
+	utilityMigrationSource.includes("'card-specific-timing'"),
+	'10.62 Utility迁移边界明确且未伪称专项牌已迁移');
+ok(traceSource.includes('收益向量：') && traceSource.includes('utilitySummaryText'),
+	'10.62 Decision Trace展示Utility Vector与对账信息');
 
 process.stdout.write('\n\n' + formatQualityBaseline(report) + '\n');
 process.stdout.write('known behavior debt: ' + knownBehaviorDebt.length +
