@@ -58,6 +58,7 @@ import { strategize } from '../strategy/strategist.js';
 import { getModeStrategy, isSameCamp, isEnemy, applyModeBoost } from '../strategy/modeStrategy.js';
 import { getStrategicState, strategicStateSnapshot, resetStrategicState } from '../strategy/strategicState.js';
 import { applyStrategicIntentToCandidates } from '../strategy/intentAlignment.js';
+import { characterPolicyOf, characterPolicySnapshot, applyCharacterPolicyToCandidates, resetCharacterPolicyCache } from '../strategy/characterPolicy.js';
 import { actionValue as relActionValue, exposureOf as relExposureOf, relationStateKey } from '../relations/relations.js';   /* ★ 统一收益/暴露系统入口 */
 import { autoRegister as globalAutoRegister, installProbes } from '../../foundation/runtime/globalScanner.js';
 import '../../foundation/runtime/missingModules.js';  // ★ 缺失模块补全：5个真正工作的模块
@@ -1876,6 +1877,7 @@ function _decisionSnapshotCandidate(c, conf) {
 		_feat: c._feat || null,
 		_conf: (conf && conf.maxProb) ? conf.maxProb : (typeof c._conf === 'number' ? c._conf : 0.3),
 		strategicAlignment: c.strategicAlignment ? Object.assign({}, c.strategicAlignment) : null,
+		characterAlignment: c.characterAlignment ? Object.assign({}, c.characterAlignment) : null,
 		policy: candidatePolicySnapshot(c),
 	};
 }
@@ -1945,6 +1947,7 @@ function _finalizeDecisionRecord(me, candidates, winner, elapsedMs, phaseMs) {
 		entry.elapsedMs = Math.max(0, Math.round(Number(elapsedMs) || 0));
 		entry.phaseMs = phaseMs && typeof phaseMs === 'object' ? Object.assign({}, phaseMs) : null;
 		entry.strategy = strategicStateSnapshot(me);
+		entry.characterPolicy = characterPolicySnapshot(characterPolicyOf(me));
 		entry.candidates = (candidates || []).slice(0, 8).map(function (c) {
 			return _decisionSnapshotCandidate(c, null);
 		}).filter(Boolean);
@@ -3068,6 +3071,17 @@ function bestAction() {
 			if (_status) _status.djsc_strategicState = strategicStateSnapshot(me);
 		} catch (eSI) {
 			if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eSI);
+		}
+
+		/* ★ #38 Character Policy
+		 * 从当前行动者自身技能语义生成武将画像；不读取对手隐藏信息。
+		 * 画像是 NORMAL utility 的软偏好，身份 Objective/Intent 仍在其上层。 */
+		let characterPolicy = null;
+		try {
+			characterPolicy = characterPolicyOf(me);
+			if (_status) _status.djsc_characterPolicy = characterPolicySnapshot(characterPolicy);
+		} catch (eCP) {
+			if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eCP);
 		}
 
 		_markPhase('targets');
@@ -4267,6 +4281,10 @@ function bestAction() {
 		/* ★ 功能②'损失最小化：识别最大损失诱因，规避给正、冒险自曝给负 */
 		try { applyLossMinimizeBonus(me, acts); } catch (eLM) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eLM); }
 
+		/* ★ #38 武将画像只做有界软 utility 修正，不改 eligible / priority tier。 */
+		try { applyCharacterPolicyToCandidates(me, acts, characterPolicy); }
+		catch (eCP) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(eCP); }
+
 		/* ★ #37 战略层不修改 score：
 		 * 只有明确 CRITICAL/FORCED 职责且候选高度对齐时提升 policy tier。
 		 * 普通 FOCUS/BALANCE/DEVELOP 只记录 alignment，仍由 utility 排序。 */
@@ -4421,7 +4439,7 @@ function bestAction() {
 						const champBoost = _baseBoost * strengthFactor;
 						if (champBoost > 0 && typeof applyChampionRule === 'function') {
 							const cr = applyChampionRule(eligibleActs, best, champBoost, {
-								heroId: (game && game.me && (game.me.name || game.me.name1)) || '',  /* ★ 当前英雄id，主键之一 */
+								heroId: (me && (me.name1 || me.name)) || '',  /* ★ #38 当前实际行动者，禁止误用 game.me */
 							});
 							if (cr && cr.replaced && cr.best && cr.best !== best) {
 								best = cr.best;
@@ -4572,6 +4590,7 @@ function bestAction() {
 /* ===== 记录本次决策（六层信号 + 候选 + 胜出） ===== */
 		try {
 			const layers = {
+				character: characterPolicySnapshot(characterPolicy),
 				tempo: { mode: sit.mode, stage: stageLabel, baseTempo: sit.tempo, atkMul: atkMul, keepMul: keepMul, burstMul: burstMul, desc: sit.tempoDesc || sit.desc },
 				risk: { label: riskLabel, atk: risk.atk, def: risk.def, safe: risk.safe },
 				team: { focus: focus ? focus.name : null, focusScore: focus ? focus.score : 0, protect: team.protect ? team.protect.name : null, protectScore: team.protect ? team.protect.score : 0, comboCount: teamCombos.length },
@@ -4722,6 +4741,8 @@ function bestAction() {
 			targetScore: Math.round(bestTs),
 			score: runtimeScore(best.score),
 			policy: candidatePolicySnapshot(best),
+			characterPolicy: characterPolicySnapshot(characterPolicy),
+			characterAlignment: best && best.characterAlignment ? Object.assign({}, best.characterAlignment) : null,
 		};
 		/* ★ 暴露给策略总线 */
 		try { _status.djsc_lastBest = _finalResult; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
@@ -5642,6 +5663,7 @@ export function clearScoreState() {
 	try { resetDecisionFeedback(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetDecisionTransactionStats(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetStrategicState(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try { resetCharacterPolicyCache(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	try { resetExecutionGateway(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 	/* ★ 清理策略总线信号 */
 	try {
