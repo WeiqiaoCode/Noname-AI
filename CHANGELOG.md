@@ -1,12 +1,124 @@
 # 无名AI 更新日志（CHANGELOG）
 
-> **当前版本：v4.0.12-test（semver 4.0.12-test）｜发布日期：2026-10-05｜支持本体最低版本：1.11.1**
+> **当前版本：v4.0.13-test（semver 4.0.13-test）｜发布日期：2026-10-05｜支持本体最低版本：1.11.1**
 > 版本号唯一权威源：[js/config/version.js](js/config/version.js)（info.json / package.json 与之保持一致）。
 > **当前模型契约（P2-36）：FEATURE_DIM = 130，网络 130 → 128 (GELU+LayerNorm) → 64 (GELU+LayerNorm) → 6 + Critic。**
 > 下方 48 / 96 维相关条目均为历史版本记录，不代表当前契约；旧 48/96 维权重与训练数据不兼容，会被拒收。
 > **状态：架构测试版。测试阶段以 P0/P1 回归修复为主，暂不继续叠加新的 AI 功能。**
 
 ---
+
+## v4.0.13-test 统一收益向量与双轨评分（2026-10-05）
+
+> 本版本不直接替换现有 canonical score，而是先建立可解释、可对账的 Utility Vector，并把通用后处理层逐步迁移进去。
+
+### Unified Utility Pipeline
+
+新增：
+
+- `utilityVector.js`：统一收益向量契约；
+- `utilityPipeline.js`：before/after 双轨观测与对账；
+- `utilityExplain.js`：玩家可读的收益维度解释；
+- `utilityMigration.js`：明确记录已迁移/未迁移评分层。
+
+Utility 维度：
+
+- offense
+- control
+- resource
+- survival
+- team
+- tempo
+- future
+- synergy
+- risk
+- resourceCost
+- opportunityCost
+- uncertainty
+- legacyResidual
+
+### 双轨原则
+
+当前正式决策仍使用：
+
+`candidate.score`
+
+Utility Vector 仅做 shadow：
+
+`legacyBase + tracked semantic contributions = shadowUtility`
+
+并与 canonical score 对账得到 `residual`。
+
+- residual = 0：当前已跟踪层完全对账；
+- residual ≠ 0：说明还有后置模型/Champion/DeepThink等未进入 Utility Vector；
+- 不允许用 shadowUtility 替换 winner，避免 #39 在迁移阶段偷偷改变 AI 行为。
+
+### 第一批已迁移通用层
+
+- modeStrategy → team
+- identityExposure → uncertainty
+- actionDirectionGuard → team
+- sharedKnowledge → team
+- campSkillProgress → future
+- resourceMaximize → resource
+- lossMinimize → risk
+- Character Policy → synergy
+
+Basic rules 若产生分值变化，暂时进入 `legacyResidual`。
+
+### 明确保留在 legacyBase
+
+第一版不重写：
+
+- 基础牌/技能/目标 EV；
+- optimization；
+- psychology / memory；
+- comboChain；
+- 手牌概率推断；
+- 桃/无懈/铁索/兵乐拆顺等专项 timing/evaluator；
+- AOE / 判定 / 装备时机；
+- deepValue；
+- 救援专项；
+- threat / forecast；
+- feedback / momentum；
+- 铁索唯一 evaluator；
+- 装备替换。
+
+这些模块后续按语义逐批迁移，而不是一次性改写。
+
+### Policy / Safety 保持独立
+
+以下不是 Utility：
+
+- #37 Strategic Intent；
+- candidate eligible / veto / priority tier；
+- Planner policy band；
+- Guard。
+
+胜利职责和安全红线不能重新退化成普通加减分。
+
+### 可观测性
+
+详细 Decision Trace 新增：
+
+- legacyBase
+- 已迁移 Utility 维度
+- shadow utility
+- residual / 对账状态
+
+Top-N quality snapshot 同步保存 Utility Vector。
+
+### 质量门禁
+
+新增 `utility_pipeline` 固定行为场景与 `utility` 质量维度，锁定：
+
+- 初始化/观测不得修改 score；
+- 通用阶段 before/after 精确映射；
+- 非法/未迁移维度进入 legacyResidual；
+- callback 异常不得重复执行；
+- canonical winner 仍由 legacy score / policy 决定；
+- Utility Vector 不得接管排序；
+- 迁移地图必须明确专项策略尚未完成迁移。
 
 ## v4.0.12-test 武将策略画像与资源燃料（2026-10-05）
 
