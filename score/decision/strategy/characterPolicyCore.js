@@ -135,7 +135,15 @@ export function buildCharacterPolicyCore(spec) {
 	const second = ranked[1] || { key: CHARACTER_ARCHETYPE.HYBRID, score: 0 };
 
 	let primary = first.key;
-	if (first.score < 0.20 || (second.score > 0 && first.score - second.score < 0.05)) {
+	const sameFamily = (
+		(first.key === CHARACTER_ARCHETYPE.ASSAULT && second.key === CHARACTER_ARCHETYPE.BURST) ||
+		(first.key === CHARACTER_ARCHETYPE.BURST && second.key === CHARACTER_ARCHETYPE.ASSAULT) ||
+		(first.key === CHARACTER_ARCHETYPE.SUPPORT && second.key === CHARACTER_ARCHETYPE.SUSTAIN) ||
+		(first.key === CHARACTER_ARCHETYPE.SUSTAIN && second.key === CHARACTER_ARCHETYPE.SUPPORT) ||
+		(first.key === CHARACTER_ARCHETYPE.RESOURCE && second.key === CHARACTER_ARCHETYPE.CONVERSION) ||
+		(first.key === CHARACTER_ARCHETYPE.CONVERSION && second.key === CHARACTER_ARCHETYPE.RESOURCE)
+	);
+	if (first.score < 0.20 || (!sameFamily && second.score > 0 && first.score - second.score < 0.05)) {
 		primary = CHARACTER_ARCHETYPE.HYBRID;
 	}
 	const secondary = ranked
