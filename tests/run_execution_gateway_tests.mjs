@@ -328,6 +328,37 @@ try {
 	eq(writes, 0, 'B5 超时无学习副作用');
 } finally { Date.now = originalNow; }
 
+/* B5-F07：核心 cancel 的 notrigger 参数只抑制通知，不代表动作执行成功。 */
+{
+	let writes = 0, contentRuns = 0;
+	const cancelArgs = [];
+	const nativePrototype = {
+		cancel(...args) {
+			cancelArgs.push({ receiver: this, args });
+			if (!args[2]) this._cancelled = true;
+			this.finished = true;
+			return 'native-cancel-result';
+		},
+	};
+	const nativeEvent = Object.assign(Object.create(nativePrototype), {
+		name: 'useSkill', player, finished: false,
+		then(resolve) { if (!this.finished) { contentRuns++; this.finished = true; } resolve(); },
+	});
+	const cancelledTx = createDecisionTransaction({ type: 'skill', id: 'silent_cancel' }, () => { writes++; });
+	stageDecisionTransaction(player, cancelledTx);
+	const confirming = confirmExecutionFromHostEvent(player, { type: 'skill', id: 'silent_cancel' },
+		nativeEvent, { eventName: 'useSkill', transactionId: cancelledTx.id });
+	eq(nativeEvent.cancel(true, null, 'notrigger'), 'native-cancel-result', 'B5-F07 保持宿主 cancel 返回值');
+	const result = await confirming;
+	eq(result.reason, 'host-event-cancelled', 'B5-F07 静默取消不得当作完成动作');
+	eq(cancelledTx.state, 'cancelled', 'B5-F07 只取消原事务');
+	eq(writes, 0, 'B5-F07 静默取消不产生 Commit 副作用');
+	eq(contentRuns, 0, 'B5-F07 静默取消不执行技能内容');
+	eq(nativeEvent._cancelled, undefined, 'B5-F07 不替宿主改写取消通知标记');
+	ok(cancelArgs[0].receiver === nativeEvent && cancelArgs[0].args[2] === 'notrigger', 'B5-F07 保持 cancel 的 this 和参数');
+	ok(!Object.hasOwn(nativeEvent, 'cancel') && nativeEvent.cancel === nativePrototype.cancel, 'B5-F07 完成后恢复原继承方法');
+}
+
 process.stdout.write('\n');
 if (fails.length) {
 	console.error('\n❌ #35 execution gateway contract failed: ' + fails.length + ' / ' + (pass + fails.length));

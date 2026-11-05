@@ -1,5 +1,13 @@
 # 验证证据摘要
 
+## 2026-11-05 最新复验
+
+B5-F07 修复前新增测试 3/88 断言失败；修复后网关 88 项通过，完整 npm test 通过，其他断言数不变。日志：[cancel-fix-regression.log](cancel-fix-regression.log)。下方 80 项及失败场景均为上轮历史证据。
+
+00:09:09.957Z，核心 1.11.7 的 host-scenarios：13/13 检查通过，commits=1，samplesBefore=1、samplesAfter=1，errors=[]。覆盖真实正常技能、普通取消、静默取消、原方法恢复、respond 完成且不冒充主动动作、受控事务无训练样本。两类取消 id 为 dtx_mw2sfxhi_5 / dtx_mw2sfxhi_6，均取消原事务。原始结果已追加到 runtime-excerpts.jsonl。
+
+这是受控宿主场景，并非自然对局全部行为。换局、长局、真实训练/A/B 和导入还原仍未完成，不将 B5 整体标为通过。
+
 ## 自动化：最后一次已完成的回归
 
 命令：`npm test`。本次 PR 整理未重复执行。

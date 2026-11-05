@@ -43,6 +43,44 @@ export function createExecutionGatewayCore(deps) {
 		discard: new WeakMap(),
 		compare: new WeakMap(),
 	};
+	const cancelWatches = new WeakMap();
+
+	/* 仅观测本次事件，不改宿主原型；多个确认者共享观测，最后一个退出时恢复。 */
+	function watchCancellation(event) {
+		let watch = cancelWatches.get(event);
+		if (!watch) {
+			const original = event.cancel;
+			if (typeof original !== 'function') return null;
+			const own = Object.getOwnPropertyDescriptor(event, 'cancel');
+			watch = { called: false, users: 0 };
+			const wrapper = function (...args) {
+				if (this === event) watch.called = true;
+				return original.apply(this, args);
+			};
+			Object.defineProperty(event, 'cancel', {
+				configurable: own ? own.configurable : true,
+				enumerable: own ? own.enumerable : false,
+				writable: own && 'writable' in own ? own.writable : true,
+				value: wrapper,
+			});
+			watch.restore = function () {
+				/* 后来接管该成员的模块拥有它；不能用清理回调覆盖别人的写入。 */
+				if (Object.getOwnPropertyDescriptor(event, 'cancel')?.value !== wrapper) return;
+				if (own) Object.defineProperty(event, 'cancel', own);
+				else delete event.cancel;
+			};
+			cancelWatches.set(event, watch);
+		}
+		watch.users++;
+		return {
+			wasCancelled: function () { return watch.called; },
+			release: function () {
+				if (--watch.users > 0) return;
+				cancelWatches.delete(event);
+				try { watch.restore(); } catch (_) {}
+			},
+		};
+	}
 
 	const stats = {
 		total: 0,
@@ -294,27 +332,34 @@ export function createExecutionGatewayCore(deps) {
 			const current = peekTransaction(player);
 			return !!current && current.id === transactionId;
 		};
+		let cancellation;
+		try { cancellation = watchCancellation(hostEvent); }
+		catch (_) { return { ok: false, reason: 'host-event-cancel-unobservable' }; }
 		try {
-			await hostEvent;
-		} catch (error) {
+			try {
+				await hostEvent;
+			} catch (error) {
+				if (!isCurrent()) return { ok: false, reason: 'transaction-changed' };
+				cancelExecution(player, 'host-event-rejected', (actual && actual.type) || 'unknown', transactionId);
+				return { ok: false, reason: 'host-event-rejected', error: error };
+			}
 			if (!isCurrent()) return { ok: false, reason: 'transaction-changed' };
-			cancelExecution(player, 'host-event-rejected', (actual && actual.type) || 'unknown', transactionId);
-			return { ok: false, reason: 'host-event-rejected', error: error };
+			if (hostEvent._cancelled === true || (cancellation && cancellation.wasCancelled())) {
+				cancelExecution(player, 'host-event-cancelled', (actual && actual.type) || 'unknown', transactionId);
+				return { ok: false, reason: 'host-event-cancelled' };
+			}
+			if (hostEvent.finished !== true) {
+				return { ok: false, reason: 'host-event-unconfirmed' };
+			}
+			if (typeof options.verify === 'function') {
+				let verified = false;
+				try { verified = options.verify(hostEvent) === true; } catch (_) {}
+				if (!verified) return { ok: false, reason: 'host-event-evidence-mismatch' };
+			}
+			return commitExecution(player, actual);
+		} finally {
+			if (cancellation) cancellation.release();
 		}
-		if (!isCurrent()) return { ok: false, reason: 'transaction-changed' };
-		if (hostEvent._cancelled === true) {
-			cancelExecution(player, 'host-event-cancelled', (actual && actual.type) || 'unknown', transactionId);
-			return { ok: false, reason: 'host-event-cancelled' };
-		}
-		if (hostEvent.finished !== true) {
-			return { ok: false, reason: 'host-event-unconfirmed' };
-		}
-		if (typeof options.verify === 'function') {
-			let verified = false;
-			try { verified = options.verify(hostEvent) === true; } catch (_) {}
-			if (!verified) return { ok: false, reason: 'host-event-evidence-mismatch' };
-		}
-		return commitExecution(player, actual);
 	}
 
 	function cancelExecution(player, reason, kind, transactionId) {
