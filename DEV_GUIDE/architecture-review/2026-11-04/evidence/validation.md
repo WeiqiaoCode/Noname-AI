@@ -1,5 +1,13 @@
 # 验证证据摘要
 
+## 第五轮：真实晚结算与页面重开
+
+实机核心仍为 1.11.7。`late-scenarios.js` 使用真实 Player.useSkill，技能内容等待受控 gate；新事务已 stage 后再放行或取消旧事件。两类场景 8 项通过，writes=0，新 pending 保留，原 cancel 恢复。原始检查点与重开结果见 [late-runtime-excerpts.jsonl](late-runtime-excerpts.jsonl)。
+
+真实 game.over 进入胜利/结算界面，旧事件等待未返回，该终局回调场景未完成。随后实际点击“重新开始”并选新角色：players=8、over=false、oldPending=0、pass=true。上一局外部检查点见 [restart-prior.json](restart-prior.json)；它明确 terminalCompleted=false，不伪装成完整终局验收。
+
+归档脚本随后增加终局等待 2 秒后的未完成记录，避免未来挂起；本轮没有重跑该新分支，未把它列为已验证。业务源码未变，Node 上轮 88 项/完整回归为历史结果，本轮不重复运行。
+
 ## 2026-11-05 最新复验
 
 B5-F07 修复前新增测试 3/88 断言失败；修复后网关 88 项通过，完整 npm test 通过，其他断言数不变。日志：[cancel-fix-regression.log](cancel-fix-regression.log)。下方 80 项及失败场景均为上轮历史证据。
