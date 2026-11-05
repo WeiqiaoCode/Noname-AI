@@ -141,3 +141,60 @@ export function snapshotBroadcast() {
 export function clearBroadcast() {
 	try { _ensure().length = 0; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
+
+/* 旧特征接口：从 missingModules 归位，保留旧字段、状态与计算方式。
+ * 与本模块正式算法不等价，暂不互相替换，避免改变已训练模型的输入。 */
+/* ================= 2. teamBroadcast - 团队广播 ================= */
+const _teamMessages = [];  /* 团队消息队列 */
+
+export const legacyTeamFeatures = {
+    /* ★ 状态查询接口（兼容features.js调用） */
+    getStatus: function(me) {
+        try {
+            if (!me) return null;
+            const myMessages = _teamMessages.filter(m => m.from === me.name);
+            return {
+                messageCount: myMessages.length,
+                hasFocus: myMessages.some(m => m.type === 'focus'),
+                hasNeedPeach: myMessages.some(m => m.type === 'need_peach'),
+            };
+        } catch (e) { return null; }
+    },
+
+    /* 发送消息 */
+    send: function(type, content) {
+        try {
+            _teamMessages.push({
+                type: type,
+                content: content,
+                time: Date.now(),
+            });
+            /* 只保留最近50条 */
+            if (_teamMessages.length > 50) _teamMessages.shift();
+        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+    },
+
+    /* 获取最新消息 */
+    latest: function(count) {
+        count = count || 5;
+        return _teamMessages.slice(-count);
+    },
+
+    /* 告诉队友：我需要桃 */
+    needPeach: function() {
+        this.send('need_peach', '我需要桃救援');
+    },
+
+    /* 告诉队友：集火目标 */
+    focusTarget: function(playerName) {
+        this.send('focus', '集火: ' + playerName);
+    },
+
+    /* 统计 */
+    stats: function() {
+        return {
+            totalMessages: _teamMessages.length,
+            types: [...new Set(_teamMessages.map(m => m.type))],
+        };
+    },
+};

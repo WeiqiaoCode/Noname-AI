@@ -32,7 +32,7 @@
  *   自动放置一个等价宿主桩 noname.js（若不存在），退出时自动删除。
  */
 
-import { existsSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -97,6 +97,11 @@ globalThis.localStorage = {
 
 /* ---------- 导入被测模块 ---------- */
 const _pkg = resolve(_here, '..');
+/* 旧源码契约随实现迁移到真实环节模块；具体调度连接另有 B3 行为与顺序断言。 */
+function readDecisionSources() {
+    return ['engine/engine.js', 'context/decisionContext.js', 'context/targetContext.js', 'rules/basicRules.js', 'generation/scoredCandidates.js', 'scoring/candidateScoring.js', 'selection/plannedSelection.js', 'selection/modelReview.js', 'safety/finalCandidateGuard.js', 'feedback/executedLearning.js', 'execution/decisionEffects.js', 'scoring/scoreLedger.js', 'scoring/scoreEvents.js', 'scoring/candidateValuation.js', 'scoring/skillCandidateScore.js', 'scoring/cardCandidateScore.js', 'scoring/equipCandidateScore.js', 'records/decisionRecords.js', 'settlement/gameSettlement.js', 'feedback/decisionObservations.js', 'execution/hostHooks.js'].map(file =>
+        readFileSync(join(_pkg, 'score/decision', file), 'utf8')).join('\n');
+}
 const wm = await import(pathToFileURL(join(_pkg, 'score', 'model', 'weights', 'weights.js')).href);
 const te = await import(pathToFileURL(join(_pkg, 'score', 'model', 'train', 'trainExport.js')).href);
 const hs = await import(pathToFileURL(join(_pkg, 'score', 'model', 'net', 'modelHotSwap.js')).href);
@@ -580,7 +585,7 @@ eq(hashModel(true), hStable, '10.6 discard 后 active === stable');
     /* 源码守卫：阈值只允许存在于 labelPolicy.js。 */
     const fs35 = await import('node:fs');
     const lt35 = fs35.readFileSync(join(_pkg, 'score', 'model', 'train', 'localTrainer.js'), 'utf8');
-    const ms35 = fs35.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelState.js'), 'utf8');
+    const ms35 = ['score/model/state/modelLifecycle.js', 'score/model/train/candidateTraining.js'].map(file => fs35.readFileSync(join(_pkg, file), 'utf8')).join('\n');
     const off35 = fs35.readFileSync(join(_pkg, 'build', 'train_default_weights.mjs'), 'utf8');
 
     ok(/from '\.\/labelPolicy\.js'/.test(lt35), '10.35 localTrainer 使用 labelPolicy');
@@ -810,7 +815,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     }
 
     /* ===== 防线 4：responseAI._shouldSaveTao（true=保留桃） ===== */
-    const ra = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'cardplay', 'responseAI.js')).href);
+    const ra = await import(pathToFileURL(join(_pkg, 'score', 'decision', 'response', 'responseAI.js')).href);
     eq(typeof ra._shouldSaveTao, 'function', '10.12 responseAI 导出 _shouldSaveTao');
     if (typeof ra._shouldSaveTao === 'function') {
         const dEnemy = { hp: 0, maxHp: 4 };
@@ -896,7 +901,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(ps.isPlayerLinked({ isLinked: function () { return false; } }), false, '10.13 函数对象不得恒 true（消除 !!p.isLinked）');
 
     /* ---- 源码守卫：旧写法不得复活 ---- */
-    const engSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engSrc = readDecisionSources();
     eq(engSrc.indexOf('!!p.isLinked') < 0, true, '10.13 engine.js 不再出现 !!p.isLinked');
     ok(!/!target\.isLinked\b/.test(engSrc), '10.13 engine.js 不再出现 !target.isLinked');
 
@@ -1090,7 +1095,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
  * 因 engine.js 依赖完整宿主挂载面（Node 下不可执行），沿用 §10.13 的源码守卫 + 策略行为断言。 */
 {
     const fsSync = await import('node:fs');
-    const engSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engSrc = readDecisionSources();
 
     /* ---- 源码守卫：接入唯一权威源 ---- */
     ok(engSrc.indexOf('evaluateTiesuoActions') >= 0, '10.17 engine.js 调用 evaluateTiesuoActions');
@@ -1226,7 +1231,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 {
     const fsSync = await import('node:fs');
     const cpbSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'cardplay', 'cardPlayBrain.js'), 'utf8');
-    const engSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engSrc = readDecisionSources();
     const optSrc = fsSync.readFileSync(join(_pkg, 'js', 'content', 'optimization.js'), 'utf8');
     const dtSrc  = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'damageTransfer.js'), 'utf8');
     const thSrc  = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'threat', 'threat.js'), 'utf8');
@@ -1519,7 +1524,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const fsSync = await import('node:fs');
     const respSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'override', 'respond.js'), 'utf8');
     const brainSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'basic', 'respondBrain.js'), 'utf8');
-    const raiSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'cardplay', 'responseAI.js'), 'utf8');
+    const raiSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'response', 'responseAI.js'), 'utf8');
     const wtSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'timing', 'wuxieTiming.js'), 'utf8');
     const rmSrc = fsSync.readFileSync(join(_pkg, 'score', 'decision', 'resource', 'resourceManage.js'), 'utf8');
 
@@ -1706,7 +1711,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     /* ---- 源码守卫：唯一权威接入 + 粗暴同目标降权退役 + 缓存指纹纳入判定区 ---- */
     {
         const fsSync23 = await import('node:fs');
-        const engSrc = fsSync23.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+        const engSrc = readDecisionSources();
         const cacheSrc = fsSync23.readFileSync(join(_pkg, 'score', 'foundation', 'storage', 'cache.js'), 'utf8');
         ok(/turnStrategicState\.js/.test(engSrc), '10.23 engine.js 接入唯一权威 turnStrategicState');
         ok(/evaluateActionTransitionPenalty/.test(engSrc), '10.23 engine.js 调用通用 evaluateActionTransitionPenalty');
@@ -1798,9 +1803,9 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
         /* G. 源码守卫：策略层不再猜宿主字段 + 唯一入口收敛 */
         const fsA = await import('node:fs');
-        const engA = fsA.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+        const engA = readDecisionSources();
         const ccA = fsA.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'comboChain.js'), 'utf8');
-        const exA = fsA.readFileSync(join(_pkg, 'score', 'foundation', 'io', 'export.js'), 'utf8');
+        const exA = fsA.readFileSync(join(_pkg, 'score', 'bootstrap', 'dataExport.js'), 'utf8');
         ok(/playerSnapshot\.js/.test(engA) && /buildPlayerSnapshot/.test(engA), '10.24 engine.js 接入统一 playerSnapshot');
         eq(/isJudge\s*\|\|\s*\w+\.isJudged/.test(engA), false, '10.24 engine.js 退役 p.isJudge || p.isJudged 猜测');
         eq(/isFinite\(p\.equipVal\)/.test(engA), false, '10.24 engine.js 退役 p.equipVal 猜测');
@@ -1836,7 +1841,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         'score/decision/timing/judgeTiming.js',
         'score/decision/timing/shunshouTiming.js',
         'score/decision/cardplay/responseOpt.js',
-        'score/decision/cardplay/responseAI.js',
+        'score/decision/response/responseAI.js',
         'score/decision/override/respond.js',
         'score/decision/override/discard.js',
         'score/decision/tuning/shaTargetOpt.js',
@@ -1870,7 +1875,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(/isEnemyOf\(target, me\)/.test(thSrc), false, '10.25 cardValueWithTarget 视角修正为 isEnemyOf(me, target)');
 
     /* engine.js：政策决策无 get.attitude 散落 */
-    const engB = fsB.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engB = readDecisionSources();
     eq(engB.indexOf('get.attitude') < 0, true, '10.25 engine.js 无 get.attitude 散落');
 
     /* 保留 raw-fact 的合法边界仍存在（relations 基线 / 阵营归类 modeStrategy / diagnostics postCheck） */
@@ -1892,7 +1897,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(snapMod && typeof snapMod.buildTargetCandidate === 'function', '10.26 buildTargetCandidate 存在');
 
     const fsC = await import('node:fs');
-    const engC = fsC.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engC = readDecisionSources();
 
     /* 引擎目标候选来源已收敛到 buildTargetCandidate（3 个 pickTargetByPurpose 候选数组） */
     ok(/buildTargetCandidate\(me, p\)/.test(engC), '10.26 engine 经 buildTargetCandidate(me,p) 生产候选');
@@ -2144,7 +2149,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
  */
 {
     const fsH = await import('node:fs');
-    const engSrc = fsH.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engSrc = readDecisionSources();
     const tbSrc = fsH.readFileSync(join(_pkg, 'score', 'perception', 'team', 'teamBroadcast.js'), 'utf8');
 
     /* 源码守卫：install 保存 original ref */
@@ -2229,13 +2234,14 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     const fsJ = await import('node:fs');
     const swSrc = fsJ.readFileSync(join(_pkg, 'score', 'foundation', 'diag', 'swallow.js'), 'utf8');
     const hlSrc = fsJ.readFileSync(join(_pkg, 'score', 'foundation', 'diag', 'health.js'), 'utf8');
-    const extSrc = fsJ.readFileSync(join(_pkg, 'extension.js'), 'utf8');
+    const extSrc = fsJ.readFileSync(join(_pkg, 'js/bootstrap/extensionLifecycle.js'), 'utf8');
 
     ok(/export\s+function\s+reportUnexpected/.test(swSrc), '10.33 swallow 导出 reportUnexpected');
     ok(/export\s+function\s+unexpectedStats/.test(swSrc), '10.33 swallow 导出 unexpectedStats');
     ok(/export\s+function\s+resetUnexpected/.test(swSrc), '10.33 swallow 导出 resetUnexpected');
     ok(/unexpectedStats/.test(hlSrc) && /异常健康度/.test(hlSrc), '10.33 healthCheck 汇入异常健康度');
-    ok(/reportUnexpected\('extension\.mountAllPanels'/.test(extSrc), '10.33 extension 面板挂载失败进入诊断');
+    const panelsSrc = fsJ.readFileSync(join(_pkg, 'score/view/bootstrap/panels.js'), 'utf8');
+    ok(/reportUnexpected\('extension\.mountAllPanels'/.test(panelsSrc), '10.33 extension 面板挂载失败进入诊断');
     ok(/reportUnexpected\('engine', 'installScoreEngine 安装失败'/.test(extSrc), '10.33 extension 引擎安装失败进入诊断');
 
     /* 运行时：swallow.js 为叶子模块，Node 下可直接加载 */
@@ -2268,7 +2274,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
  */
 {
     const fs34 = await import('node:fs');
-    const eng34 = fs34.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng34 = readDecisionSources();
     const dt34 = fs34.readFileSync(join(_pkg, 'score', 'cognition', 'deepThink.js'), 'utf8');
 
     ok(/export\s+function\s+safeModelPredict\s*\(/.test(eng34), '10.34 engine 导出 safeModelPredict 生产门禁');
@@ -2356,7 +2362,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
        src35.indexOf('canonicalKill.target = targetKey') < 0,
         '10.35 装备/无目标首步保留 canonical target，不错误携带敌方 player target');
 
-    const eng35 = fs35.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng35 = readDecisionSources();
     ok(/if \(best && best\.type === 'equip'\)\s*_finalTarget = null;/.test(eng35),
         '10.35 engine 最终结果中 equip.target 强制为 null');
 }
@@ -2456,7 +2462,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.36 同一 round 新攻击证据会触发 belief 重算（无需等下一轮）');
 
     /* D. 架构守卫：engine 只依赖 relation fingerprint，不出现“身份跳明置”事件特判。 */
-    const engSrc36 = fs36.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engSrc36 = readDecisionSources();
     const thSrc36 = fs36.readFileSync(join(_pkg, 'score', 'decision', 'threat', 'threat.js'), 'utf8');
     const idSrc36 = fs36.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
 
@@ -2798,8 +2804,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
             'score/perception/knowledge/sharedKnowledge.js',
             'score/model/calibrate/decisionCalibrator.js',
             'score/model/features/features.js',
-            'score/model/net/deepValue.js',
-            'score/model/net/modelGuard.js',
+            'score/decision/utility/deepValue.js',
+            'score/decision/safety/modelGuard.js',
         ];
         for (const relPath38 of fairRelationFiles38) {
             const src38 = fs38.readFileSync(join(_pkg, ...relPath38.split('/')), 'utf8');
@@ -3030,7 +3036,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         const rev2 = obs40.getObservationRevision();
         eq(rev2 - rev1, 1, '10.40 过河拆桥 card event → observation revision 只递增一次');
 
-        const engSrc40 = fs40.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+        const engSrc40 = readDecisionSources();
         const idSrc40 = fs40.readFileSync(join(_pkg, 'score', 'perception', 'observer', 'identity.js'), 'utf8');
 
         eq(engSrc40.indexOf('const tid = dyingAlly.identity') < 0, true,
@@ -3184,7 +3190,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     /* E. 源码守卫：engine 不再在 useCard 时按乐/兵硬编码记 commitment；
      * transition evaluator 独立于“拆牌/延时类打敌”具体牌列表。 */
-    const eng41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng41 = readDecisionSources();
     const tssSrc41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'state', 'turnStrategicState.js'), 'utf8');
     const opt41 = fs41.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'optimization.js'), 'utf8');
 
@@ -3706,8 +3712,8 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 
     /* 源码结构守卫。 */
     const scannerSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skillScanner.js'), 'utf8');
-    const skillsSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'skills', 'skills.js'), 'utf8');
-    const engineSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const skillsSrc43 = ['skills.js', 'skillSourceTags.js', 'skillProfiles.js', 'skillAdvice.js'].map(file => fs43.readFileSync(join(_pkg, 'score/decision/skills', file), 'utf8')).join('\n');
+    const engineSrc43 = readDecisionSources();
     const overrideSrc43 = fs43.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'aiOverride.js'), 'utf8');
     eq(scannerSrc43.indexOf("if (_match(expr, TARGET_RE)) return -1") < 0, true,
         '10.43 scanner 不再硬编码 target=enemy');
@@ -4256,7 +4262,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.44 [0,N] 以显式 provenance 表示“可合法不选目标”');
     ok(eng44._skillTargetRange && true,
         '10.44 engine 保留 selectTarget range 解析入口');
-    const engineSrc44 = fs44.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const engineSrc44 = readDecisionSources();
     ok(engineSrc44.indexOf('d.targetRequired !== false') >= 0
         && engineSrc44.indexOf('d.targetDecisionResolved !== false') >= 0,
         '10.44 veto-target 只针对“目标必选且决策已解析”的缺目标情况');
@@ -4729,7 +4735,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         ok(ac47.hasConsistentBoundTarget(c47), '10.47 候选绑定目标一致性可验证');
     }
 
-    const eng47 = fs47.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng47 = readDecisionSources();
     eq(/score:\s*toInt8\(s\)/.test(eng47), false, '10.47 skill runtime 排序不再使用 toInt8');
     eq(/score:\s*toInt8\(actScore\)/.test(eng47), false, '10.47 card runtime 排序不再使用 toInt8');
     ok(/const boundTarget = _resolveCardCandidateTarget[\s\S]*const cardTarget = boundTarget\.target[\s\S]*expectedValue\(me, id, cardTarget\)/.test(eng47),
@@ -4822,17 +4828,42 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
        planner48.indexOf('canonicalOf(planBest.action)') >= 0,
         '10.48 Planner 普通规划与残局规划都回到 canonical candidate');
 
-    const eng48 = fs48.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng48 = readDecisionSources();
     eq(/gapLimit\s*:\s*14/.test(eng48), false,
         '10.48 engine 不再向 Champion 传绝对 gapLimit');
     eq(/aN\.score\s*<=\s*-8/.test(eng48), false,
         '10.48 负样本不再依赖旧绝对 -8 阈值');
-    ok(eng48.indexOf('aN.score < 0') >= 0 && eng48.indexOf('negativePool[0]') >= 0,
-        '10.48 每个决策点记录相对最差的真实负收益候选');
+	ok(eng48.indexOf('trainRecordSample(me, aN') < 0 && eng48.indexOf('negativePool[0]') < 0,
+		'P1 未执行负分候选不得标记为真实训练样本');
+	ok(!/action:\s*a,/.test(eng48.slice(eng48.indexOf('/* 决策后检测只追踪'), eng48.indexOf('/* ★ 事务只随返回值携带'))),
+		'P1 收益后检测仅回填最终选中的动作');
     ok(eng48.indexOf('normalizedMargin(c[0].score || 0, c[1].score || 0)') >= 0,
         '10.48 决策质量统计使用 normalized margin');
-    ok(eng48.indexOf('Object.assign(canonical, refined)') >= 0,
-        '10.48 Planner winner 在进入后续层前归并回 canonical candidate');
+    /* 拆分后验证模块行为，不再要求实现语句必须位于 engine.js。 */
+    const selection48 = await import(pathToFileURL(join(_pkg, 'score/decision/selection/candidateSelection.js')).href);
+    /* 目录迁移契约：旧入口与新入口必须指向同一函数，不能生成第二套状态。 */
+    const oldSelection48 = await import(pathToFileURL(join(_pkg, 'score/decision/state/candidateSelection.js')).href);
+    eq(oldSelection48.selectInitialCandidate, selection48.selectInitialCandidate, '目录归位：动作初选旧入口共享新实现');
+    eq(oldSelection48.mergePlannedCandidate, selection48.mergePlannedCandidate, '目录归位：规划归并旧入口共享新实现');
+    const responseNew48 = await import(pathToFileURL(join(_pkg, 'score/decision/response/responseAI.js')).href);
+    const responseOld48 = await import(pathToFileURL(join(_pkg, 'score/decision/cardplay/responseAI.js')).href);
+    eq(responseOld48.installResponseAI, responseNew48.installResponseAI, '目录归位：响应安装共享同一实现');
+    eq(responseOld48.uninstallResponseAI, responseNew48.uninstallResponseAI, '目录归位：响应卸载共享同一实现');
+    const compareNew48 = await import(pathToFileURL(join(_pkg, 'score/decision/response/compareAI.js')).href);
+    const compareOld48 = await import(pathToFileURL(join(_pkg, 'score/perception/stats/compareAI.js')).href);
+    eq(compareOld48.installCompareAI, compareNew48.installCompareAI, '目录归位：拼点安装共享同一实现');
+    eq(compareOld48.uninstallCompareAI, compareNew48.uninstallCompareAI, '目录归位：拼点卸载共享同一实现');
+    const actions48 = await import(pathToFileURL(join(_pkg, 'score/decision/state/actionCandidate.js')).href);
+    const original48 = actions48.makeActionCandidate({ type: 'card', id: 'sha', target: 'enemyA', score: 2 });
+    const refined48 = actions48.makeActionCandidate({ type: 'card', id: 'sha', target: 'enemyA', score: 5 });
+    const candidates48 = [original48];
+    const merged48 = selection48.mergePlannedCandidate(candidates48, refined48);
+    eq(merged48.best, original48, '10.48 Planner 复用原候选对象');
+    eq(original48.score, 5, '10.48 Planner 更新原候选收益');
+    eq(candidates48.length, 1, '10.48 Planner 同一动作不产生重复候选');
+    ok(eng48.includes('mergePlannedCandidate(acts, refined)') &&
+       eng48.includes('best = plannedSelection.best') && eng48.includes('eligibleActs = plannedSelection.eligibleActs'),
+       '10.48 引擎消费 Planner 归并结果与合法候选');
 
     const bus48 = fs48.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'strategyBus.js'), 'utf8');
     eq(/Math\.abs\(scoreGap\)\s*>=\s*5/.test(bus48), false,
@@ -4872,15 +4903,26 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(tierSorted49[0], forced49, '10.49 forced tier 高于 critical/normal，且无需伪造高 utility');
     eq(forced49.score, -2, '10.49 forced priority 不污染原始 utility');
 
-    const eng49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng49 = readDecisionSources();
     eq(eng49.indexOf('a.score += 999') < 0, true, '10.49 engine 删除 +999 灌爆收益');
     eq(/Math\.min\(a\.score,\s*-(?:12|8|6)\)/.test(eng49), false,
         '10.49 card/skill/equip/judge veto 不再伪造成负分');
     ok(eng49.indexOf("const priorityReason = killCritical ? '可直接完成击杀' : '高优先纯收益'") >= 0,
         '10.49 priority>=99 区分补刀与纯收益，不再把无中/五谷误标补刀');
-    ok(eng49.indexOf('acts.sort(compareActionCandidates)') >= 0 &&
-       eng49.indexOf('eligibleActs = acts.filter(isCandidateEligible)') >= 0,
-        '10.49 engine 统一按 policy comparator 排序并过滤 veto candidate');
+    const selection49 = await import(pathToFileURL(join(_pkg, 'score/decision/selection/candidateSelection.js')).href);
+    const chosen49 = selection49.selectInitialCandidate([veto49, normalLowUtil49, normalHighUtil49]);
+    eq(chosen49.best, normalHighUtil49, '10.49 初选保持 normal utility-first');
+    eq(chosen49.eligibleActs.includes(veto49), false, '10.49 初选排除 veto 候选');
+    const end49 = ac49.makeActionCandidate({ type: 'end', id: 'end', score: 0 });
+    const bad49 = ac49.makeActionCandidate({ type: 'card', id: 'sha', score: -1 });
+    eq(selection49.selectInitialCandidate([bad49, end49]).best, end49, '10.49 负收益回退原有结束动作');
+    eq(selection49.selectInitialCandidate([]).best.type, 'end', '10.49 空候选生成结束动作');
+    const criticalSelection49 = ac49.makeActionCandidate({ type: 'card', id: 'sha', score: -2 });
+    ac49.setCandidatePriority(criticalSelection49, ac49.PRIORITY_TIER.CRITICAL, 99, '职责');
+    eq(selection49.selectInitialCandidate([end49, criticalSelection49]).best, criticalSelection49,
+       '10.49 明确战略职责仍优先于结束回合');
+    ok(eng49.includes('selectInitialCandidate(acts)') && eng49.includes('best = initialSelection.best') &&
+       eng49.includes('eligibleActs = initialSelection.eligibleActs'), '10.49 引擎消费候选模块初选结果');
     ok(eng49.indexOf('applyChampionRule(eligibleActs') >= 0 &&
        eng49.indexOf('deepThinkCritic(me, eligibleActs') >= 0,
         '10.49 Champion/DeepThink 只消费 eligible candidates');
@@ -4895,7 +4937,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(planner49.indexOf('samePolicyTier') >= 0,
         '10.49 普通 Planner 改判不得跨 policy tier');
 
-    const guard49 = fs49.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    const guard49 = fs49.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'modelGuard.js'), 'utf8');
     eq(/killAvailable\.score\s*>\s*action\.score\s*\+\s*5/.test(guard49), false,
         '10.49 Guard 删除旧固定 +5 击杀分差');
     ok(guard49.indexOf("priorityTier === PRIORITY_TIER.FORCED") >= 0,
@@ -4968,7 +5010,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(deep50.indexOf('sameCandidatePolicyBand(a, best)') >= 0,
         '10.50 DeepThink 不得跨 critical/forced priorityValue 改判');
 
-    const guard50 = fs50.readFileSync(join(_pkg, 'score', 'model', 'net', 'modelGuard.js'), 'utf8');
+    const guard50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'safety', 'modelGuard.js'), 'utf8');
     ok(guard50.indexOf('sameCandidateAction(action, context.killAvailable)') >= 0,
         '10.50 Guard forced-kill 使用精确候选身份而非“任意攻击牌”放行');
     ok(guard50.indexOf('已有 Planner 严格验证的 forced-kill') <
@@ -4977,9 +5019,25 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(guard50.indexOf("const isUtility = ['wuzhong', 'tao', 'wuxie', 'shan', 'jiu']") >= 0, false,
         '10.50 forced-kill 不再允许 unrelated utility 例外绕过');
 
-    const eng50 = fs50.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
-    ok(eng50.indexOf('isCandidateEligible(a) && sameCandidateAction(a, refined)') >= 0,
-        '10.50 Engine 接回 Planner 结果时使用严格 action identity');
+    const eng50 = readDecisionSources();
+    const selection50 = await import(pathToFileURL(join(_pkg, 'score/decision/selection/candidateSelection.js')).href);
+    const actions50 = await import(pathToFileURL(join(_pkg, 'score/decision/state/actionCandidate.js')).href);
+    const targetA50 = actions50.makeActionCandidate({ type: 'card', id: 'sha', target: 'enemyA', score: 2 });
+    const targetB50 = actions50.makeActionCandidate({ type: 'card', id: 'sha', target: 'enemyB', score: 6 });
+    const candidates50 = [targetA50];
+    eq(selection50.mergePlannedCandidate(candidates50, targetB50).best, targetB50,
+       '10.50 同名卡不同目标不得归并');
+    eq(targetA50.target, 'enemyA', '10.50 原候选目标保持不变');
+    eq(candidates50.length, 2, '10.50 不同目标保留独立候选');
+    selection50.mergePlannedCandidate(candidates50, targetB50);
+    eq(candidates50.length, 2, '10.50 已存在候选再次归并不重复追加');
+    const veto50 = actions50.makeActionCandidate({ type: 'card', id: 'sha', target: 'enemyC', score: 10 });
+    actions50.vetoCandidate(veto50, '不可用');
+    const replacement50 = actions50.makeActionCandidate({ type: 'card', id: 'sha', target: 'enemyC', score: 3 });
+    const vetoCandidates50 = [veto50];
+    const merged50 = selection50.mergePlannedCandidate(vetoCandidates50, replacement50);
+    eq(merged50.best, replacement50, '10.50 不复用已否决的同身份候选');
+    eq(merged50.eligibleActs.includes(veto50), false, '10.50 规划后合法候选仍排除否决项');
     eq(eng50.indexOf('best.target = _a2.target') >= 0, false,
         '10.50 Guard fallback 后禁止按相同 id 改写到另一个目标');
 }
@@ -5035,7 +5093,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     ok(pEarly > 0 && pOverflow < 0,
         '10.51 retentionPressure 单一方向：正值保留，负值释放资源');
 
-    const eng51 = fs51.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng51 = readDecisionSources();
     eq(/let\s+handKeepBias\s*=/.test(eng51), false,
         '10.51 engine 删除第二套 handKeepBias 状态变量');
     eq(/score\s*\*=\s*\(1\s*[+-]\s*handKeepBias/.test(eng51), false,
@@ -5103,7 +5161,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
     eq(ac52.applyRelativeUtilityDelta(10, NaN), 10,
         '10.52 非有限 delta 安全回退为中性');
 
-    const eng52 = fs52.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng52 = readDecisionSources();
     const deltaCalls52 = [
         ['moodStrategyBonus', 'moodDelta'],
         ['counterRelationBonus', 'relationDelta'],
@@ -5168,7 +5226,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 {
     const fs54 = await import('node:fs');
     const planner54 = fs54.readFileSync(join(_pkg, 'score', 'decision', 'strategy', 'planner.js'), 'utf8');
-    const eng54 = fs54.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng54 = readDecisionSources();
 
     ok(planner54.indexOf('function _budgetExceeded(deadline)') >= 0 &&
        planner54.indexOf('function _plannerDeadline(options)') >= 0,
@@ -5223,7 +5281,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 {
     const fs55 = await import('node:fs');
     const cache55 = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'storage', 'cache.js')).href + '?pr31-state-cache');
-    const eng55 = fs55.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng55 = readDecisionSources();
 
     let ownHand = [{ name:'sha', suit:'spade', number:7 }];
     let enemyHandCount = 3;
@@ -5323,7 +5381,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 /* ================= 10.56 bestAction 分阶段性能观测 ================= */
 {
     const fs56 = await import('node:fs');
-    const eng56 = fs56.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng56 = readDecisionSources();
     const trace56 = fs56.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'decisionTrace.js'), 'utf8');
     const panel56 = fs56.readFileSync(join(_pkg, 'score', 'view', 'panel', 'panel.js'), 'utf8');
 
@@ -5379,7 +5437,7 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
 /* ================= 10.58 单次 bestAction 关系 memo ================= */
 {
     const fs58 = await import('node:fs');
-    const eng58 = fs58.readFileSync(join(_pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+    const eng58 = readDecisionSources();
     const bestStart58 = eng58.indexOf('function bestAction()');
     const bestEnd58 = eng58.indexOf('function rulesDecide()', bestStart58);
     const bestBody58 = bestStart58 >= 0 && bestEnd58 > bestStart58
@@ -5400,10 +5458,493 @@ const eb = await import(pathToFileURL(join(_pkg, 'score', 'foundation', 'runtime
         '10.58 bestAction 直接友方推断收敛到 memo miss 一处');
 
     ok(bestBody58.indexOf('_isEnemyMemo(') >= 0 &&
-       bestBody58.indexOf('_isAllyMemo(') >= 0,
+       bestBody58.indexOf('_isAllyMemo }, _getRoundNumber)') >= 0,
         '10.58 候选评分/特征/后检测复用单次决策关系结果');
 }
 
+
+/* 接口负责人：反复挂载不得替换已被界面/引擎持有的记录器对象。 */
+{
+    const recorder = await import(pathToFileURL(join(_pkg, 'score/decision/safety/guardRecorder.js')).href);
+    const first = recorder.mountGuardRecorderInterface();
+    const second = recorder.mountGuardRecorderInterface();
+    eq(first, second, '公共接口：重复挂载保留记录器对象身份');
+    eq(first.record, recorder.recordGuardEvent, '公共接口：记录方法来自所属模块');
+    eq(first.getStats, recorder.getGuardStats, '公共接口：统计方法来自所属模块');
+    eq(first.reset, recorder.resetGuardRecorder, '公共接口：重置方法来自所属模块');
+}
+
+/* 公共读取入口：页面与引擎使用相同函数，重复连接不得清理训练样本。 */
+{
+    const training = await import(pathToFileURL(join(_pkg, 'score/model/train/trainExport.js')).href);
+    const allies = await import(pathToFileURL(join(_pkg, 'score/decision/safety/allyExempt.js')).href);
+    const count = training.bufferSize();
+    const api = training.mountTrainingInterface();
+    const exportFunction = api.trainExport;
+    eq(api.trainBufferSize, training.bufferSize, '统一训练入口：样本数量直接来自训练模块');
+    eq(api.trainExport, training.exportForImport, '统一训练入口：导出使用同一函数');
+    eq(api.trainImport, training.importFromJson, '统一训练入口：导入使用同一函数');
+    eq(api.trainExport.cleanLowValue, training.cleanLowValue, '统一训练入口：保留旧清洗方法');
+    training.mountTrainingInterface();
+    eq(api.trainExport, exportFunction, '统一训练入口：重复连接不更换函数');
+    eq(api.trainBufferSize(), count, '统一训练入口：连接不清理样本');
+    eq(JSON.parse(api.trainExport()).count, count, '统一训练入口：导出与读取数量一致');
+    api.checkAllyExempt = function () { return true; };
+    allies.mountAllyExemptInterface();
+    eq(api.checkAllyExempt, allies.checkAllyExempt, '队友判断：恢复正式模块，覆盖旧简化判断');
+    eq(api.checkAllyExempt(null, null, 'sha'), false, '队友判断：缺少玩家时不放行');
+    const globalCheck = api.checkAllyExempt;
+    allies.mountAllyExemptInterface();
+    eq(api.checkAllyExempt, globalCheck, '队友判断：重复连接仍使用同一函数');
+    const entry = await import(pathToFileURL(join(_pkg, 'js/bootstrap/publicInterface.js')).href);
+    entry.mountExtensionInterface();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    eq(api.checkAllyExempt, allies.checkAllyExempt, '入口联通：启动不再覆盖队友判断');
+    eq(api.trainExport, training.exportForImport, '入口联通：启动不再另建导出函数');
+    eq(api.trainBufferSize(), count, '入口联通：启动连接后原样本仍可读取');
+}
+
+/* B1：查询与决策分离，保持实时读取、原接口以及战报格式。 */
+{
+    const queriesUrl = pathToFileURL(join(_pkg, 'score/foundation/runtime/engineQueries.js')).href;
+    const isolated = await import(queriesUrl + '?isolated-query-contract');
+    eq(isolated.getInstalled(), false, 'B1 尚未连接引擎时显示未安装');
+    eq(isolated.getScoreLog().length, 0, 'B1 尚未连接时展示空记录');
+    let state = { installed: false, round: {}, scores: [], decisions: [] };
+    isolated.connectEngineQueries({
+        getInstalled: () => state.installed, getRound: () => state.round,
+        getScoreLog: () => state.scores, getDecisionLog: () => state.decisions,
+    });
+    eq(isolated.getRound(), state.round, 'B1 读取原对象而非复制快照');
+    state = { installed: true, round: { playerA: 3 }, scores: [{ score: 3 }], decisions: [] };
+    eq(isolated.getInstalled(), true, 'B1 状态变化后查询立即更新');
+    eq(isolated.getScoreLog(), state.scores, 'B1 对局记录换新后不会读到旧数组');
+    let invalidRejected = false;
+    try { isolated.connectEngineQueries({ getInstalled: () => false }); } catch (_) { invalidRejected = true; }
+    ok(invalidRejected, 'B1 不完整的连接会明确报错');
+    eq(isolated.getInstalled(), true, 'B1 错误连接不会覆盖上次有效连接');
+
+    const queries = await import(queriesUrl);
+    const engine = await import(pathToFileURL(join(_pkg, 'score/decision/engine/engine.js')).href);
+    eq(queries.getRound(), engine.getRound(), 'B1 引擎旧接口与新读取入口共享回合数据');
+    eq(queries.getScoreLog(), engine.getScoreLog(), 'B1 新旧入口共享评分记录');
+    eq(queries.getDecisionLog(), engine.getDecisionLog(), 'B1 新旧入口共享决策记录');
+    const health = await import(pathToFileURL(join(_pkg, 'score/foundation/diag/health.js')).href);
+    const installedBefore = engine.getInstalled();
+    try {
+        engine.setInstalled(true);
+        eq(health.healthCheck().results[0].ok, true, 'B1 健康检查能读到已安装状态');
+        engine.setInstalled(false);
+        eq(health.healthCheck().results[0].ok, false, 'B1 健康检查能读到卸载状态');
+    } finally { engine.setInstalled(installedBefore); }
+    const report = await import(pathToFileURL(join(_pkg, 'score/view/report/report.js')).href);
+    const exported = JSON.parse(report.exportDecisionsJson());
+    eq(exported.v, 1, 'B1 战报导出版本保持不变');
+    eq(exported.decisions.length, engine.getDecisionLog().length, 'B1 战报仍能读取引擎的决策记录');
+    const sourceFS = await import('node:fs');
+    for (const file of ['score/foundation/diag/health.js', 'score/view/report/report.js']) {
+        const src = sourceFS.readFileSync(join(_pkg, file), 'utf8');
+        ok(!/from\s+['"][^'"]*decision\/engine\/engine\.js['"]/.test(src), 'B1 ' + file + ' 不再反向导入引擎');
+    }
+}
+
+/* B1：插件重复安装、完整卸载、再次装载与主引擎前置状态。 */
+{
+    const pluginUrl = pathToFileURL(join(_pkg, 'score/foundation/runtime/plugins.js')).href;
+    const manager = await import(pluginUrl + '?b1-lifecycle-contract');
+    const counts = { install: 0, uninstall: 0, start: 0, end: 0 };
+    manager.registerPlugin(manager.definePlugin({
+        id: 'b1.lifecycle', props: { b1LifecycleProbe: { value: 7 } },
+        onInstall() { counts.install++; }, onUninstall() { counts.uninstall++; },
+        onStart() { counts.start++; }, onGameEnd() { counts.end++; },
+    }), { install: false });
+    eq(counts.install, 0, 'B1 插件登记不执行安装');
+    manager.installAllPlugins(); manager.scan();
+    manager.installAllPlugins(); manager.installPlugin('b1.lifecycle'); manager.scan();
+    eq(counts.install, 1, 'B1 重复装载已安装插件只执行一次安装');
+    eq(counts.start, 1, 'B1 同一轮启动广播不重复');
+    manager.uninstallAllPlugins(); manager.uninstallAllPlugins();
+    eq(counts.uninstall, 1, 'B1 重复卸载只清理一次');
+    eq(window.__DJSC.b1LifecycleProbe, undefined, 'B1 重复装载后接口所有权仍可正确清理');
+    eq(counts.end, 0, 'B1 插件卸载不会被当作对局结束');
+    manager.installAllPlugins(); manager.scan();
+    eq(counts.install, 2, 'B1 卸载后可以重新安装');
+    eq(counts.start, 2, 'B1 新一轮装载重新广播启动');
+    manager.uninstallAllPlugins();
+
+    const engine = await import(pathToFileURL(join(_pkg, 'score/decision/engine/engine.js')).href);
+    const lifecycle = await import(pathToFileURL(join(_pkg, 'score/bootstrap/lifecycle.js')).href);
+    const pluginIndex = await import(pathToFileURL(join(_pkg, 'score/plugins/index.js')).href);
+    const host = await import(pathToFileURL(_hostPath).href);
+    const previousInstalled = engine.getInstalled();
+    const previousPlayer = host.lib.element.Player;
+    const coreStateBefore = pluginIndex.getPluginState('djsc.engine').state;
+    try {
+        engine.setInstalled(false);
+        host.lib.element.Player = null;
+        lifecycle.installScoreEngine();
+        lifecycle.installScoreEngine();
+        eq(engine.getInstalled(), false, 'B1 宿主未准备好时不假报主引擎安装成功');
+        eq(pluginIndex.getPluginState('djsc.engine').state, coreStateBefore, 'B1 核心未装好时不继续安装依赖插件');
+        const rejected = pl.installPlugin('djsc.engine');
+        eq(rejected.ok, false, 'B1 引擎插件不能替代启动管理安装主引擎');
+        engine.setInstalled(true);
+        eq(pl.installPlugin('djsc.engine').ok, true, 'B1 主引擎就绪后插件检查可重试通过');
+        pl.uninstallPlugin('djsc.engine');
+        eq(engine.getInstalled(), true, 'B1 卸载登记插件不擅自卸载主引擎');
+    } finally {
+        host.lib.element.Player = previousPlayer;
+        engine.setInstalled(previousInstalled);
+    }
+}
+
+/* B1：补全模块归位后，旧路径仍转出同一对象，不能重新覆盖正式接口。 */
+{
+    const globalBefore = ['opponentPredict', 'teamBroadcast', 'multiturn', 'economy', 'cognitiveLog']
+        .map(key => [key, window.__DJSC[key]]);
+    const legacy = await import(pathToFileURL(join(_pkg, 'score/foundation/runtime/missingModules.js')).href);
+    const wiring = await import(pathToFileURL(join(_pkg, 'score/bootstrap/legacyFeatureInterfaces.js')).href);
+    const definitions = [
+        ['opponentPredict', 'score/model/predict/opponentPredict.js', 'legacyOpponentFeatures'],
+        ['teamBroadcast', 'score/perception/team/teamBroadcast.js', 'legacyTeamFeatures'],
+        ['multiturn', 'score/decision/strategy/multiturn.js', 'legacyPlanFeatures'],
+        ['economy', 'score/decision/resource/economy.js', 'legacyEconomyFeatures'],
+        ['cognitiveLog', 'score/cognition/log/cognitiveLog.js', 'legacyCognitiveFeatures'],
+    ];
+    for (const [name, file, exportedName] of definitions) {
+        const domain = await import(pathToFileURL(join(_pkg, file)).href);
+        eq(legacy[name], domain[exportedName], 'B1 ' + name + ' 旧入口共享所属模块对象');
+        eq(wiring[name], legacy[name], 'B1 ' + name + ' 启动装配不另建状态');
+    }
+    for (const [key, value] of globalBefore) {
+        eq(window.__DJSC[key], value, 'B1 再读旧路径不覆盖已装配的 ' + key);
+    }
+    const player = { id: 'b1-legacy-fixture', name: 'b1-legacy-fixture', hp: 3, countCards: () => 5 };
+    const prediction = legacy.opponentPredict.predict(player);
+    eq(prediction.cardDraw, 0.3, 'B1 对手旧特征默认摸牌值保持不变');
+    eq(prediction.probSha, 0.6, 'B1 对手旧特征进攻概率保持不变');
+    eq(legacy.teamBroadcast.getStatus(player).messageCount, 0, 'B1 团队旧字段仍可读取');
+    const plan = legacy.multiturn.plan(player);
+    eq(plan.turns, 3, 'B1 旧规划仍提供三回合');
+    eq(plan.aggression, 0.7, 'B1 旧规划进攻值保持不变');
+    eq(legacy.economy.evaluate(player).cardBalance, 0, 'B1 旧经济字段仍可读取');
+    eq(legacy.cognitiveLog.stats().confidence, 0, 'B1 旧认知日志字段仍可读取');
+    const sourceFS = await import('node:fs');
+    const compatibility = sourceFS.readFileSync(join(_pkg, 'score/foundation/runtime/missingModules.js'), 'utf8');
+    ok(!compatibility.includes('const _opponentMemory') && !compatibility.includes('window.__DJSC'),
+       'B1 基础目录兼容文件不再保存业务状态或直接挂载');
+}
+
+/* ---------- B2：迁移兼容、共享状态与导出格式 ---------- */
+{
+    const load = file => import(pathToFileURL(join(_pkg, file)).href);
+    const pairs = [
+        ['score/cognition/profile/profiles.js', 'score/foundation/config/profiles.js'],
+        ['score/model/calibrate/calibratorPanel.js', 'score/view/dashboard/calibratorPanel.js'],
+        ['score/foundation/io/export.js', 'score/bootstrap/dataExport.js'],
+        ['score/foundation/io/mergeExport.js', 'score/bootstrap/mergedDataExport.js'],
+    ];
+    for (const [oldPath, newPath] of pairs) {
+        const old = await load(oldPath), current = await load(newPath);
+        eq(Object.keys(old).join(','), Object.keys(current).join(','), 'B2 旧入口导出名称保持 ' + oldPath);
+        for (const name of Object.keys(old)) {
+            eq(old[name], current[name], 'B2 新旧入口共享实现 ' + name);
+        }
+    }
+    const oldTransfer = await load('score/foundation/io/exportAll.js');
+    const transfer = await load('score/bootstrap/dataTransfer.js');
+    const panel = await load('score/view/dashboard/exportPanel.js');
+    eq(oldTransfer.openExportPanel, panel.openExportPanel, 'B2 旧导出面板仍可打开同一实现');
+    for (const name of ['autoExportCheck', 'getAutoExportConfig', 'setAutoExportConfig', 'exportDistillPackage', 'exportFullTrainingPackage', 'exportFullBackup', 'importBackup', 'listExportedFiles', 'listImportableFiles']) {
+        eq(oldTransfer[name], transfer[name], 'B2 导出编排旧接口兼容 ' + name);
+    }
+    eq(window.__DJSC.export.panel, panel.openExportPanel, 'B2 全局面板接口仍已挂载');
+    eq(window.__DJSC.export.distill, transfer.exportDistillPackage, 'B2 全局蒸馏接口仍连接实际编排');
+    const oldProfiles = await load('score/cognition/profile/profiles.js');
+    const profiles = await load('score/foundation/config/profiles.js');
+    const storageBefore = new Map(_mem);
+    const profileBefore = profiles.exportProfilesJson();
+    try {
+        profiles.importProfilesJson(JSON.stringify({ v: 1, active: '迁移测试', list: [{ name: '迁移测试', ts: 1, data: { mode: 'standard' } }] }), 'replace');
+        eq(oldProfiles.loadProfile('迁移测试').data.mode, 'standard', 'B2 新入口写入的配置从旧入口读取');
+        const stored = JSON.parse(localStorage.getItem('无名AI_profiles'));
+        eq(stored.v, 1, 'B2 配置方案存储版本仍为 1');
+        eq(stored.list[0].data.mode, 'standard', 'B2 原配置键与快照格式不变');
+    } finally {
+        profiles.importProfilesJson(profileBefore, 'replace');
+        _mem.clear(); for (const [key, value] of storageBefore) _mem.set(key, value);
+    }
+    const host = await load('score/foundation/adapt/host.js');
+    const previousWrite = host.game.writeFile;
+    const writes = [];
+    try {
+        // 宿主文件写入被替换为内存记录；不落盘，不导入/清空训练数据。
+        host.game.writeFile = (content, dir, name, done) => {
+            writes.push({ content, dir, name });
+            // 仅验证数据编排，不触发结果面板或后续文件回调。
+        };
+        const r = transfer.exportFullTrainingPackage();
+        eq(r.ok, true, 'B2 完整训练包仍可构造');
+        const pkg = JSON.parse(writes[0].content);
+        eq(pkg.meta.version, 1, 'B2 完整训练包版本不变');
+        eq(pkg.meta.type, 'full_training', 'B2 完整训练包类型不变');
+        eq(pkg.distill.manifest.structure.output, 6, 'B2 训练标签结构不变');
+        ok(Array.isArray(pkg.distill.train), 'B2 训练样本数组保留');
+        ok(writes[0].dir.endsWith('/data/output/'), 'B2 原输出目录不变');
+        const distill = transfer.exportDistillPackage();
+        eq(distill.ok, true, 'B2 蒸馏包仍可编排首个文件');
+        ok(writes[1].name.startsWith('train_'), 'B2 蒸馏首个文件命名不变');
+        for (const line of writes[1].content.split('\n').filter(Boolean)) {
+            const row = JSON.parse(line);
+            ok(Array.isArray(row.features) && 'reward' in row && 'meta' in row, 'B2 JSONL 样本字段保留');
+        }
+    } finally { host.game.writeFile = previousWrite; }
+    const sourceFS = await import('node:fs');
+    const dataSource = sourceFS.readFileSync(join(_pkg, 'score/bootstrap/dataTransfer.js'), 'utf8');
+    ok(!dataSource.includes('document.') && !dataSource.includes('innerHTML'), 'B2 数据打包不再绘制导出面板');
+    const downloadSource = sourceFS.readFileSync(join(_pkg, 'score/foundation/io/download.js'), 'utf8');
+    ok(!downloadSource.includes('decision/') && !downloadSource.includes('model/'), 'B2 通用下载工具不读取决策和训练模块');
+}
+
+/* ---------- B3：分段连接及真实 Commit 延迟副作用 ---------- */
+{
+    const load = file => import(pathToFileURL(join(_pkg, 'score/decision', file)).href);
+    const source = readFileSync(join(_pkg, 'score/decision/engine/engine.js'), 'utf8');
+    const stages = ['buildDecisionContext', 'buildTargetContext', 'generateScoredCandidates', 'scoreCandidates',
+        'selectInitialCandidate', 'refineCandidatePlan', 'reviewCandidate', 'guardCandidate', 'attachDecisionEffects'];
+    const body = source.slice(source.indexOf('function bestAction()'), source.indexOf('function rulesDecide()'));
+    let previous = -1;
+    for (const name of stages) {
+        const position = body.indexOf(name + '(');
+        ok(position > previous, 'B3 主链按顺序调度 ' + name);
+        previous = position;
+    }
+    const engine = await load('engine/engine.js');
+    const rules = await load('rules/basicRules.js');
+    eq(engine._isLegalSkillTarget, rules._isLegalSkillTarget, 'B3 引擎旧技能目标接口指向同一实现');
+    eq(engine._skillTargetRange, rules._skillTargetRange, 'B3 引擎旧目标范围接口保持');
+    const oldGuard = await import(pathToFileURL(join(_pkg, 'score/model/net/modelGuard.js')).href);
+    const guard = await load('safety/modelGuard.js');
+    const guardPanel = await import(pathToFileURL(join(_pkg, 'score/view/dashboard/guardPanel.js')).href);
+    for (const name of ['guardCheck', 'applyGuardPenalty', 'guardStatus', 'resetGuard', 'GUARD_STATS', 'RED_LINES']) {
+        eq(oldGuard[name], guard[name], 'B3 护栏旧路径共享实现/状态 ' + name);
+    }
+    eq(oldGuard.openGuardPanel, guardPanel.openGuardPanel, 'B3 护栏展示旧入口兼容');
+    eq(window.__DJSC.modelGuard.check, guard.guardCheck, 'B3 全局护栏接口连接决策域实现');
+    const oldValue = await import(pathToFileURL(join(_pkg, 'score/model/net/deepValue.js')).href);
+    const value = await load('utility/deepValue.js');
+    for (const name of Object.keys(oldValue)) eq(oldValue[name], value[name], 'B3 规则价值旧入口兼容 ' + name);
+    const generator = await load('generation/scoredCandidates.js');
+    const acts = [];
+    const me = { name: 'b3-fixture', hp: 4, maxHp: 4, skills: [], getCards: () => [] };
+    generator.generateScoredCandidates({ me, acts, hand: [], sit: { mode: 'balanced' } }, {});
+    eq(acts.length, 1, 'B3 无技能和手牌仍生成一个结束候选');
+    eq(acts[0].type, 'end', 'B3 空局面候选保持结束回合');
+    eq(acts[0].score, 0, 'B3 结束候选不改变数值');
+    const effects = await load('execution/decisionEffects.js');
+    const txModule = await load('state/decisionTransaction.js');
+    const result = { rule: 'sha' };
+    const calls = [];
+    const tx = effects.attachDecisionEffects(result, { type: 'card', id: 'sha', target: 'b3-target' }, [
+        { label: 'first', fn: (actual, info) => { calls.push([actual.id, info.id]); } },
+        { label: 'failure', fn: () => { throw new Error('预期的观察模块故障'); } },
+        { label: 'last', fn: () => { calls.push('last'); } },
+    ], { meta: { fixture: true } });
+    eq(calls.length, 0, 'B3 创建返回值不会提前产生记录或训练');
+    eq(result.__djscTransaction, tx, 'B3 返回值关联唯一事务');
+    eq(Object.keys(result).includes('__djscTransaction'), false, 'B3 事务不进入导出 JSON');
+    const player = {};
+    txModule.stageDecisionTransaction(player, tx);
+    eq(calls.length, 0, 'B3 stage 也不执行学习副作用');
+    eq(txModule.commitDecisionTransaction(player, { type: 'card', id: 'sha', target: 'b3-target' }).ok, true,
+       'B3 匹配执行 Commit 后才触发延迟效果');
+    eq(calls.length, 2, 'B3 单个记录故障不阻断后续效果');
+    eq(calls[0][1], tx.id, 'B3 效果接收同一 decisionId');
+    eq(calls[1], 'last', 'B3 副作用按原顺序调用');
+    txModule.commitDecisionTransaction(player, { type: 'card', id: 'sha', target: 'b3-target' });
+    eq(calls.length, 2, 'B3 重复 Commit 不重复回填');
+    const learning = readFileSync(join(_pkg, 'score/decision/feedback/executedLearning.js'), 'utf8');
+    ok(body.includes("_deferEffect('learning-and-postcheck'") &&
+       body.includes('recordExecutedLearning(') && learning.includes('decisionId: _txInfo && _txInfo.id'),
+       'B3 学习模块只从原 Commit 回调接入并传递事务编号');
+    const review = readFileSync(join(_pkg, 'score/decision/selection/modelReview.js'), 'utf8');
+    ok(review.includes('const { best, bestT } = readFinalState()') && body.includes('readFinalState: () => ({ best, bestT })'),
+       'B3 延迟观测读取护栏之后的最终 winner 和目标');
+}
+
+/* ---------- B3：旧宿主注册入口拆分 ---------- */
+{
+    const host = await import(pathToFileURL(join(_pkg, 'js/shared/utils.js')).href);
+    const previousSkills = host.lib.skill;
+    try {
+        host.lib.skill = {};
+        const definitions = [
+            ['startupSkills', 'registerStartupSkills', ['_aiyh_firstKs', '_aiyh_holdFire']],
+            ['globalRules', 'registerGlobalRules', ['aiyh_gjcx_qj', '_aiyh_reserved_shan', '_noScopeSkill', 'aiMangju']],
+            ['identityRules', 'registerIdentityRules', ['gjcx_zhuAi', 'gjcx_neiAi', 'gjcx_neiZhong', 'gjcx_neiFan', 'gjcx_neiJiang']],
+        ];
+        const order = [];
+        for (const [file, name, keys] of definitions) {
+            const module = await import(pathToFileURL(join(_pkg, 'js/content/legacy', file + '.js')).href);
+            module[name]();
+            order.push(...keys);
+            for (const key of keys) ok(!!host.lib.skill[key], 'B3 原宿主技能名仍注册 ' + key);
+        }
+        eq(Object.keys(host.lib.skill).join(','), order.join(','), 'B3 十一组旧规则注册顺序保持');
+        eq(typeof host.lib.skill._aiyh_firstKs.toLoad, 'function', 'B3 开局配置同步回调保留');
+        eq(typeof host.lib.skill.aiyh_gjcx_qj.mod.aiOrder, 'function', 'B3 通用出牌顺序回调保留');
+        eq(host.lib.skill.gjcx_zhuAi.content.constructor.name, 'AsyncFunction', 'B3 主公异步回调类型保持');
+        const source = readFileSync(join(_pkg, 'js/content/precontent.js'), 'utf8');
+        const body = source.slice(source.indexOf('export function precontent'));
+        ok(body.indexOf('initAICardOpt();') < body.indexOf('registerStartupSkills();') &&
+           body.indexOf('registerStartupSkills();') < body.indexOf('registerGlobalRules();') &&
+           body.indexOf('registerGlobalRules();') < body.indexOf('registerIdentityRules();'),
+           'B3 precontent 保留初始化和三组规则的装配顺序');
+    } finally { host.lib.skill = previousSkills; }
+}
+
+/* ---------- B3 收尾：状态所有权与技能公共入口 ---------- */
+{
+    const load = file => import(pathToFileURL(join(_pkg, file)).href);
+    const engine = await load('score/decision/engine/engine.js');
+    const ledger = await load('score/decision/scoring/scoreLedger.js');
+    ledger.resetLedgerState();
+    const oldRound = engine.getRound();
+    const player = { name: 'b3-ledger', name1: 'b3-ledger' };
+    ledger.give(player, 2.5, '结构迁移夹具');
+    eq(engine.getRound(), ledger.round, 'B3 台账与旧引擎接口读取同一对象');
+    eq(engine.getScoreLog(), ledger.scoreLog, 'B3 记分日志不复制');
+    eq(engine.getREC(), ledger.REC, 'B3 事件记录不复制');
+    eq(ledger.conservationLedger().balance, 0, 'B3 抽出台账后仍逐笔守恒');
+    engine.resetRound();
+    ok(engine.getRound() !== oldRound && engine.getRound() === ledger.round, 'B3 重置后的实时绑定继续对接');
+    eq(Object.keys(engine.getRound()).length, 0, 'B3 旧重置入口仍生效');
+    const skills = await load('score/decision/skills/skills.js');
+    const tags = await load('score/decision/skills/skillSourceTags.js');
+    const profiles = await load('score/decision/skills/skillProfiles.js');
+    const advice = await load('score/decision/skills/skillAdvice.js');
+    const display = await load('score/view/report/skillPresentation.js');
+    for (const [name, owner] of [['skillTagsOf', tags], ['_collectSource', tags], ['skillProfileOf', profiles],
+        ['aggregateSkillTags', profiles], ['skillBranchesOf', advice], ['detectCombo', advice], ['renderSkillBreakdownText', display]]) {
+        eq(skills[name], owner[name], 'B3 技能公共入口共享唯一实现 ' + name);
+    }
+    const host = await load('score/foundation/adapt/host.js');
+    const id = 'b3_skill_cache_fixture';
+    const previous = host.lib.skill[id];
+    try {
+        host.lib.skill[id] = { enable: 'phaseUse', content() { player.draw(1); } };
+        skills.clearGainCache();
+        const before = profiles.skillProfileOf(id);
+        eq(before, skills.skillProfileOf(id), 'B3 画像缓存新旧入口共享');
+        skills.clearGainCache();
+        ok(profiles.skillProfileOf(id) !== before, 'B3 旧清理入口同时失效实际画像缓存');
+    } finally { host.lib.skill[id] = previous; skills.clearGainCache(); ledger.resetLedgerState(); }
+}
+
+/* ---------- B4：模型状态单例、快照和校准历史共享 ---------- */
+{
+    const load = file => import(pathToFileURL(join(_pkg, file)).href);
+    const original = await load('score/model/net/modelState.js');
+    const lifecycle = await load('score/model/state/modelLifecycle.js');
+    eq(Object.keys(original).join(','), Object.keys(lifecycle).join(','), 'B4 旧模型入口完整保留导出名称');
+    for (const name of Object.keys(original)) eq(original[name], lifecycle[name], 'B4 模型新旧入口共享唯一实现 ' + name);
+    eq(window.__DJSC.modelState.getState, lifecycle.getState, 'B4 全局模型读取同一状态机');
+    eq(window.__DJSC.modelState.forceTrain, lifecycle.forceTrain, 'B4 训练入口仍连接同一候选槽');
+    const history = await load('score/model/calibrate/calibrationHistory.js');
+    const view = await load('score/view/dashboard/calibratorPanel.js');
+    eq(view.getCalibrationHistory, history.getCalibrationHistory, 'B4 校准展示读取模型持有的历史');
+    eq(window.__DJSC.calibHistory.record, history.recordCalibrationSnapshot, 'B4 原结算记录接口仍连接同一历史');
+    const snapshots = await load('score/model/weights/modelSnapshot.js');
+    const weights = await load('score/model/weights/weights.js');
+    const snapshot = snapshots._snapshotWeights(weights);
+    ok(snapshots._snapshotComplete(snapshot), 'B4 快照校验仍覆盖完整网络与投影层');
+    const clone = snapshots._cloneSnapshot(snapshot);
+    ok(clone.w1 !== snapshot.w1 && clone.pr2 !== snapshot.pr2, 'B4 候选复制不共享在线权重数组');
+    const bad = { ...snapshot, b4: [] };
+    eq(snapshots._snapshotComplete(bad), false, 'B4 缺价值头的快照仍被拒绝');
+    const source = readFileSync(join(_pkg, 'score/model/state/modelLifecycle.js'), 'utf8');
+    ok(!source.includes('document.') && !source.includes("alert("), 'B4 状态机不再直接操作提示界面');
+    ok(source.includes("const STORAGE_KEY = 'djsc_model_state'") && source.includes('const STATE_V = 2'),
+       'B4 原存储键与状态版本保持不变');
+}
+
+/* ---------- B5：真实宿主暴露出的卸载与反射模式 ---------- */
+{
+    const panel = await import(pathToFileURL(join(_pkg, 'score/view/panel/panel.js')).href);
+    const savedRoot = window.__DJSC;
+    panel.uninstallDebugBridge();
+    const calibrator = { stats: () => ({ total: 0 }) };
+    const openPanel = () => {};
+    const baselineLog = () => 'baseline';
+    const root = { calibrator, openCalibratorPanel: openPanel, log: baselineLog };
+    window.__DJSC = root;
+    try {
+        panel.installDebugBridge();
+        const otherOwner = () => 'new owner';
+        window.__DJSC.log = otherOwner;
+        panel.uninstallDebugBridge();
+        eq(window.__DJSC, root, 'B5 卸载调试桥不删除全局模块根对象');
+        eq(window.__DJSC?.calibrator, calibrator, 'B5 卸载保留校准接口');
+        eq(window.__DJSC?.openCalibratorPanel, openPanel, 'B5 卸载保留面板入口');
+        eq(window.__DJSC?.log, otherOwner, 'B5 不删除后来由其它来源接管的成员');
+        panel.installDebugBridge();
+        panel.uninstallDebugBridge();
+        eq(window.__DJSC?.log, otherOwner, 'B5 再安装卸载恢复原成员');
+    } finally { window.__DJSC = savedRoot; }
+    const scanner = await import(pathToFileURL(join(_pkg, 'score/foundation/runtime/globalScanner.js')).href);
+    const host = await import(pathToFileURL(join(_pkg, 'score/foundation/adapt/host.js')).href);
+    const previousPlayer = host.lib.element.Player;
+    let accessed = 0;
+    const proto = { chooseFixture() {} };
+    Object.defineProperty(proto, 'offsetHeight', { enumerable: true, get() { accessed++; throw new TypeError('Illegal invocation'); } });
+    proto.chooseAnotherFixture = function () {};
+    host.lib.element.Player = { prototype: proto };
+    try {
+        const names = scanner.scanPlayerPrototype();
+        eq(accessed, 0, 'B5 反射扫描不执行宿主访问器');
+        ok(names.includes('chooseFixture') && names.includes('chooseAnotherFixture'), 'B5 访问器不导致整轮扫描丢失');
+    } finally { host.lib.element.Player = previousPlayer; }
+}
+
+/* B5 浏览器为 ESM 宿主，不保证存在全局 game；目标查找必须走适配桥。 */
+{
+    const host = await import(pathToFileURL(join(_pkg, 'score/foundation/adapt/host.js')).href);
+    const guard = await import(pathToFileURL(join(_pkg, 'score/decision/safety/modelGuard.js')).href);
+    const previousPlayers = host.game.players;
+    const previousGlobal = Object.getOwnPropertyDescriptor(globalThis, 'game');
+    const me = { name: 'b5-actor', hp: 4 }, target = { name: 'b5-target', hp: 4, isDead: () => false };
+    try {
+        delete globalThis.game;
+        host.game.players = [me, target];
+        const result = guard.guardCheck(me, { type: 'card', id: 'b5_fixture', score: 1, target: target.name }, { allCandidates: [] });
+        eq(result.ok, true, 'B5 没有全局 game 时仍从宿主桥找到真实存活目标');
+    } finally {
+        host.game.players = previousPlayers;
+        if (previousGlobal) Object.defineProperty(globalThis, 'game', previousGlobal);
+    }
+}
+
+/* B5 实际入口的收益快照必须带上事务编号，并且不可重复拍摄。 */
+{
+    const host = await import(pathToFileURL(join(_pkg, 'score/foundation/adapt/host.js')).href);
+    const effects = await import(pathToFileURL(join(_pkg, 'score/decision/execution/decisionEffects.js')).href);
+    const post = await import(pathToFileURL(join(_pkg, 'score/decision/analysis/postCheck.js')).href);
+    const previous = host.game.players;
+    const me = { name: 'b5-feedback-actor', hp: 4, maxHp: 4, countCards: () => 3, getCards: () => [] };
+    const target = { name: 'b5-feedback-target', hp: 4, maxHp: 4, countCards: () => 3, getCards: () => [] };
+    try {
+        host.game.players = [me, target];
+        const tx = { id: 'b5-real-entry-id', meta: { postCheck: { action: { type: 'card', id: 'sha' }, target, isEnemy: true } } };
+        const key = effects.captureExecutionSnapshot(me, tx);
+        ok(!!key, 'B5 真实入口建立执行前快照');
+        target.hp = 3;
+        eq(effects.captureExecutionSnapshot(me, tx), key, 'B5 再进入入口复用同一快照，不改成动作后快照');
+        const result = post.postCheckAfter(key, me, target);
+        eq(result.decisionId, tx.id, 'B5 真实入口收益结果保留同一 decisionId');
+        eq(result.id, 'sha', 'B5 反馈动作不串写');
+        ok(result.gain > 0, 'B5 消费原快照可看到实际目标血量变化');
+    } finally { host.game.players = previous; }
+}
 
 /* ---------- 汇总 ---------- */
 process.stdout.write('\n');

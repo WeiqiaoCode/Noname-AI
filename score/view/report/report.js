@@ -12,7 +12,7 @@
  * 叶子模块：仅依赖 engine / observer / memory 的对外查询接口。
  */
 import { lib, game, ui, get, _status } from '../../foundation/adapt/host.js';
-import { getRound, getScoreLog, getDecisionLog } from '../../decision/engine/engine.js';
+import { getRound, getScoreLog, getDecisionLog } from '../../foundation/runtime/engineQueries.js';
 import { styleOf } from '../../perception/observer/observer.js';
 import { storeStats } from '../../perception/memory/memory.js';
 import { archiveStats } from '../../perception/archive/archive.js';

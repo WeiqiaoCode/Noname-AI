@@ -66,7 +66,9 @@ ok(detail.some(x => x.includes('阶段=mid') && x.includes('风险=medium') && x
 ok(detail.some(x => x.includes('性能：') && x.includes('planner=7428ms') && x.includes('candidates=531ms')),
 	'10.53 详细模式显示按耗时排序的性能热点');
 
-const engine = readFileSync(join(root, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+const engine = readFileSync(join(root, 'score', 'decision', 'engine', 'engine.js'), 'utf8') +
+    readFileSync(join(root, 'score/decision/execution/decisionEffects.js'), 'utf8') +
+    readFileSync(join(root, 'score/decision/records/decisionRecords.js'), 'utf8');
 const config = readFileSync(join(root, 'js', 'config', 'config.js'), 'utf8');
 const schema = await import(pathToFileURL(join(root, 'js', 'config', 'configSchema.js')).href + '?test=4.0.8');
 const panel = readFileSync(join(root, 'score', 'view', 'panel', 'panel.js'), 'utf8');

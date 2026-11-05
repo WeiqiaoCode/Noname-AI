@@ -83,10 +83,15 @@ export function scanPlayerPrototype() {
 
         const found = [];
         for (const key in proto) {
-            if (typeof proto[key] !== 'function') continue;
             if (BLACKLIST.has(key)) continue;
             if (key.startsWith('_')) continue;
             if (key.startsWith('$')) continue;
+            /* HTMLElement 等宿主原型可能有只允许实例读取的访问器。
+             * 扫描描述符，不在原型上执行 getter，避免整轮 Illegal invocation。 */
+            let owner = proto;
+            while (owner && !Object.prototype.hasOwnProperty.call(owner, key)) owner = Object.getPrototypeOf(owner);
+            const descriptor = owner && Object.getOwnPropertyDescriptor(owner, key);
+            if (!descriptor || typeof descriptor.value !== 'function') continue;
             found.push(key);
         }
         return found;

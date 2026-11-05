@@ -9,7 +9,7 @@
   "knownHiddenInfoDebt": [
     {
       "id": "modelGuard-exact-opponent-sha-count",
-      "path": "score/model/net/modelGuard.js",
+      "path": "score/decision/safety/modelGuard.js",
       "receiver": "p",
       "operation": "countCards",
       "zone": "hs",
@@ -18,7 +18,7 @@
     },
     {
       "id": "engine-enemy-nature-hand-enumeration",
-      "path": "score/decision/engine/engine.js",
+      "path": "score/decision/scoring/cardCandidateScore.js",
       "receiver": "p",
       "operation": "getCards",
       "zone": "h",

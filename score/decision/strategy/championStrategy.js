@@ -27,6 +27,12 @@ const MIN_SAMPLES = 5;           /* 一个决策点至少几条样本才认为�
 const MAX_PER_ACTION = 24;       /* 每类(action)最多保留的决策点嵌入条数，防存储膨胀 */
 const SIM_THRESHOLD = 0.78;      /* ★ 泛化相似度阈值：≥0.78 才允许跨英雄复用嵌入 */
 
+/* 冠军策略提权只接受有限正数；0、缺省及无效配置均表示关闭。 */
+export function resolveChampionBoost(value) {
+    const boost = Number(value);
+    return Number.isFinite(boost) && boost > 0 ? boost : 0;
+}
+
 /* ★ 上下文维度索引组（与 features.js 的 130 维布局对齐）。
  * 相似度只在这组"场景"维度上计算（目标/局势/卡牌强度），
  * 故意排除动作类型标签(32-35)、英雄身份等，避免相似度虚高导致"乱搬"。 */

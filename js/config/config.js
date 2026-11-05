@@ -290,7 +290,7 @@ export let config = {
 					window.__DJSC.mergeExportAndDownload().then(finish).catch(function (e) { alert('导出失败：' + e.message); });
 				} else {
 					/* 合并导出模块未加载 → 动态加载后执行 */
-					import('../../score/foundation/io/mergeExport.js').then(function (m) {
+					import('../../score/bootstrap/mergedDataExport.js').then(function (m) {
 						m.mergeExportAndDownload().then(finish).catch(function (e) { alert('导出失败：' + e.message); });
 					}).catch(function (e) {
 						alert('合并导出模块加载失败：' + e.message);
@@ -479,7 +479,7 @@ export let config = {
 					return false;
 				}
 				/* 对局日志（人+机，含玩家/AI操作）一并归入本入口导出 */
-				import('../../score/foundation/io/export.js').then(function (ex) {
+				import('../../score/bootstrap/dataExport.js').then(function (ex) {
 					const store = window.__DJSC && window.__DJSC.gameLogStore;
 					let extra = '';
 					if (store && store.gameCount()) {
@@ -1156,7 +1156,7 @@ export let config = {
 			intro: '查看模型护栏的拦截统计、冷却状态、红线类型',
 			onclick: function () {
 				try {
-					import('../../score/model/net/modelGuard.js').then(function (m) {
+					import('../../score/view/dashboard/guardPanel.js').then(function (m) {
 						m.openGuardPanel();
 					}).catch(function (e) {
 						alert('模型护栏面板加载失败：' + e.message);

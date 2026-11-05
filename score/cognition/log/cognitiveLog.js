@@ -62,3 +62,45 @@ if (typeof window !== 'undefined') {
     window.__DJSC = window.__DJSC || {};
     window.__DJSC.cognitionLog = { log: logCognition, recent: getCognitionLog, stats: cognitionStats, reset: resetCognitionLog };
 }
+
+/* 旧特征接口：从 missingModules 归位，保留旧字段、状态与计算方式。
+ * 与本模块正式算法不等价，暂不互相替换，避免改变已训练模型的输入。 */
+/* ================= 5. cognitiveLog - 认知日志 ================= */
+const _cognitiveEntries = [];  /* 认知日志 */
+
+export const legacyCognitiveFeatures = {
+    /* 记录一次决策 */
+    log: function(decision, reasoning, confidence) {
+        try {
+            _cognitiveEntries.push({
+                decision: decision,
+                reasoning: reasoning,
+                confidence: confidence || 0.5,
+                time: Date.now(),
+            });
+            /* 只保留最近100条 */
+            if (_cognitiveEntries.length > 100) _cognitiveEntries.shift();
+        } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+    },
+
+    /* 获取最近日志 */
+    recent: function(count) {
+        count = count || 10;
+        return _cognitiveEntries.slice(-count);
+    },
+
+    /* 统计 */
+    stats: function() {
+        const total = _cognitiveEntries.length;
+        const avgConf = total > 0
+            ? _cognitiveEntries.reduce((a, b) => a + b.confidence, 0) / total
+            : 0;
+        return {
+            totalEntries: total,
+            avgConfidence: avgConf,
+            /* ★ 兼容features.js的字段名 */
+            confidence: avgConf,           // 模型置信度
+            conflicts: Math.floor(total * 0.1),  // 历史冲突次数（估算）
+        };
+    },
+};

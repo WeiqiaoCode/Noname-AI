@@ -79,3 +79,65 @@ export function multiTurnForecast(me) {
 		return { overall: "stable", r1: null, r2: null, r3: null, instant: null, advice: "预测异常" };
 	}
 }
+
+/* 旧特征接口：从 missingModules 归位，保留旧字段、状态与计算方式。
+ * 与本模块正式算法不等价，暂不互相替换，避免改变已训练模型的输入。 */
+/* ================= 3. multiturn - 多回合规划 ================= */
+const _planHistory = [];  /* 规划历史 */
+
+export const legacyPlanFeatures = {
+    /* ★ 规划接口（兼容features.js调用） */
+    plan: function(me) {
+        try {
+            if (!me) return null;
+            const plan = this.makePlan(me);
+            return {
+                turns: plan.length,
+                firstTurn: plan[0] || '',
+                aggression: plan[0] && plan[0].includes('进攻') ? 0.7 : (plan[0] && plan[0].includes('防守') ? 0.3 : 0.5),
+            };
+        } catch (e) { return null; }
+    },
+
+    /* 生成3回合规划 */
+    makePlan: function(me) {
+        try {
+            const hp = me.hp || 1;
+            const handCount = me.countCards ? me.countCards('h') : 0;
+            const plan = [];
+
+            /* 第1回合：根据当前局面 */
+            if (hp <= 2) {
+                plan.push('回合1: 保守防守，留桃保命');
+            } else if (handCount >= 5) {
+                plan.push('回合1: 主动进攻，打输出');
+            } else {
+                plan.push('回合1: 正常出牌，过牌为主');
+            }
+
+            /* 第2回合：预期 */
+            plan.push('回合2: 观察局势，调整策略');
+
+            /* 第3回合：残局 */
+            plan.push('回合3: 残局应对，根据存活人数');
+
+            _planHistory.push({ plan: plan, time: Date.now() });
+            if (_planHistory.length > 10) _planHistory.shift();
+
+            return plan;
+        } catch (e) { return ['回合1: 正常出牌']; }
+    },
+
+    /* 获取当前规划 */
+    current: function() {
+        return _planHistory.length > 0 ? _planHistory[_planHistory.length - 1].plan : [];
+    },
+
+    /* 统计 */
+    stats: function() {
+        return {
+            plansMade: _planHistory.length,
+            currentPlan: this.current(),
+        };
+    },
+};

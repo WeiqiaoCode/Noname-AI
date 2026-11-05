@@ -9,13 +9,13 @@
 
 /* ================= 决策积分引擎 · 引擎插件（核心示范） =================
  * 把决策引擎包装成标准插件声明。
- * ★ 渐进式说明：真实 hook 安装仍由 index.js 成熟路径完成（避免双重安装），
+ * 真实 hook 安装由 bootstrap/lifecycle.js 完成（避免双重安装），
  *   插件层负责统一「清单/依赖/生命周期广播/状态」，onInstall 只登记与检查。
  *   后续若取消 index.js 直装，把 installHooks() 移入 onInstall、uninstallHooks() 移入 onUninstall 即可无缝切换。 */
 import { definePlugin, registerPlugin, pluginState } from '../foundation/runtime/plugins.js';
-/* ★ P0-01：补 installHooks 导入——此前未导入导致 onInstall 里 typeof 判断恒失败 → 插件及依赖它的
- *   panelPlugin/skillPlugin 全部被 disabled。 */
-import { installHooks, startSettleWatch, clearScoreState } from '../decision/engine/engine.js';
+/* 查询实际安装状态，不仅检查安装函数是否存在；本插件不负责安装主引擎。 */
+import { clearScoreState } from '../decision/engine/engine.js';
+import { getInstalled } from '../foundation/runtime/engineQueries.js';
 
 const enginePlugin = definePlugin({
 	id: 'djsc.engine',
@@ -26,8 +26,8 @@ const enginePlugin = definePlugin({
 	tags: ['core', 'engine'],
 	onInstall: function () {
 		/* 校验引擎可用（不重复安装 hook，装由 index.js 负责） */
-		if (typeof installHooks !== 'function' || typeof startSettleWatch !== 'function') {
-			throw new Error('engine 接口不可用');
+		if (!getInstalled()) {
+			throw new Error('主引擎尚未由启动管理安装');
 		}
 	},
 	onUninstall: function () {

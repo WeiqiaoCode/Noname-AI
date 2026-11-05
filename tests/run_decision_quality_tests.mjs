@@ -22,7 +22,7 @@ function eq(a, b, name) { ok(a === b, name, 'got ' + JSON.stringify(a) + ' want 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 const baseline = JSON.parse(readFileSync(join(here, 'quality', 'baseline.json'), 'utf8'));
-const engineSource = readFileSync(join(root, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+const engineSource = ['engine/engine.js', 'context/decisionContext.js', 'context/targetContext.js', 'rules/basicRules.js', 'generation/scoredCandidates.js', 'scoring/candidateScoring.js', 'selection/plannedSelection.js', 'selection/modelReview.js', 'safety/finalCandidateGuard.js', 'feedback/executedLearning.js', 'execution/decisionEffects.js', 'scoring/scoreLedger.js', 'scoring/scoreEvents.js', 'scoring/candidateValuation.js', 'scoring/skillCandidateScore.js', 'scoring/cardCandidateScore.js', 'scoring/equipCandidateScore.js', 'records/decisionRecords.js', 'settlement/gameSettlement.js', 'feedback/decisionObservations.js', 'execution/hostHooks.js'].map(file => readFileSync(join(root, 'score/decision', file), 'utf8')).join('\n');
 const traceSource = readFileSync(join(root, 'score', 'decision', 'engine', 'decisionTrace.js'), 'utf8');
 const characterPolicySource = readFileSync(join(root, 'score', 'decision', 'strategy', 'characterPolicy.js'), 'utf8');
 const keepStrategySource = readFileSync(join(root, 'score', 'decision', 'cardplay', 'keepStrategy.js'), 'utf8');

@@ -40,6 +40,7 @@ export const invokeHost = gateway.invokeHost;
 export const invokeObservedHost = gateway.invokeObservedHost;
 export const stageExecutionDecision = gateway.stageExecutionDecision;
 export const commitExecution = gateway.commitExecution;
+export const confirmExecutionFromHostEvent = gateway.confirmExecutionFromHostEvent;
 export const cancelExecution = gateway.cancelExecution;
 export const pendingExecution = gateway.pendingExecution;
 export const executionGatewayStats = gateway.executionGatewayStats;

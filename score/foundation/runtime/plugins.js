@@ -75,6 +75,8 @@ export function installPlugin(id) {
 	try {
 		const p = PLUGINS.get(id);
 		if (!p) return { ok: false, reason: '未注册插件: ' + id };
+		/* 已完成的安装不重复执行，不重记 props 所有权或重启定时器。 */
+		if (STATE.get(id) === 'installed') return { ok: true, id: id, alreadyInstalled: true };
 
 		/* 依赖检查 */
 		for (const dep of p.depends || []) {
@@ -232,6 +234,8 @@ export function uninstallAllPlugins() {
 			try { uninstallPlugin(id); n++; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		}
 	}
+	/* 完整卸载后，下次装载允许再次发送启动广播。 */
+	_scanRun = false;
 	return n;
 }
 

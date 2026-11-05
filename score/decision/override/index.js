@@ -17,7 +17,8 @@ import { installUseOverride, uninstallUseOverride } from './use.js';
 import { installRespondOverride, uninstallRespondOverride } from './respond.js';
 import { installDiscardOverride, uninstallDiscardOverride } from './discard.js';
 import { installCompareOverride, uninstallCompareOverride } from './compare.js';
-import { resetCircuit, circuitStatus } from './circuit.js';
+/* 浏览器原生 ES Module 要求：转出名称必须先在本模块建立绑定。 */
+import { resetCircuit, circuitStatus, isTripped } from './circuit.js';
 import { isExecutionLayerEnabled, executionGatewayStats, resetExecutionGateway } from '../execution/executionGateway.js';
 import { log } from '../../foundation/diag/logger.js';
 

@@ -36,7 +36,7 @@ import { storeStats, resetStore, importStore, clearStore, exportStore } from '..
 import { overrideStatus, getOverrideStats, resetOverrideStats } from '../../decision/override/index.js';
 import { showReport, buildReportHtml } from '../report/report.js';
 import { getArchive, archiveStats, clearArchive, fmtTime, getGameDecisions, exportArchiveJson, fullArchiveStats } from '../../perception/archive/archive.js';
-import { exportAllJson, exporters, downloadFile, exportAllFile, exportModuleFile, exportBatchFiles, downloadTextFile, _tsSuffix } from '../../foundation/io/export.js';
+import { exportAllJson, exporters, downloadFile, exportAllFile, exportModuleFile, exportBatchFiles, downloadTextFile, _tsSuffix } from '../../bootstrap/dataExport.js';
 import { storeStats as gameLogStats, listGames as listGameLogs, clearGames as clearGameLogs, retainCap as gameLogRetainCap, exportAllJson as exportGameLogsAll, exportPlayersJson as exportGameLogsPlayers, exportBotsJson as exportGameLogsBots, exportPairsJson as exportGameLogsPairs, shareGameLogs } from '../../perception/journal/gameLogStore.js';
 import { exportPersonality, importPersonality, copyToClipboard } from '../../foundation/io/share.js';
 import { getFeedbackStats, resetFeedback, feedbackCount } from '../../perception/feedback/feedback.js';
@@ -53,7 +53,7 @@ import { exportDecisionsJson, exportDecisionsMarkdown, parseDecisionsJson, showI
 import { importArchiveJson } from '../../perception/archive/archive.js';
 import { getPlayerMemoryStats, resetPlayerMemory } from '../../perception/feedback/styleFeedback.js';
 import { skillBranchesOf, checkBranch, skillStagesOf, skillInteractionOf } from '../../decision/skills/skills.js';
-import { listProfiles, saveProfile, loadProfile, deleteProfile, renameProfile, exportProfilesJson, importProfilesJson, resetProfiles, profileCount, buildSnapshot, applySnapshot } from '../../cognition/profile/profiles.js';
+import { listProfiles, saveProfile, loadProfile, deleteProfile, renameProfile, exportProfilesJson, importProfilesJson, resetProfiles, profileCount, buildSnapshot, applySnapshot } from '../../foundation/config/profiles.js';
 import { getLogLevel, setLogLevel } from '../../foundation/diag/logger.js';
 import { selfCheck } from '../../foundation/adapt/compat.js';
 import { getDecisionFeedbackStats, resetDecisionFeedback } from '../../decision/feedback/decisionFeedback.js';
@@ -3728,13 +3728,24 @@ function stopDialogGuard() {
 
 /* ================= 调试桥（window.__DJSC，供面板/外部调用） ================= */
 let _bridgeInstalled = false;
+const _bridgeBindings = new Map();
+let _bridgeAppendOriginal;
+let _bridgeAppendInstalled = false;
+/* 只记录调试桥实际写入的顶层成员；卸载不能删除其它模块共用的根对象。 */
+function bindDebugBridge(api) {
+	const target = window.__DJSC;
+	for (const key of Object.keys(api)) {
+		_bridgeBindings.set(key, { before: Object.getOwnPropertyDescriptor(target, key), value: api[key] });
+		target[key] = api[key];
+	}
+}
 function installDebugBridge() {
 	try {
 		if (_bridgeInstalled) return;
 		_bridgeInstalled = true;
 		/* ★ 修复：不要覆盖已有 __DJSC，而是合并 */
 		window.__DJSC = window.__DJSC || {};
-		Object.assign(window.__DJSC, {
+		bindDebugBridge({
 			round: function () { try { return JSON.parse(JSON.stringify(getRound())); } catch (e) { return {}; } },
 			log: function () { try { return JSON.parse(JSON.stringify(getScoreLog().slice(-30))); } catch (e) { return []; } },
 			conservation: function () { try { return getConservationLedger(); } catch (e) { return { err: String(e) }; } },
@@ -4646,7 +4657,9 @@ function installDebugBridge() {
 		/* ★ 挂载内部方法供 aiOverride 调用 */
 		try {
 			if (typeof window !== 'undefined') {
+				_bridgeAppendOriginal = Object.getOwnPropertyDescriptor(window, '__DJSC_appendDecision');
 				window.__DJSC_appendDecision = appendDecision;
+				_bridgeAppendInstalled = true;
 			}
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 
@@ -4678,8 +4691,20 @@ function installDebugBridge() {
 		} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 function uninstallDebugBridge() {
-	try { delete window.__DJSC; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
-	try { delete window.__DJSC_appendDecision; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	try {
+		const target = window.__DJSC;
+		for (const [key, binding] of _bridgeBindings) {
+			if (!target || target[key] !== binding.value) continue;
+			if (binding.before) Object.defineProperty(target, key, binding.before);
+			else delete target[key];
+		}
+		if (_bridgeAppendInstalled && window.__DJSC_appendDecision === appendDecision) {
+			if (_bridgeAppendOriginal) Object.defineProperty(window, '__DJSC_appendDecision', _bridgeAppendOriginal);
+			else delete window.__DJSC_appendDecision;
+		}
+	} catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
+	_bridgeBindings.clear();
+	_bridgeAppendInstalled = false;
 	_bridgeInstalled = false;
 }
 function importClearGainCache() { try { clearGainCache(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); } }

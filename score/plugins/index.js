@@ -19,7 +19,9 @@ import './cognitionPlugin.js';   /* ★ 新增功能示范：运行时情报中�
 
 import { installAllPlugins, uninstallAllPlugins, listPlugins, installedCount, pluginCount, scan, pluginState } from '../foundation/runtime/plugins.js';
 
-/* 收集所有插件并返回状态清单
+/* 只装载插件自身能力：主引擎钩子由 bootstrap/lifecycle.js 负责。
+ * 调用方必须先装好主引擎；引擎插件只验证前置状态，不替它安装。
+ * 收集所有插件并返回状态清单
  * ★ P0-02：安装统一在此触发（installScoreEngine 调用本函数），import 阶段不再自动安装 */
 export function loadPlugins() {
 	installAllPlugins();   /* 按依赖拓扑序统一安装（跳过已 installed） */

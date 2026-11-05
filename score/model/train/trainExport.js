@@ -7,6 +7,7 @@
  * ============================================
  */
 
+import { reg } from '../../foundation/runtime/registry.js';
 import { log } from '../../foundation/diag/logger.js';  /* ★ 自动导出/清理日志走统一日志分级 */
 import { cfg } from '../../foundation/config/util.js';    /* ★ 读取配置（满额一条龙需要群号等） */
 import { writeData, fileOf } from '../../foundation/storage/storagePaths.js';  /* ★ 统一导出路径（手机端兜底下载） */
@@ -245,8 +246,9 @@ export function pushSample(features, reward, meta) {
     const playerKey = (meta && meta.player) || '';
     const actionKey = (meta && meta.action) || '';
     const idKey = (meta && meta.id) || '';
+    const decisionKey = (meta && meta.decisionId) || '';
     /* 用 \u0001 作分隔防止字段拼接碰撞 */
-    const key = arr.join(',') + '\u0001' + rewardKey + '\u0001' + playerKey + '\u0001' + actionKey + '\u0001' + idKey;
+    const key = arr.join(',') + '\u0001' + rewardKey + '\u0001' + playerKey + '\u0001' + actionKey + '\u0001' + idKey + '\u0001' + decisionKey;
     
     /* ★ O(1) 命中：直接让已有样本计数+1，不用 O(N) 扫描重建 join */
     const existing = _keyIndex.get(key);
@@ -501,7 +503,7 @@ export function trainStartGame(me) {
     } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 }
 
-export function trainRecordSample(me, best, sit, score, features) {
+export function trainRecordSample(me, best, sit, score, features, provenance) {
     try {
         if (!me || !best) return;
 
@@ -526,10 +528,11 @@ export function trainRecordSample(me, best, sit, score, features) {
             player: me.name || me.name1 || '?',
             action: best.type || 'unknown',
             id: best.id || '',
+            decisionId: provenance && provenance.decisionId ? String(provenance.decisionId) : '',
             score: Math.round(score || 0),
             conf: (best && best._conf && !isNaN(best._conf)) ? best._conf : 0.3,  /* ★ 存置信度 */
 			source: 'real',
-            negative: (typeof score === 'number' && score < 0),   /* ★ 负收益样本标记（AI 造成的负收益动作） */
+			negative: (typeof score === 'number' && score < 0),   /* 记录所选动作的即时评分符号，不代表已观测到局势收益 */
             violation: violation,
             violationType: violationInfo ? violationInfo.type : null,
             violationCard: violationInfo ? violationInfo.card : null,
@@ -592,7 +595,7 @@ function _fbToTarget(campNet) {
  * 仅在"本局、本决策、最近窗口"内定位样本，防跨局污染。 */
 export function trainFeedbackSample(feedback) {
     try {
-        if (!feedback || !feedback.type || !feedback.id) return 0;
+        if (!feedback || !feedback.decisionId || !feedback.type || !feedback.id) return 0;
         if (!feedback.player && feedback.player !== '') return 0;
         const player = feedback.player;
         /* 实测正负分：阵营净收益为骨架，再用 gain 中"非阵营部分"的单目标实测补充。
@@ -616,6 +619,7 @@ export function trainFeedbackSample(feedback) {
             if (s.m.player !== player) continue;
             if (s.m.action !== feedback.type) continue;
             if (s.m.id !== feedback.id) continue;
+            if (s.m.decisionId !== feedback.decisionId || s.fbAsync) continue;
             s.value_target = target;            /* ★ 用异步实测正负分覆盖标签 */
             s.fbAsync = true;                   /* ★ 标记：后续静态/TD 不得覆盖 */
             updated++;
@@ -892,3 +896,17 @@ export function trainImport(jsonStr) {
  * 玩家后续对局产生的样本照常缓冲/自动导出，用于各自设备上的增量训练。 */
 
 console.log('[trainExport] ✅ 已接入 14 个扩展训练模块 + 导入/导出功能');
+
+/* 只连接公共函数，不读取、清除或迁移数据。保留原有名称和清洗方法。 */
+export function mountTrainingInterface() {
+    const target = reg.root();
+    exportForImport.cleanLowValue = cleanLowValue;
+    Object.assign(target, {
+        trainExport: exportForImport,
+        trainImport: importFromJson,
+        trainBufferSize: bufferSize,
+        trainStats: trainStats,
+        trainBufferClear: bufferClear,
+    });
+    return target;
+}
