@@ -18,7 +18,7 @@ import { bestAction } from '../engine/engine.js';
 import {
 	executionEligibility,
 	stageExecutionDecision,
-	commitExecution,
+	confirmExecutionFromHostEvent,
 	cancelExecution,
 	invokeHost,
 	markExecutionFailure,
@@ -417,13 +417,29 @@ export function installUseOverride() {
 						};
 					},
 					cleanupOnSuccess: false,
-					onSuccess: function () {
-						/* filterCard 全 false 已把“结束回合”真实提交给宿主。 */
-						commitExecution(player, { type: 'end', id: 'end', target: null });
-					},
 					failureReason: function (e) { return 'filterCard 短路异常：' + e.message; },
 				});
-				if (!host.ok) cancelExecution(player, 'end-short-circuit-error', 'use');
+				if (!host.ok) {
+					cancelExecution(player, 'end-short-circuit-error', 'use', ba.__djscTransaction && ba.__djscTransaction.id);
+				} else {
+					confirmExecutionFromHostEvent(
+						player,
+						{ type: 'end', id: 'end', target: null },
+						host.result,
+						{
+							eventName: 'chooseToUse',
+							transactionId: ba.__djscTransaction && ba.__djscTransaction.id,
+							verify: function (event) { return !!event.result && event.result.bool === false; },
+						}
+					).then(function (result) {
+						if (!result.ok) cancelExecution(player, result.reason, 'use', ba.__djscTransaction && ba.__djscTransaction.id);
+					}).catch(function () {
+						cancelExecution(player, 'end-confirm-error', 'use', ba.__djscTransaction && ba.__djscTransaction.id);
+					}).finally(function () {
+						try { ev.filterCard = origFilterEnd; } catch (_) {}
+						try { delete ev[SENTINEL]; } catch (_) {}
+					});
+				}
 				return host.result;
 			}
 

@@ -9,7 +9,7 @@
 
 /* ================= 决策积分引擎 · 健康度体检 ================= */
 import { lib, game, get, _status } from '../adapt/host.js';
-import { getInstalled } from '../../decision/engine/engine.js';
+import { getInstalled } from '../runtime/engineQueries.js';
 import { getFeedbackStats } from '../../perception/feedback/feedback.js';
 import { getDecisionFeedbackStats } from '../../decision/feedback/decisionFeedback.js';
 import { getArchive } from '../../perception/archive/archive.js';

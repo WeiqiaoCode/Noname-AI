@@ -16,6 +16,7 @@ import { lib, game, get, _status } from '../../../js/shared/utils.js';
 // 著者：飛昇オリジナル | ライセンス: GPL-3.0
 import { getWeights, getBias, isReady } from '../../model/weights/weights.js';
 import { FEATURE_DIM } from '../../model/features/features.js';
+import { reg } from '../../foundation/runtime/registry.js';
 
 /* 具备受击收益的特殊技能（如卖血技能） */
 const SPECIAL_SKILLS = [
@@ -101,7 +102,9 @@ function _buildFeature(me, target, cardName) {
     return f;
 }
 
-if (typeof window !== 'undefined') {
-    window.__DJSC = window.__DJSC || {};
-    window.__DJSC.checkAllyExempt = checkAllyExempt;
+/* 本模块拥有该接口，入口与暴露层不再提供另一套判断。 */
+export function mountAllyExemptInterface() {
+    reg.root().checkAllyExempt = checkAllyExempt;
+    return checkAllyExempt;
 }
+if (typeof window !== 'undefined') mountAllyExemptInterface();

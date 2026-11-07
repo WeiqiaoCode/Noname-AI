@@ -26,32 +26,32 @@ export const MODULES = [
             },
             {
                 name: '记分系统',
-                file: 'score/decision/engine/engine.js',
+                file: 'score/decision/scoring/scoreLedger.js',
                 lines: 'give / giveVs / givePair',
                 desc: '实时记分：玩家得分累积，阵营分按均摊守恒'
             },
             {
                 name: '效果处理器表',
-                file: 'score/decision/engine/engine.js',
+                file: 'score/decision/scoring/scoreEvents.js',
                 lines: 'EFFECT_HANDLERS',
                 desc: '处理 damage/recover/draw/discard/gain/lose/judge 等效果事件'
             },
             {
                 name: '出牌 Hook',
-                file: 'score/decision/engine/engine.js',
+                file: 'score/decision/execution/hostHooks.js',
                 lines: 'installHooks / proto.useCard',
                 desc: 'hook useCard，每次出牌时调用 scoreCardUse'
             },
             {
                 name: '击杀奖励',
-                file: 'score/decision/engine/engine.js',
+                file: 'score/decision/execution/hostHooks.js',
                 lines: 'installHooks / proto.die',
                 desc: '击杀奖励：杀敌人 +6，杀队友 -10'
             },
             {
                 name: '结算',
-                file: 'score/decision/engine/engine.js',
-                lines: 'settle 函数',
+                file: 'score/decision/settlement/gameSettlement.js',
+                lines: 'settleGame 函数',
                 desc: '终局存活奖励 +3，跨局记忆合并'
             }
         ]
@@ -76,8 +76,8 @@ export const MODULES = [
             {
                 name: '技能库',
                 file: 'score/decision/skills/skills.js',
-                lines: '1-1793',
-                desc: '技能拆解：效果/成本/维度乘数，子技能继承标签'
+                lines: '公共入口；实现分在 skillSourceTags / skillProfiles / skillAdvice',
+                desc: '统一转出技能扫描、画像和战术建议；文本展示归 view/report/skillPresentation'
             },
             {
                 name: '技能拆解面板',
@@ -405,10 +405,10 @@ export const MODULES = [
                 desc: '挂机自动打局'
             },
             {
-                name: 'AI 对比',
-                file: 'score/perception/stats/compareAI.js',
+                name: '拼点选牌决策',
+                file: 'score/decision/response/compareAI.js',
                 lines: '1-286',
-                desc: '两个 AI 对比测试'
+                desc: '根据拼点目的、胜率与卡牌价值选牌，不负责 AI 对比统计'
             },
             {
                 name: '图表',

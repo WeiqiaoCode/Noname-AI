@@ -187,3 +187,68 @@ export function sellHpBenefit(me, expectedCards) {
 }
 
 export { handValue, equipValue, enemyStripPressure, equipStripRisk };
+
+/* 旧特征接口：从 missingModules 归位，保留旧字段、状态与计算方式。
+ * 与本模块正式算法不等价，暂不互相替换，避免改变已训练模型的输入。 */
+/* ================= 4. economy - 经济系统 ================= */
+const _economyState = {
+    totalCardsPlayed: 0,      /* 总出牌数 */
+    totalCardsGained: 0,       /* 总摸牌数 */
+    totalCardsDiscarded: 0,    /* 总弃牌数 */
+    damageDealt: 0,            /* 总造成伤害 */
+    damageTaken: 0,            /* 总承受伤害 */
+};
+
+export const legacyEconomyFeatures = {
+    /* ★ 经济评估接口（兼容features.js调用） */
+    evaluate: function(me) {
+        try {
+            const eff = this.getEfficiency();
+            return {
+                cardBalance: eff.cardBalance,
+                damageBalance: eff.damageBalance,
+                efficiency: eff.efficiency,
+            };
+        } catch (e) { return null; }
+    },
+
+    /* 记录出牌 */
+    onCardPlayed: function(cardName, cost) {
+        _economyState.totalCardsPlayed++;
+    },
+
+    /* 记录摸牌 */
+    onCardGained: function(count) {
+        _economyState.totalCardsGained += count;
+    },
+
+    /* 记录弃牌 */
+    onCardDiscarded: function(count) {
+        _economyState.totalCardsDiscarded += count;
+    },
+
+    /* 记录伤害 */
+    onDamage: function(amount, isDealer) {
+        if (isDealer) _economyState.damageDealt += amount;
+        else _economyState.damageTaken += amount;
+    },
+
+    /* 获取经济效率 */
+    getEfficiency: function() {
+        const cardDiff = _economyState.totalCardsGained - _economyState.totalCardsDiscarded;
+        const damageDiff = _economyState.damageDealt - _economyState.damageTaken;
+        return {
+            cardBalance: cardDiff,           /* 手牌平衡：正=赚了 */
+            damageBalance: damageDiff,       /* 伤害平衡：正=赚了 */
+            efficiency: cardDiff + damageDiff * 2,  /* 综合效率 */
+        };
+    },
+
+    /* 统计 */
+    stats: function() {
+        return {
+            ..._economyState,
+            efficiency: this.getEfficiency(),
+        };
+    },
+};

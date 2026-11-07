@@ -43,6 +43,44 @@ export function createExecutionGatewayCore(deps) {
 		discard: new WeakMap(),
 		compare: new WeakMap(),
 	};
+	const cancelWatches = new WeakMap();
+
+	/* 仅观测本次事件，不改宿主原型；多个确认者共享观测，最后一个退出时恢复。 */
+	function watchCancellation(event) {
+		let watch = cancelWatches.get(event);
+		if (!watch) {
+			const original = event.cancel;
+			if (typeof original !== 'function') return null;
+			const own = Object.getOwnPropertyDescriptor(event, 'cancel');
+			watch = { called: false, users: 0 };
+			const wrapper = function (...args) {
+				if (this === event) watch.called = true;
+				return original.apply(this, args);
+			};
+			Object.defineProperty(event, 'cancel', {
+				configurable: own ? own.configurable : true,
+				enumerable: own ? own.enumerable : false,
+				writable: own && 'writable' in own ? own.writable : true,
+				value: wrapper,
+			});
+			watch.restore = function () {
+				/* 后来接管该成员的模块拥有它；不能用清理回调覆盖别人的写入。 */
+				if (Object.getOwnPropertyDescriptor(event, 'cancel')?.value !== wrapper) return;
+				if (own) Object.defineProperty(event, 'cancel', own);
+				else delete event.cancel;
+			};
+			cancelWatches.set(event, watch);
+		}
+		watch.users++;
+		return {
+			wasCancelled: function () { return watch.called; },
+			release: function () {
+				if (--watch.users > 0) return;
+				cancelWatches.delete(event);
+				try { watch.restore(); } catch (_) {}
+			},
+		};
+	}
 
 	const stats = {
 		total: 0,
@@ -272,8 +310,65 @@ export function createExecutionGatewayCore(deps) {
 		}
 	}
 
-	function cancelExecution(player, reason, kind) {
+	/* 宿主函数正常返回只代表“创建/排入事件”；等待 GameEvent 完成且未取消后才提交事务。 */
+	async function confirmExecutionFromHostEvent(player, actual, hostEvent, options) {
+		options = options || {};
+		if (!hostEvent || typeof hostEvent.then !== 'function') {
+			return { ok: false, reason: 'host-event-unconfirmed' };
+		}
+		if (options.eventName && hostEvent.name !== options.eventName) {
+			return { ok: false, reason: 'host-event-name-mismatch' };
+		}
+		if (hostEvent.player && hostEvent.player !== player) {
+			return { ok: false, reason: 'host-event-player-mismatch' };
+		}
+		/* 等待期间可能产生新决策或换局：确认和取消都必须绑定启动时的事务。 */
+		const startedTx = peekTransaction(player);
+		const transactionId = options.transactionId || (startedTx && startedTx.id);
+		if (!transactionId || !startedTx || startedTx.id !== transactionId) {
+			return { ok: false, reason: 'transaction-changed' };
+		}
+		const isCurrent = function () {
+			const current = peekTransaction(player);
+			return !!current && current.id === transactionId;
+		};
+		let cancellation;
+		try { cancellation = watchCancellation(hostEvent); }
+		catch (_) { return { ok: false, reason: 'host-event-cancel-unobservable' }; }
 		try {
+			try {
+				await hostEvent;
+			} catch (error) {
+				if (!isCurrent()) return { ok: false, reason: 'transaction-changed' };
+				cancelExecution(player, 'host-event-rejected', (actual && actual.type) || 'unknown', transactionId);
+				return { ok: false, reason: 'host-event-rejected', error: error };
+			}
+			if (!isCurrent()) return { ok: false, reason: 'transaction-changed' };
+			if (hostEvent._cancelled === true || (cancellation && cancellation.wasCancelled())) {
+				cancelExecution(player, 'host-event-cancelled', (actual && actual.type) || 'unknown', transactionId);
+				return { ok: false, reason: 'host-event-cancelled' };
+			}
+			if (hostEvent.finished !== true) {
+				return { ok: false, reason: 'host-event-unconfirmed' };
+			}
+			if (typeof options.verify === 'function') {
+				let verified = false;
+				try { verified = options.verify(hostEvent) === true; } catch (_) {}
+				if (!verified) return { ok: false, reason: 'host-event-evidence-mismatch' };
+			}
+			return commitExecution(player, actual);
+		} finally {
+			if (cancellation) cancellation.release();
+		}
+	}
+
+	function cancelExecution(player, reason, kind, transactionId) {
+		try {
+			/* 异步旧回调不得取消后来产生的事务；原三参数同步入口保持兼容。 */
+			if (transactionId) {
+				const current = peekTransaction(player);
+				if (!current || current.id !== transactionId) return false;
+			}
 			const ok = cancelTransaction(player, reason);
 			if (ok) inc(kind || 'unknown', 'cancelled');
 			return ok;
@@ -317,6 +412,7 @@ export function createExecutionGatewayCore(deps) {
 		invokeObservedHost,
 		stageExecutionDecision,
 		commitExecution,
+		confirmExecutionFromHostEvent,
 		cancelExecution,
 		pendingExecution,
 		executionGatewayStats,

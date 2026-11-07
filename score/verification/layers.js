@@ -60,7 +60,7 @@ const L1_CONTRACT = [
         ['predict', 'function'], ['trainOneWithValue', 'function'],
         ['saveWeights', 'function'], ['loadWeights', 'function'], ['resetWeights', 'function'],
     ]],
-    ['../model/net/modelState.js', [
+    ['../model/state/modelLifecycle.js', [
         ['getState', 'function'], ['onGameEnd', 'function'], ['forceTrain', 'function'],
         ['triggerHotTrain', 'function'], ['hotGameStart', 'function'], ['hotRecordABScore', 'function'],
         ['hotSwapStats', 'function'], ['forcePromote', 'function'], ['forceDiscard', 'function'],
@@ -239,7 +239,7 @@ export async function checkL3() {
     if (st.ok) items.push.apply(items, smokeStorage(st.mod));
     else items.push(_item('存储 smoke', false, 'storage import 失败: ' + st.err));
 
-    const ms = await _tryImport('../model/net/modelState.js');
+    const ms = await _tryImport('../model/state/modelLifecycle.js');
     if (ms.ok) items.push.apply(items, smokeAB(ms.mod));
     else items.push(_item('A/B smoke', false, 'modelState import 失败: ' + ms.err));
 

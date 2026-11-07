@@ -165,7 +165,8 @@ eq(hiddenFilterTouched, false, '23.5 AOE evaluator 未调用带牌名过滤的 c
 
 /* 6. 静态审计：AOE 不消费 phase；engine 只保留一个 aoeBonus 调用。 */
 const aoeSource = readFileSync(join(pkg, 'score', 'decision', 'timing', 'aoeTiming.js'), 'utf8');
-const engineSource = readFileSync(join(pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8');
+const engineSource = readFileSync(join(pkg, 'score', 'decision', 'engine', 'engine.js'), 'utf8') +
+	readFileSync(join(pkg, 'score/decision/scoring/cardCandidateScore.js'), 'utf8');
 eq(aoeSource.includes('getGamePhase'), false, '23.6 AOE evaluator 不重复消费 game phase');
 eq(aoeSource.includes('isEndgamePhase'), false, '23.6 AOE evaluator 不内置残局策略');
 eq(aoeSource.includes("countCards('hs'"), false, '23.6 AOE evaluator 无 hs 精确隐藏牌读取');

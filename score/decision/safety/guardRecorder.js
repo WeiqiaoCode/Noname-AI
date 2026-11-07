@@ -12,6 +12,8 @@ import { safeGet as _lsGet, safeSet as _lsSet } from '../../foundation/storage/s
  * 记录合法性校验事件（拦截/豁免）
  */
 
+import { reg } from '../../foundation/runtime/registry.js';
+
 const STORAGE_KEY = 'djsc_guard_recorder';
 
 // எழுத்தாளர்: ஃபைஷெங் ஒரிஜினல் | உரிமம்: GPL-3.0
@@ -69,4 +71,14 @@ export function resetGuardRecorder() {
     _events = [];
     _save();
     return { ok: true };
+}
+
+/* 公共记录器接口由本模块维护。重复启动仅补齐方法，不替换消费者持有的对象。 */
+export function mountGuardRecorderInterface() {
+    return reg.bind('guardRecorder', {
+        _real: true,
+        record: recordGuardEvent,
+        getStats: getGuardStats,
+        reset: resetGuardRecorder,
+    });
 }

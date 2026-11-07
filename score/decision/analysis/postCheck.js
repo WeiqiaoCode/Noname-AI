@@ -17,6 +17,7 @@
  * 把实际收益写进样本的 reward 字段（替代整局分数）
  */
 import { log } from '../../foundation/diag/logger.js';
+import { game, _status } from '../../foundation/adapt/host.js';
 import { isSameCamp } from '../strategy/modeStrategy.js';   /* ★ 架构阵营判定：同阵营判定 */
 import { dispositionOf } from '../relations/relations.js';
 import { VAL_CARD } from '../../knowledge/tables/value-tables.js';      /* ★ 装备按真实价值加权（替代按件数） */
@@ -123,7 +124,7 @@ function _snapshot(me, target) {
 }
 
 /* ================= 决策前记录快照 ================= */
-export function postCheckBefore(me, action, target, isEnemyHint) {
+export function postCheckBefore(me, action, target, isEnemyHint, decisionId) {
     try {
         _syncPool();
         if (!me || !action) return;
@@ -140,6 +141,7 @@ export function postCheckBefore(me, action, target, isEnemyHint) {
             isEnemy: _resolveIsEnemy(me, target, isEnemyHint),
             timing: action.timing || action._stage || '',   /* ★ 技能时机阶段 */
             player: (me && (me.name || me.name1)) || '',    /* ★ 当前玩家（用于回写冠军嵌入） */
+            decisionId: decisionId ? String(decisionId) : '',
             ts: Date.now(),
         });
 
@@ -292,6 +294,7 @@ export function postCheckAfter(snapshotKey, me, target) {
             timing: rec.timing || '',
             isEnemy: !!isEnemy,
             player: rec.me || '',
+            decisionId: rec.decisionId || '',
         };
 
         return result;
@@ -363,7 +366,7 @@ export async function postCheckBatch(entries, onResult) {
     const results = [];
     for (const e of entries || []) {
         if (!e || !e.action) continue;
-        const key = postCheckBefore(e.me, e.action, e.target, e.isEnemy);
+        const key = postCheckBefore(e.me, e.action, e.target, e.isEnemy, e.decisionId);
         if (key) {
             await postCheckDelayed(key, e.me, e.target, function (r) {
                 results.push(r);
@@ -405,6 +408,12 @@ export function postCheckReset() {
     // log.info('postCheck', '决策后检测池已复位');
 }
 
+/* 宿主事件取消/失败时丢弃执行前快照，避免它被后续动作误用。 */
+export function postCheckDiscard(snapshotKey) {
+    if (!snapshotKey) return false;
+    return SNAPSHOT_POOL.delete(snapshotKey);
+}
+
 /* ================= 挂载 ================= */
 if (typeof window !== 'undefined') {
     window.__DJSC = window.__DJSC || {};
@@ -415,5 +424,6 @@ if (typeof window !== 'undefined') {
         batch: postCheckBatch,
         stats: postCheckStats,
         reset: postCheckReset,
+        discard: postCheckDiscard,
     };
 }

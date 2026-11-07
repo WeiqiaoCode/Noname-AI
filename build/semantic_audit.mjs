@@ -111,7 +111,6 @@ const top = perFile
     .slice(0, 10);
 
 const audit = {
-    generated: new Date().toISOString().slice(0, 10),
     files: files.length,
     cleanFiles: cleanFiles,
     legacyFiles: legacyFiles,

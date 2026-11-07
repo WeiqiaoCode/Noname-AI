@@ -8,9 +8,9 @@
  */
 
 /* ================= 决策积分引擎 · 模型热更新（兼容外壳） =================
- * ★ §8 重构：A/B 状态机已并入 modelState.js（单一真相源，消除双状态机重复真相）。
+ * ★ A/B 唯一状态机现位于 model/state/modelLifecycle.js；net/modelState.js 同为兼容入口。
  *   本文件仅保留原模块路径、导出签名与 window.__DJSC.hotSwap 挂载，
- *   全部实现委托 modelState.js；新代码请直接引用 modelState.js。
+ *   全部实现委托 modelLifecycle.js；不在本兼容文件创建候选槽。
  *   流程：攒够样本 → 训练出候选 → A/B 分组实战 → 胜率超过旧模型晋升，否则丢弃。
  */
 import {
@@ -18,7 +18,7 @@ import {
     hotSwapStats, resetHotSwap,
     forcePromote as _msForcePromote, forceDiscard as _msForceDiscard,
     MIN_SAMPLES, MIN_AB_GAMES,
-} from './modelState.js';
+} from '../state/modelLifecycle.js';
 
 export { triggerHotTrain, hotGameStart, hotRecordABScore, hotSwapStats, resetHotSwap };
 
