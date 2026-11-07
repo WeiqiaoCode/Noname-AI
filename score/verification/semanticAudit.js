@@ -4,27 +4,23 @@
  * 重新生成：node build/semantic_audit.mjs（发布前必须重跑，P2-34）
  */
 export const AUDIT = {
-	"generated": "2026-10-05",
-	"files": 234,
-	"cleanFiles": 102,
-	"legacyFiles": 132,
-	"hits": 3526,
-	"cleanRate": 44,
+	"files": 291,
+	"cleanFiles": 145,
+	"legacyFiles": 146,
+	"hits": 3555,
+	"cleanRate": 50,
 	"byDomain": {
+		"bootstrap": 4,
 		"cognition": 112,
-		"decision": 1950,
-		"foundation": 55,
+		"decision": 2062,
+		"foundation": 51,
 		"knowledge": 218,
-		"model": 280,
-		"perception": 786,
+		"model": 204,
+		"perception": 779,
 		"verification": 6,
 		"view": 119
 	},
 	"top": [
-		{
-			"file": "score/decision/engine/engine.js",
-			"count": 354
-		},
 		{
 			"file": "score/perception/observer/identity.js",
 			"count": 354
@@ -34,12 +30,12 @@ export const AUDIT = {
 			"count": 267
 		},
 		{
-			"file": "score/knowledge/tables/value-tables.js",
-			"count": 135
+			"file": "score/decision/scoring/cardCandidateScore.js",
+			"count": 153
 		},
 		{
-			"file": "score/decision/skills/skills.js",
-			"count": 87
+			"file": "score/knowledge/tables/value-tables.js",
+			"count": 135
 		},
 		{
 			"file": "score/decision/strategy/modeStrategy.js",
@@ -56,6 +52,10 @@ export const AUDIT = {
 		{
 			"file": "score/decision/strategy/planner.js",
 			"count": 81
+		},
+		{
+			"file": "score/decision/skills/skillSourceTags.js",
+			"count": 68
 		},
 		{
 			"file": "score/model/features/features.js",
