@@ -12,7 +12,7 @@
 | B1-F02 / P1 | `features.js:114–115维` 读取 r1/r3；`score/decision/strategy/multiturn.js:legacyPlanFeatures.plan` 返回 turns/firstTurn/aggression。 | 两个未来收益维度缺省为 0；B4 先定义收益单位，不能将进攻倾向当作收益。 | 一回合与三回合收益可独立验证；旧样本/权重需评估版本兼容。**待修复**。 |
 | B1-F03 / P1 | `features.js:116–117维` 读取 handValue/equipValue；`score/decision/resource/economy.js:legacyEconomyFeatures.evaluate` 返回 cardBalance/damageBalance/efficiency。 | 牌价值维度缺省为 0；B4 确定唯一价值来源并审核归一化，不能用净张数替换价值。 | 已知手牌和装备得到预期特征；历史样本不覆盖，新语义单独评估。**待修复**。 |
 | B1-F04 / P1 | `features.js:118–119维` 读取 cognitiveLog.stats 的 confidence/conflicts；引擎装配的 `score/cognition/log/cognitiveLog.js:cognitionStats` 返回 total/byLevel/byLevelRate/byIntervention。 | 正式装配时这两维缺省为 0；B4 区分模型置信度和认知日志统计，再指定权威接口。 | 通过正式装配链验证输出及维度；评估特征版本与重新训练要求。**待修复**。 |
-| B1-L01 / P2 | `score/foundation/runtime/plugins.js` 尚无异步安装期间卸载的并发约定。 | 非本批重复安装修复范围；最终生命周期联调前处理。 | 人为阻塞 onInstall 后卸载，验证完成后的安装状态和资源清理。**待专项验证**。 |
+| B1-L01 / P2 | `score/foundation/runtime/plugins.js` 原先在 onInstall Promise 未完成时允许卸载后被迟到回调重新标为 installed。 | 2026-11-07 加入 IN_FLIGHT 单次安装与取消标记；异步安装被取消后等待 Promise 结算，再运行卸载清理；全量卸载也覆盖 installing 状态。 | `tests/plugin_lifecycle_race.test.mjs` 检查安装期间卸载、重复安装、安装拒绝和全量卸载；Node CI 回归已通过。**代码/Node 验收完成；真实宿主长耗时安装、热重载和第三方插件竞争仍待实机验证。** |
 | B1-L02 / 验收项 | B1 已过 Node 测试，尚未完成真实游戏中的禁用、重新启用以及执行→反馈全链路。 | B5 宿主联调；Node 通过不能替代游戏验收。 | 记录实际版本、加载/卸载结果及反馈关联结果。**待联调**。 |
 | B2-F01 / 撤销误报 | 重新核对 `main@cd3f23f:score/foundation/io/exportAll.js` 和现 `score/view/dashboard/exportPanel.js`，一键导出使用内联顺序调用，从未引用 `_exportAllThree`。 | 原登记的“源码确认缺失定义”不成立。实机点击一键导出生成三个包、五个文件，保存在隔离目录。 | **撤销误报**；未添加不存在的函数。证据见 B5 报告与 sandbox-files。 |
 
