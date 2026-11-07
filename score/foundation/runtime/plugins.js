@@ -44,6 +44,7 @@ const STATE = new Map();            /* id → 'installed' | 'disabled' | 'error'
 const REASON = new Map();           /* id → 禁用/错误原因 */
 /* ★ P1-23：记录每个插件通过 props 实际绑定到 window.__DJSC 的键，卸载时逆向清理 */
 const DEP_BOUND = new Map();        /* id → [{ns, key}] */
+const IN_FLIGHT = new Map();        /* id → { promise, cancelled }; async install owns cleanup until settlement */
 let _scanRun = false;
 
 /* 定义插件：补缺省字段，返回可注册对象 */
@@ -77,6 +78,8 @@ export function installPlugin(id) {
 		if (!p) return { ok: false, reason: '未注册插件: ' + id };
 		/* 已完成的安装不重复执行，不重记 props 所有权或重启定时器。 */
 		if (STATE.get(id) === 'installed') return { ok: true, id: id, alreadyInstalled: true };
+		/* One async installation per plugin. A cancellation cannot be undone by another install call. */
+		if (IN_FLIGHT.has(id)) return IN_FLIGHT.get(id).promise;
 
 		/* 依赖检查 */
 		for (const dep of p.depends || []) {
@@ -108,8 +111,28 @@ export function installPlugin(id) {
 		if (typeof p.onInstall === 'function') {
 			const r = p.onInstall(pluginContext(p));
 			if (r && typeof r.then === 'function') {
-				return r.then(function () { STATE.set(id, 'installed'); REASON.delete(id); retryDependents(id); return { ok: true, id: id }; })
-					.catch(function (e) { disable(id, 'onInstall异常: ' + String(e).slice(0, 60)); return { ok: false, reason: String(e) }; });
+				/* onUninstall must run after a pending onInstall settles, not before it. */
+				const entry = { cancelled: false, promise: null };
+				STATE.set(id, 'installing');
+				entry.promise = Promise.resolve(r).then(function () {
+					IN_FLIGHT.delete(id);
+					if (entry.cancelled) {
+						uninstallPlugin(id);
+						return { ok: false, reason: '安装期间已卸载' };
+					}
+					STATE.set(id, 'installed'); REASON.delete(id); retryDependents(id);
+					return { ok: true, id: id };
+				}, function (e) {
+					IN_FLIGHT.delete(id);
+					if (entry.cancelled) {
+						uninstallPlugin(id);
+						return { ok: false, reason: '安装期间已卸载' };
+					}
+					disable(id, 'onInstall异常: ' + String(e).slice(0, 60));
+					return { ok: false, reason: String(e) };
+				});
+				IN_FLIGHT.set(id, entry);
+				return entry.promise;
 			}
 		}
 
@@ -149,6 +172,18 @@ export function uninstallPlugin(id) {
 	try {
 		const p = PLUGINS.get(id);
 		if (!p) return { ok: false, reason: '未注册' };
+		const installing = IN_FLIGHT.get(id);
+		if (installing) {
+			/* Defer side-effect cleanup: a late onInstall continuation may still create resources. */
+			installing.cancelled = true;
+			STATE.set(id, 'pending');
+			REASON.delete(id);
+			PLUGINS.forEach(function (dp, did) {
+				if (did !== id && (dp.depends || []).indexOf(id) >= 0 &&
+					(STATE.get(did) === 'installed' || IN_FLIGHT.has(did))) uninstallPlugin(did);
+			});
+			return { ok: true, id: id, pending: true };
+		}
 		if (typeof p.onUninstall === 'function') {
 			try { p.onUninstall(); } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		}
@@ -230,7 +265,7 @@ export function uninstallAllPlugins() {
 	const ids = Array.from(PLUGINS.keys()).reverse();
 	let n = 0;
 	for (const id of ids) {
-		if (STATE.get(id) === 'installed') {
+		if (STATE.get(id) === 'installed' || IN_FLIGHT.has(id)) {
 			try { uninstallPlugin(id); n++; } catch (e) { if (typeof window !== 'undefined' && window.__DJSC && window.__DJSC.swallow) window.__DJSC.swallow(e); }
 		}
 	}
